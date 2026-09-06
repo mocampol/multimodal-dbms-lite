@@ -7,7 +7,6 @@ row of data in a database table.
 
 from .value import Value
 
-
 class Record:
     def __init__(self, values: list):
         """
