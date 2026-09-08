@@ -1,5 +1,5 @@
 import os
-from token import Token, TokenType
+from token_ import Token, TokenType
 
 
 def _is_white_space(c: str) -> bool:
