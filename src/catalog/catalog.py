@@ -2,7 +2,7 @@
 System catalog: metadata about tables, columns, and indexes.
 
 Persisted using the engine's own Heap File, as sys_tables / sys_columns /
-sys_indexes — the same approach Postgres uses with pg_catalog. All three
+sys_indexes. The same approach Postgres uses with pg_catalog. All three
 system tables are loaded fully into memory at engine startup, since they
 are small and are consulted on every query.
 """
@@ -21,30 +21,30 @@ from .exceptions import (
 )
 
 
-# System table schemas (fixed, defined by the engine itself)
+# System table schemas
 
 SYS_TABLES_SCHEMA = Schema("sys_tables", [
-    Column("table_id", DataType.INT, is_primary_key=True),
+    Column("table_id", DataType.INTEGER, is_primary_key=True),
     Column("table_name", DataType.VARCHAR, size=64, is_unique=True),
     Column("storage_type", DataType.VARCHAR, size=16),
-    Column("root_page_id", DataType.INT),
+    Column("root_page_id", DataType.INTEGER),
 ])
 
 SYS_COLUMNS_SCHEMA = Schema("sys_columns", [
-    Column("table_id", DataType.INT),
+    Column("table_id", DataType.INTEGER),
     Column("column_name", DataType.VARCHAR, size=64),
     Column("col_type", DataType.VARCHAR, size=32),
-    Column("col_size", DataType.INT, nullable=True),
-    Column("position", DataType.INT),
-    Column("is_primary_key", DataType.BOOL),
+    Column("col_size", DataType.INTEGER, nullable=True),
+    Column("position", DataType.INTEGER),
+    Column("is_primary_key", DataType.BOOLEAN),
 ])
 
 SYS_INDEXES_SCHEMA = Schema("sys_indexes", [
-    Column("index_id", DataType.INT, is_primary_key=True),
-    Column("table_id", DataType.INT),
+    Column("index_id", DataType.INTEGER, is_primary_key=True),
+    Column("table_id", DataType.INTEGER),
     Column("column_name", DataType.VARCHAR, size=64),
     Column("index_type", DataType.VARCHAR, size=16),
-    Column("root_page_id", DataType.INT),
+    Column("root_page_id", DataType.INTEGER),
 ])
 
 
@@ -74,8 +74,6 @@ class Catalog:
         self.tables: dict[str, TableMetadata] = {}
         self.indexes: dict[str, list[dict]] = {}
 
-        # (table_name, column_name) -> set of values already seen.
-        # Used for UNIQUE / PK enforcement without a full table scan per insert.
         self._unique_values: dict[tuple, set] = {}
 
         self._next_table_id = 1
@@ -83,14 +81,13 @@ class Catalog:
 
         self._load()
 
-    # bootstrap
 
     def _load(self):
         """
         Loads sys_tables, sys_columns and sys_indexes fully into memory.
-        Called once, at Catalog construction (i.e. engine startup).
+        Called once at engine startup.
         """
-        columns_by_table_id: dict[int, list[ColumnMetadata]] = {}
+        columns_by_table_id: dict[integer, list[ColumnMetadata]] = {}
         for record in self._sys_columns.scan():
             cm = ColumnMetadata.from_values(tuple(v.data for v in record))
             columns_by_table_id.setdefault(cm.table_id, []).append(cm)
@@ -120,18 +117,12 @@ class Catalog:
             })
             self._next_index_id = max(self._next_index_id, index_id + 1)
 
-        # NOTE: _unique_values only tracks values inserted THROUGH the catalog
-        # from now on. Rebuilding it from existing table DATA (not just
-        # metadata) requires scanning each table's heap/sequential file,
-        # which belongs to a later integration step once storage is wired in.
-
     def _table_name_by_id(self, table_id: int) -> str:
         for name, tm in self.tables.items():
             if tm.table_id == table_id:
                 return name
         raise TableNotFoundError(f"No existe una tabla con table_id={table_id}")
 
-    # ---------- DDL ----------
 
     def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> TableMetadata:
         """
@@ -153,20 +144,20 @@ class Catalog:
         )
 
         self._sys_tables.insert(Record([
-            Value(DataType.INT, tm.table_id),
+            Value(DataType.INTEGER, tm.table_id),
             Value(DataType.VARCHAR, tm.table_name),
             Value(DataType.VARCHAR, tm.storage_type.value),
-            Value(DataType.INT, tm.root_page_id),
+            Value(DataType.INTEGER, tm.root_page_id),
         ]))
 
         for position, column in enumerate(schema.columns):
             cm = ColumnMetadata.from_column(table_id, position, column)
             self._sys_columns.insert(Record([
-                Value(DataType.INT, cm.table_id),
+                Value(DataType.INTEGER, cm.table_id),
                 Value(DataType.VARCHAR, cm.column_name),
                 Value(DataType.VARCHAR, cm.col_type),
-                Value(DataType.INT, cm.col_size) if cm.col_size is not None else Value(DataType.INT, None),
-                Value(DataType.INT, cm.position),
+                Value(DataType.INTEGER, cm.col_size) if cm.col_size is not None else Value(DataType.INT, None),
+                Value(DataType.INTEGER, cm.position),
                 Value(DataType.BOOL, cm.is_primary_key),
             ]))
 
@@ -179,7 +170,7 @@ class Catalog:
     def drop_table(self, table_name: str):
         """
         Removes a table from the catalog's in-memory view.
-        NOTE: does not delete sys_tables/sys_columns rows physically yet —
+        NOTE: does not delete sys_tables/sys_columns rows physically yet.
         Heap File delete is lazy (per spec), so this should call the
         equivalent delete on the sys_* heaps once heap.delete(rid) exists.
         """
@@ -194,7 +185,7 @@ class Catalog:
     def create_index(self, table_name: str, column_name: str, index_type: str) -> dict:
         """
         Registers an index over a column. Does not build the physical
-        index structure — that's the index subsystem's job. This only
+        index structure, that's the index subsystem's job. This only
         records the metadata so the planner knows the index exists.
         """
         tm = self.get_table(table_name)
@@ -205,11 +196,11 @@ class Catalog:
         self._next_index_id += 1
 
         self._sys_indexes.insert(Record([
-            Value(DataType.INT, index_id),
-            Value(DataType.INT, tm.table_id),
+            Value(DataType.INTEGER, index_id),
+            Value(DataType.INTEGER, tm.table_id),
             Value(DataType.VARCHAR, column_name),
             Value(DataType.VARCHAR, index_type),
-            Value(DataType.INT, -1),  # root_page_id, set once the index is built
+            Value(DataType.INTEGER, -1),  # root_page_id, set once the index is built
         ]))
 
         entry = {
