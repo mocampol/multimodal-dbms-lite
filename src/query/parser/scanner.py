@@ -11,7 +11,7 @@ class Scanner:
     def __init__(self, source: str):
         self.input = source
         self.first = 0
-        self.current = 0
+        self.current = 0               
 
     def next_token(self) -> Token:
         # Saltar espacios en blanco
