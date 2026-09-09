@@ -82,6 +82,32 @@ class Scanner:
 
             return Token(TokenType.ID, lexema)
 
+        # ---- Literales de texto: 'texto' (con '' como comilla escapada) ----
+        if c == "'":
+            self.current += 1  # consume la comilla de apertura
+            chars = []
+            while True:
+                if self.current >= len(self.input):
+                    # Cadena sin cerrar: se trata como error léxico
+                    err = Token(TokenType.ERR, self.input[self.first:self.current])
+                    return err
+
+                ch = self.input[self.current]
+
+                if ch == "'":
+                    # ¿Es '' (comilla escapada dentro del string) o el cierre?
+                    if self.current + 1 < len(self.input) and self.input[self.current + 1] == "'":
+                        chars.append("'")
+                        self.current += 2
+                        continue
+                    self.current += 1  # consume la comilla de cierre
+                    break
+
+                chars.append(ch)
+                self.current += 1
+
+            return Token(TokenType.STRING, "".join(chars))
+
         # ---- Operadores y delimitadores SQL ----
         if c in "*()=<>!;,":
             if c == "*":

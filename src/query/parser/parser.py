@@ -6,6 +6,7 @@ from ast_nodes import (
     Exp,
     NumExp,
     IdExp,
+    StringExp,
     BinaryExp,
     BinaryOp,
     Stm,
@@ -153,14 +154,17 @@ class Parser:
         self.error("un operador ('=', '<', '<=', '>' o '>=')")
 
     def parse_value(self) -> Exp:
-        """<Value> ::= NUM | ID"""
+        """<Value> ::= NUM | STRING | ID"""
         if self.check(TokenType.NUM):
             tok = self.expect(TokenType.NUM)
             return NumExp(int(tok.text))
+        if self.check(TokenType.STRING):
+            tok = self.expect(TokenType.STRING)
+            return StringExp(tok.text)
         if self.check(TokenType.ID):
             tok = self.expect(TokenType.ID)
             return IdExp(tok.text)
-        self.error("un valor (NUM o ID)")
+        self.error("un valor (NUM, STRING o ID)")
 
     def parse_group_or_order(self):
         """<GroupOrOrder> ::= ORDER_BY ID { COMA ID } | GROUP_BY ID { COMA ID }"""

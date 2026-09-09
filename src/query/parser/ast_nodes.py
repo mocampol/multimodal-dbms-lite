@@ -44,6 +44,10 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
+    def visit_string_exp(self, exp: "StringExp"):
+        ...
+
+    @abstractmethod
     def visit_binary_exp(self, exp: "BinaryExp"):
         ...
 
@@ -106,6 +110,19 @@ class IdExp(Exp):
 
     def __repr__(self):
         return self.value
+
+
+class StringExp(Exp):
+    """<Value> ::= STRING — literal de texto entre comillas simples: 'texto'"""
+
+    def __init__(self, value: str):
+        self.value = value
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_string_exp(self)
+
+    def __repr__(self):
+        return f"'{self.value}'"
 
 
 class BinaryExp(Exp):
