@@ -156,9 +156,9 @@ class Catalog:
                 Value(DataType.INTEGER, cm.table_id),
                 Value(DataType.VARCHAR, cm.column_name),
                 Value(DataType.VARCHAR, cm.col_type),
-                Value(DataType.INTEGER, cm.col_size) if cm.col_size is not None else Value(DataType.INT, None),
+                Value(DataType.INTEGER, cm.col_size) if cm.col_size is not None else Value(DataType.INTEGER, None),
                 Value(DataType.INTEGER, cm.position),
-                Value(DataType.BOOL, cm.is_primary_key),
+                Value(DataType.BOOLEAN, cm.is_primary_key),
             ]))
 
         self.tables[schema.table_name] = tm
