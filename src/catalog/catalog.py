@@ -87,7 +87,7 @@ class Catalog:
         Loads sys_tables, sys_columns and sys_indexes fully into memory.
         Called once at engine startup.
         """
-        columns_by_table_id: dict[integer, list[ColumnMetadata]] = {}
+        columns_by_table_id: dict[int, list[ColumnMetadata]] = {}
         for record in self._sys_columns.scan():
             cm = ColumnMetadata.from_values(tuple(v.data for v in record))
             columns_by_table_id.setdefault(cm.table_id, []).append(cm)
