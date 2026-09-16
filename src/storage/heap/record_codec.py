@@ -91,7 +91,7 @@ _VARIABLE_LENGTH_TYPES = {
 }
 
 
-def _encode_scalar(value: Value) -> bytes:
+def encode_scalar(value: Value) -> bytes:
     """
     Encodes a single non-null Value into its raw payload bytes,
     without any length prefix (the caller adds that for variable-length types).
@@ -114,7 +114,7 @@ def _encode_scalar(value: Value) -> bytes:
     raise ValueError(f"No se sabe codificar el tipo {dt}")
 
 
-def _decode_scalar(data_type: DataType, buf: bytes):
+def decode_scalar(data_type: DataType, buf: bytes):
     """
     Decodes raw payload bytes (already stripped of any length prefix)
     back into the Python value for data_type.
@@ -149,7 +149,7 @@ def encode_record(record: Record, schema: Schema) -> bytes:
             null_bitmap[i // 8] |= (1 << (i % 8))
             continue
 
-        raw = _encode_scalar(value)
+        raw = encode_scalar(value)
         if column.data_type in _VARIABLE_LENGTH_TYPES:
             payload += struct.pack(_LENGTH_PREFIX_FORMAT, len(raw))
         payload += raw
@@ -187,6 +187,6 @@ def decode_record(buf: bytes, schema: Schema) -> Record:
             raw = buf[offset:offset + length]
             offset += length
 
-        values.append(Value(column.data_type, _decode_scalar(column.data_type, raw)))
+        values.append(Value(column.data_type, decode_scalar(column.data_type, raw)))
 
     return Record(values)
