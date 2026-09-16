@@ -300,3 +300,12 @@ class HeapFile:
     def _write_slot(self, page: Page, index: int, status: int, a: int, b: int):
         offset = HEADER_SIZE + index * SLOT_SIZE
         page.write_bytes(offset, struct.pack(SLOT_FORMAT, status, a, b))
+
+    @property
+    def root_page_id(self) -> int:
+        """
+        Returns the first page_id of this heap file. Used by Catalog to
+        persist the real starting page into sys_tables.root_page_id once
+        physical storage has actually been created for a table.
+        """
+        return self._known_pages[0]
