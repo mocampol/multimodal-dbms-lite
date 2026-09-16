@@ -168,24 +168,7 @@ class SequentialFile:
         are supported), looking both in the target page and in its
         overflow chain.
         """
-        page_id = self._find_target_page(key)
-        results = []
-
-        page = self.bm.fetch_page(page_id)
-        try:
-            for slot_key, record in self._live_entries(page):
-                if slot_key == key:
-                    results.append(record)
-        finally:
-            self.bm.unpin_page(page_id, is_dirty=False)
-
-        for chain_key, overflow_rid in self._overflow_chain.get(page_id, []):
-            if chain_key == key:
-                record = self.overflow.get(overflow_rid)
-                if record is not None:
-                    results.append(record)
-
-        return results
+        return self.search_in_page(self._find_target_page(key), key)
 
     def delete(self, key) -> int:
         """
@@ -229,22 +212,7 @@ class SequentialFile:
         overflow chain (both already individually sorted by key) using
         a standard two-pointer merge, then moves to the next page.
         """
-        page_id = self._head_page_id
-        while page_id != NO_NEXT_PAGE:
-            page = self.bm.fetch_page(page_id)
-            try:
-                main_entries = list(self._live_entries(page))
-                next_page_id = self._read_header(page)[2]
-            finally:
-                self.bm.unpin_page(page_id, is_dirty=False)
-
-            overflow_entries = [
-                (k, self.overflow.get(rid)) for k, rid in self._overflow_chain.get(page_id, [])
-            ]
-            overflow_entries = [(k, r) for k, r in overflow_entries if r is not None]
-
-            yield from self._merge_by_key(main_entries, overflow_entries)
-            page_id = next_page_id
+        yield from self.scan_from(self._head_page_id)
 
     def reorganize(self):
         """
@@ -448,7 +416,7 @@ class SequentialFile:
         self._write_header(page, num_slots + 1, new_offset, next_page_id)
         return True
 
-  def _next_reusable_page_id(self, ordinal: int) -> int:
+    def _next_reusable_page_id(self, ordinal: int) -> int:
         """
         Returns the page_id to use for the ordinal-th page (1-based)
         of a fresh reorganize() pass: reuses an existing page_id if the
@@ -493,3 +461,49 @@ class SequentialFile:
     def _write_slot(self, page: Page, index: int, status: int, a: int, b: int):
         offset = HEADER_SIZE + index * SLOT_SIZE
         page.write_bytes(offset, struct.pack(SLOT_FORMAT, status, a, b))
+
+    def page_min_keys(self):
+        page_id = self._head_page_id
+        while page_id != NO_NEXT_PAGE:
+            page = self.bm.fetch_page(page_id)
+            try:
+                min_key = self._min_key(page)
+                next_page_id = self._read_header(page)[2]
+            finally:
+                self.bm.unpin_page(page_id, is_dirty=False)
+            yield page_id, min_key
+            page_id = next_page_id
+
+    def search_in_page(self, page_id: int, key) -> list:
+        results = []
+        page = self.bm.fetch_page(page_id)
+        try:
+            for slot_key, record in self._live_entries(page):
+                if slot_key == key:
+                    results.append(record)
+        finally:
+            self.bm.unpin_page(page_id, is_dirty=False)
+
+        for chain_key, overflow_rid in self._overflow_chain.get(page_id, []):
+            if chain_key == key:
+                record = self.overflow.get(overflow_rid)
+                if record is not None:
+                    results.append(record)
+        return results
+
+    def scan_from(self, page_id: int):
+        while page_id != NO_NEXT_PAGE:
+            page = self.bm.fetch_page(page_id)
+            try:
+                main_entries = list(self._live_entries(page))
+                next_page_id = self._read_header(page)[2]
+            finally:
+                self.bm.unpin_page(page_id, is_dirty=False)
+
+            overflow_entries = [
+                (k, self.overflow.get(rid)) for k, rid in self._overflow_chain.get(page_id, [])
+            ]
+            overflow_entries = [(k, r) for k, r in overflow_entries if r is not None]
+
+            yield from self._merge_by_key(main_entries, overflow_entries)
+            page_id = next_page_id
