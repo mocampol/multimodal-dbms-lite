@@ -21,8 +21,6 @@ from .exceptions import (
 )
 
 
-# System table schemas
-
 SYS_TABLES_SCHEMA = Schema("sys_tables", [
     Column("table_id", DataType.INTEGER, is_primary_key=True),
     Column("table_name", DataType.VARCHAR, size=64, is_unique=True),
@@ -63,16 +61,19 @@ class Catalog:
             heap_factory: callable(schema: Schema) -> heap-like object exposing:
                 - insert(record: Record) -> RID
                 - scan() -> Iterator[Record]
-              This is how the Catalog stays decoupled from the concrete
-              storage.heap.HeapFile implementation. Once heap.py is ready,
-              pass e.g. `lambda schema: HeapFile(schema)` from main.py.
+            This is how the Catalog stays decoupled from the concrete
+            storage.heap.HeapFile implementation. Once heap.py is ready,
+            pass from main.py.
         """
         self._sys_tables = heap_factory(SYS_TABLES_SCHEMA)
         self._sys_columns = heap_factory(SYS_COLUMNS_SCHEMA)
         self._sys_indexes = heap_factory(SYS_INDEXES_SCHEMA)
 
+        self._storage_factories = storage_factories or {StorageType.HEAP: heap_factory}
+
         self.tables: dict[str, TableMetadata] = {}
         self.indexes: dict[str, list[dict]] = {}
+        self._table_storage: dict[str, object] = {}
 
         self._unique_values: dict[tuple, set] = {}
 
@@ -102,6 +103,9 @@ class Catalog:
             self.tables[tm.table_name] = tm
             self._next_table_id = max(self._next_table_id, tm.table_id + 1)
 
+            factory = self._storage_factories[tm.storage_type]
+            self._table_storage[tm.table_name] = factory(tm.schema)
+
             for col_name in tm.schema.unique_columns():
                 self._unique_values[(tm.table_name, col_name)] = set()
 
@@ -126,11 +130,14 @@ class Catalog:
 
     def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> TableMetadata:
         """
-        Registers a new table: persists it into sys_tables/sys_columns
-        and makes it available in memory immediately.
+        Registers a new table: persists its metadata into sys_tables/
+        sys_columns AND creates its physical data storage, then corrects
+        the persisted root_page_id once that storage exists.
         """
         if schema.table_name in self.tables:
             raise TableAlreadyExistsError(f"La tabla '{schema.table_name}' ya existe")
+        if storage_type not in self._storage_factories:
+            raise ValueError(f"No hay una fábrica de storage registrada para {storage_type}")
 
         table_id = self._next_table_id
         self._next_table_id += 1
@@ -139,11 +146,11 @@ class Catalog:
             table_id=table_id,
             table_name=schema.table_name,
             storage_type=storage_type,
-            root_page_id=-1,  # storage assigns this once the physical file is created
+            root_page_id=-1,
             schema=schema,
         )
 
-        self._sys_tables.insert(Record([
+        table_rid = self._sys_tables.insert(Record([
             Value(DataType.INTEGER, tm.table_id),
             Value(DataType.VARCHAR, tm.table_name),
             Value(DataType.VARCHAR, tm.storage_type.value),
@@ -161,6 +168,18 @@ class Catalog:
                 Value(DataType.BOOLEAN, cm.is_primary_key),
             ]))
 
+        storage = self._storage_factories[storage_type](schema)
+        self._table_storage[schema.table_name] = storage
+
+        if hasattr(storage, "root_page_id"):
+            tm.root_page_id = storage.root_page_id
+            self._sys_tables.update(table_rid, Record([
+                Value(DataType.INTEGER, tm.table_id),
+                Value(DataType.VARCHAR, tm.table_name),
+                Value(DataType.VARCHAR, tm.storage_type.value),
+                Value(DataType.INTEGER, tm.root_page_id),
+            ]))
+
         self.tables[schema.table_name] = tm
         for col_name in schema.unique_columns():
             self._unique_values[(schema.table_name, col_name)] = set()
@@ -168,19 +187,25 @@ class Catalog:
         return tm
 
     def drop_table(self, table_name: str):
-        """
-        Removes a table from the catalog's in-memory view.
-        NOTE: does not delete sys_tables/sys_columns rows physically yet.
-        Heap File delete is lazy (per spec), so this should call the
-        equivalent delete on the sys_* heaps once heap.delete(rid) exists.
-        """
         if table_name not in self.tables:
             raise TableNotFoundError(f"La tabla '{table_name}' no existe")
 
         del self.tables[table_name]
+        self._table_storage.pop(table_name, None)
         self.indexes.pop(table_name, None)
         for key in [k for k in self._unique_values if k[0] == table_name]:
             del self._unique_values[key]
+
+    def get_storage(self, table_name: str):
+        """
+        Returns the physical storage object (HeapFile, SequentialFile, ...)
+        backing table_name's data. This is what the Executor's access
+        nodes (Sequential Scan, Index Scan) call insert()/scan()/get() on.
+        They never construct or manage storage objects themselves.
+        """
+        if table_name not in self._table_storage:
+            raise TableNotFoundError(f"La tabla '{table_name}' no existe")
+        return self._table_storage[table_name]
 
     def create_index(self, table_name: str, column_name: str, index_type: str) -> dict:
         """
@@ -241,7 +266,7 @@ class Catalog:
 
     def check_unique(self, table_name: str, column_name: str, value) -> bool:
         """
-        Returns True if `value` does not violate a UNIQUE/PK constraint
+        Returns True if value does not violate a UNIQUE/PK constraint
         on this column. Called before inserting into storage.
         """
         key = (table_name, column_name)
@@ -251,7 +276,7 @@ class Catalog:
 
     def register_unique(self, table_name: str, column_name: str, value):
         """
-        Marks `value` as used for a UNIQUE/PK column. Call this AFTER
+        Marks value as used for a UNIQUE/PK column. Call this AFTER
         a successful insert into storage, so the in-memory set stays
         in sync with what's actually on disk.
         """
