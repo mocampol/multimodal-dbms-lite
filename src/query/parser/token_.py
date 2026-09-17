@@ -21,6 +21,7 @@ class TokenType(Enum):
     COMA = auto()
     SEMICOL = auto()
     EQ = auto()
+    NEQ = auto()
     LE = auto()
     LEQ = auto()
     GT = auto()
@@ -52,6 +53,8 @@ class TokenType(Enum):
 
     BTREE = auto()
     HASH = auto()
+    HEAP = auto()
+    SEQUENTIAL = auto()
 
 
 _TYPE_NAMES = {
@@ -74,6 +77,7 @@ _TYPE_NAMES = {
     TokenType.COMA: "','",
     TokenType.SEMICOL: "';'",
     TokenType.EQ: "'='",
+    TokenType.NEQ: "'!=' o '<>'",
     TokenType.LE: "'<'",
     TokenType.LEQ: "'<='",
     TokenType.GT: "'>'",
@@ -105,6 +109,8 @@ _TYPE_NAMES = {
 
     TokenType.BTREE: "'BTREE'",
     TokenType.HASH: "'HASH'",
+    TokenType.HEAP: "'HEAP'",
+    TokenType.SEQUENTIAL: "'SEQUENTIAL'",
 }
 
 

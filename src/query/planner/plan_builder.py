@@ -6,7 +6,7 @@ catalog reports one over the WHERE column, otherwise fall back to a
 Sequential Scan.
 """
 
-from ast_nodes import SelectStm, InsertStm, DeleteStm, IdExp
+from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, IdExp
 from common.value import Value
 from common.record import Record
 

@@ -7,7 +7,8 @@ from common import DataType
 
 class BinaryOp(Enum):
     EQ_OP = auto()   # =
-    LE_OP = auto()   # 
+    NEQ_OP = auto()  # != or <>
+    LE_OP = auto()   # <
     LEQ_OP = auto()  # <=
     GT_OP = auto()   # >
     GEQ_OP = auto()  # >=
@@ -15,6 +16,7 @@ class BinaryOp(Enum):
 
 _BINOP_CHARS = {
     BinaryOp.EQ_OP: "=",
+    BinaryOp.NEQ_OP: "!=",
     BinaryOp.LE_OP: "<",
     BinaryOp.LEQ_OP: "<=",
     BinaryOp.GT_OP: ">",
@@ -30,6 +32,10 @@ def binop_to_char(op: BinaryOp) -> str:
 class IndexType(Enum):
     BTREE = auto()
     HASH = auto()
+
+class StorageKind(Enum):
+    HEAP = auto()
+    SEQUENTIAL = auto()
 
 
 # Visitor — interface for traversing the AST (Visitor pattern)
@@ -278,18 +284,20 @@ class DeleteStm(Stm):
 
 
 class CreateTableStm(Stm):
-    """<CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN"""
+    """<CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN [ USING <StorageType> ]"""
 
-    def __init__(self, table: str, columns: List[ColumnDef]):
+    def __init__(self, table: str, columns: List[ColumnDef], storage_kind: StorageKind = StorageKind.HEAP):
         self.table = table
         self.columns = columns
+        self.storage_kind = storage_kind
 
     def accept(self, visitor: Visitor):
         return visitor.visit_create_table_stm(self)
 
     def __repr__(self):
         cols = ", ".join(repr(c) for c in self.columns)
-        return f"CREATE TABLE {self.table} ({cols})"
+        using = f" USING {self.storage_kind.name}" if self.storage_kind != StorageKind.HEAP else ""
+        return f"CREATE TABLE {self.table} ({cols}){using}"
 
 
 class CreateIndexStm(Stm):

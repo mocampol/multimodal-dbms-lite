@@ -1,4 +1,4 @@
-from ast_nodes import Stm, SelectStm, DeleteStm, BinaryExp, IdExp, BinaryOp
+from query.parser.ast_nodes import Stm, SelectStm, DeleteStm, BinaryExp, IdExp, BinaryOp
 
 
 def simplify(stm: Stm) -> Stm:

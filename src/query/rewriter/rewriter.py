@@ -10,10 +10,10 @@ small, work today, and are structured so JOIN support can slot into
 predicate_pushdown.py later without restructuring this file.
 """
 
-from ast_nodes import Stm
+from query.parser.ast_nodes import Stm
 
-from .rules.simplify_expressions import simplify
-from .rules.predicate_pushdown import push_down_predicates
+from query.rewriter.rules.simplify_expressions import simplify
+from query.rewriter.rules.predicate_pushdown import push_down_predicates
 
 
 def rewrite(stm: Stm) -> Stm:

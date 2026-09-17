@@ -3,11 +3,11 @@ Orchestrates the full DML pipeline: SQL text -> tokens -> AST ->
 semantic check -> rewrite -> physical plan -> execution.
 """
 
-from token_ import TokenType
-from scanner import Scanner
-from parser import Parser
-from semantic import SemanticVisitor, SemanticError
-from ast_nodes import SelectStm, InsertStm, DeleteStm
+from query.parser.token_ import TokenType
+from query.parser.scanner import Scanner
+from query.parser.parser import Parser
+from query.parser.visitor import SemanticVisitor, SemanticError
+from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm
 
 from query.rewriter.rewriter import rewrite
 from query.planner.plan_builder import build_select_plan, execute_insert, execute_delete

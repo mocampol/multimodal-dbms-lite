@@ -11,7 +11,7 @@ would inspect a join tree and relocate applicable conditions onto the
 appropriate child scan before the planner builds physical nodes.
 """
 
-from ast_nodes import Stm
+from query.parser.ast_nodes import Stm
 
 
 def push_down_predicates(stm: Stm) -> Stm:

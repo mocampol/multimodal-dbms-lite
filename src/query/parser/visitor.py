@@ -1,10 +1,10 @@
 from typing import Optional, Protocol, Tuple, Union
 
+from catalog.table_metadata import StorageType
 from common import DataType, Value, Column, Schema
 
-from ast_nodes import (
+from query.parser.ast_nodes import (
     Visitor,
-    Exp,
     NumExp,
     IdExp,
     StringExp,
@@ -19,14 +19,14 @@ from ast_nodes import (
     CreateTableStm,
     CreateIndexStm,
     IndexType,
+    StorageKind,
 )
 
 
 class SemanticError(Exception):
     """Error de análisis semántico: tabla/columna inexistente, tipos
     incompatibles, aridad incorrecta en INSERT, valor que excede el
-    tamaño de una columna, etc. Análogo a los std::runtime_error que
-    lanza el TypeCheckerVisitor en C++."""
+    tamaño de una columna, etc."""
 
 
 _NUMERIC_TYPES = {
@@ -46,29 +46,9 @@ ORDERABLE_TYPES = _NUMERIC_TYPES | _DATE_TYPES | _STRING_TYPES
 
 
 class CatalogProtocol(Protocol):
-    """Minimum contract that SemanticVisitor requires from the catalog. It is a
-    Protocol (duck typing): the actual Storage Manager catalog does NOT
-    need to inherit from this class; it only needs to implement these
-    four methods.
-
-    table_exists / get_schema: used to validate SELECT/INSERT/DELETE
-    against a table that must already exist.
-
-    create_table / create_index: used to validate AND EXECUTE
-    CREATE TABLE / CREATE INDEX. Unlike the read-only methods above,
-    these are mutating calls — visit_create_table_stm/visit_create_index_stm
-    invoke them directly as part of semantic checking, since for these
-    two statements "is it valid?" and "make it so" are the same step
-    (there's no separate physical plan to build afterwards, unlike
-    SELECT/INSERT/DELETE, which the executor runs later).
-    """
-
     def table_exists(self, table_name: str) -> bool: ...
-
     def get_schema(self, table_name: str) -> Schema: ...
-
-    def create_table(self, schema: Schema) -> None: ...
-
+    def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> None: ...
     def create_index(self, table_name: str, column_name: str, index_type: str) -> None: ...
 
 
@@ -93,10 +73,13 @@ class InMemoryCatalog:
             raise SemanticError(f"La tabla '{table_name}' no existe en el catálogo")
         return self._schemas[table_name]
 
-    def create_table(self, schema: Schema) -> None:
+    def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> None:
         if schema.table_name in self._schemas:
             raise SemanticError(f"La tabla '{schema.table_name}' ya existe")
         self._schemas[schema.table_name] = schema
+        # NOTE: InMemoryCatalog no tiene storage físico real detrás, así
+        # que storage_type se acepta solo para cumplir la firma del
+        # Protocol — no tiene ningún efecto aquí.
 
     def create_index(self, table_name: str, column_name: str, index_type: str) -> None:
         self.get_schema(table_name)  # raises if the table doesn't exist
@@ -106,28 +89,18 @@ class InMemoryCatalog:
         })
 
 
+_STORAGE_KIND_TO_TYPE = {
+    StorageKind.HEAP: StorageType.HEAP,
+    StorageKind.SEQUENTIAL: StorageType.SEQUENTIAL,
+}
+
 _ExpResult = Tuple[str, Union[Column, int, str]]
 
 
 class SemanticVisitor(Visitor):
-    """Iterates through the AST of a parsed SQL statement and validates that it is
-    semantically correct against the catalog, before the Query
-    Executor executes it. Analogous to TypeCheckerVisitor in the general
-    compiler.
-
-    Usage:
-        from common import DataType, Column, Schema
-
-        catalog = InMemoryCatalog()
-        catalog.define_table(Schema("students", [
-            Column("id", DataType.INTEGER, is_primary_key=True),
-            Column("name", DataType.VARCHAR, size=50),
-            Column("age", DataType.INTEGER),
-        ]))
-
-        stm = parser.parse_sql_statement()
-        SemanticVisitor(catalog).check(stm)
-    """
+    """Iterates through the AST of a parsed SQL statement and validates
+    that it is semantically correct against the catalog, before the
+    Query Executor executes it."""
 
     def __init__(self, catalog: CatalogProtocol):
         self.catalog = catalog
@@ -200,12 +173,6 @@ class SemanticVisitor(Visitor):
         return None
 
     def visit_create_table_stm(self, stm: CreateTableStm):
-        """
-        Validates and EXECUTES a CREATE TABLE statement. Unlike SELECT/
-        INSERT/DELETE, there's no separate plan for the executor to run
-        afterwards — the table is created right here, as part of semantic
-        checking, by calling catalog.create_table().
-        """
         if self.catalog.table_exists(stm.table):
             raise SemanticError(f"La tabla '{stm.table}' ya existe")
 
@@ -241,16 +208,13 @@ class SemanticVisitor(Visitor):
             for col_def in stm.columns
         ]
         schema = Schema(stm.table, columns)
+        storage_type = _STORAGE_KIND_TO_TYPE[stm.storage_kind]
 
-        self.catalog.create_table(schema)
+        self.catalog.create_table(schema, storage_type)
         return None
 
     def visit_create_index_stm(self, stm: CreateIndexStm):
-        """
-        Validates and EXECUTES a CREATE INDEX statement, same rationale
-        as visit_create_table_stm: no separate plan needed afterwards.
-        """
-        schema = self.catalog.get_schema(stm.table)  # raises SemanticError if missing
+        schema = self.catalog.get_schema(stm.table)
         self._require_column(schema, stm.column)
 
         self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
@@ -273,9 +237,6 @@ class SemanticVisitor(Visitor):
         return ("literal", exp.value)
 
     def visit_id_exp(self, exp: IdExp) -> _ExpResult:
-        """An IdExp always represents a column reference from the
-        current table: the left-hand side of <Condition>, a column in
-        ORDER BY/GROUP BY, or (in <Value>) a column-to-column comparison."""
         column = self._require_column(self._current_schema, exp.value)
         return ("column", column)
 
@@ -309,6 +270,13 @@ class SemanticVisitor(Visitor):
                 raise SemanticError(
                     f"El operador '{exp!r}' no aplica sobre columnas de tipo "
                     f"{compare_type.value} (no son ordenables)"
+                )
+
+        if exp.op == BinaryOp.NEQ_OP:
+            if compare_type not in ORDERABLE_TYPES and compare_type not in _STRING_TYPES:
+                raise SemanticError(
+                    f"El operador '{exp!r}' no aplica sobre columnas de tipo "
+                    f"{compare_type.value} (no es comparable)"
                 )
 
         return None

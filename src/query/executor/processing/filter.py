@@ -8,7 +8,7 @@ from typing import Optional
 
 from common.record import Record
 from query.executor.plan_node import PlanNode
-from ast_nodes import BinaryExp, IdExp, NumExp, StringExp, BinaryOp
+from query.parser.ast_nodes import BinaryExp, IdExp, NumExp, StringExp, BinaryOp
 
 
 class Filter(PlanNode):
@@ -57,6 +57,8 @@ class Filter(PlanNode):
         op = self.condition.op
         if op == BinaryOp.EQ_OP:
             return left_value == right_value
+        if op == BinaryOp.NEQ_OP:
+            return left_value != right_value
         if op == BinaryOp.LE_OP:
             return left_value < right_value
         if op == BinaryOp.LEQ_OP:

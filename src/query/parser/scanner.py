@@ -1,5 +1,5 @@
 import os
-from token_ import Token, TokenType
+from query.parser.token_ import Token, TokenType
 
 
 def _is_white_space(c: str) -> bool:
@@ -72,6 +72,8 @@ class Scanner:
 
                 "BTREE": TokenType.BTREE,
                 "HASH": TokenType.HASH,
+                "HEAP": TokenType.HEAP,
+                "SEQUENTIAL": TokenType.SEQUENTIAL,
             }
             if upper_lexema in single_word:
                 return Token(single_word[upper_lexema], lexema)
@@ -160,22 +162,32 @@ class Scanner:
             if c == "=":
                 self.current += 1
                 return Token(TokenType.EQ, c)
+            if c == "!":
+                if self.current + 1 < len(self.input) and self.input[self.current + 1] == "=":
+                    lexema = self.input[self.current:self.current + 2]
+                    self.current += 2
+                    return Token(TokenType.NEQ, lexema)
+                err = Token(TokenType.ERR, c)
+                self.current += 1
+                return err
             if c == "<":
+                if self.current + 1 < len(self.input) and self.input[self.current + 1] == ">":
+                    lexema = self.input[self.current:self.current + 2]
+                    self.current += 2
+                    return Token(TokenType.NEQ, lexema)
                 if self.current + 1 < len(self.input) and self.input[self.current + 1] == "=":
                     lexema = self.input[self.current:self.current + 2]
                     self.current += 2
                     return Token(TokenType.LEQ, lexema)
-                else:
-                    self.current += 1
-                    return Token(TokenType.LE, c)
+                self.current += 1
+                return Token(TokenType.LE, c)
             if c == ">":
                 if self.current + 1 < len(self.input) and self.input[self.current + 1] == "=":
                     lexema = self.input[self.current:self.current + 2]
                     self.current += 2
                     return Token(TokenType.GEQ, lexema)
-                else:
-                    self.current += 1
-                    return Token(TokenType.GT, c)
+                self.current += 1
+                return Token(TokenType.GT, c)
 
         # Lexical error
         err = Token(TokenType.ERR, c)

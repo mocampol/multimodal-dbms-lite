@@ -55,7 +55,7 @@ class Catalog:
         indexes (dict[str, list[dict]]): table_name -> list of index metadata.
     """
 
-    def __init__(self, heap_factory):
+    def __init__(self, heap_factory, storage_factories=None):
         """
         Args:
             heap_factory: callable(schema: Schema) -> heap-like object exposing:

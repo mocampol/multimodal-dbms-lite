@@ -1,9 +1,9 @@
 from typing import List, Optional
 
-from token_ import Token, TokenType
-from scanner import Scanner
+from query.parser.token_ import Token, TokenType
+from query.parser.scanner import Scanner
 from common import DataType
-from ast_nodes import (
+from query.parser.ast_nodes import (
     Exp,
     NumExp,
     IdExp,
@@ -20,12 +20,14 @@ from ast_nodes import (
     CreateTableStm,
     CreateIndexStm,
     IndexType,
+    StorageKind,
 )
 
 
 # Maps an operator token type to its corresponding BinaryOp
 _OP_MAP = {
     TokenType.EQ: BinaryOp.EQ_OP,
+    TokenType.NEQ: BinaryOp.NEQ_OP,
     TokenType.LE: BinaryOp.LE_OP,
     TokenType.LEQ: BinaryOp.LEQ_OP,
     TokenType.GT: BinaryOp.GT_OP,
@@ -54,6 +56,11 @@ _TYPE_MAP = {
 _INDEX_TYPE_MAP = {
     TokenType.BTREE: IndexType.BTREE,
     TokenType.HASH: IndexType.HASH,
+}
+
+_STORAGE_TYPE_MAP = {
+    TokenType.HEAP: StorageKind.HEAP,
+    TokenType.SEQUENTIAL: StorageKind.SEQUENTIAL,
 }
 
 
@@ -183,11 +190,11 @@ class Parser:
         return BinaryExp(left, right, op)
 
     def parse_operator(self) -> BinaryOp:
-        """<Operator> ::= EQ | LE | LEQ | GT | GEQ"""
+        """<Operator> ::= EQ | NEQ | LE | LEQ | GT | GEQ"""
         for ttype, op in _OP_MAP.items():
             if self.match(ttype):
                 return op
-        self.error("un operador ('=', '<', '<=', '>' o '>=')")
+        self.error("un operador ('=', '!=', '<>', '<', '<=', '>' o '>=')")
 
     def parse_value(self) -> Exp:
         """<Value> ::= NUM | STRING | ID"""
@@ -256,13 +263,25 @@ class Parser:
     # =========================================================================
 
     def parse_create_table(self) -> CreateTableStm:
-        """<CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN"""
+        """<CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN [ USING <StorageType> ]"""
         self.expect(TokenType.CREATE_TABLE)
         table_tok = self.expect(TokenType.ID)
         self.expect(TokenType.LPAREN)
         columns = self.parse_column_def_list()
         self.expect(TokenType.RPAREN)
-        return CreateTableStm(table_tok.text, columns)
+
+        storage_kind = StorageKind.HEAP  # default, per spec
+        if self.match(TokenType.USING):
+            storage_kind = self.parse_storage_type()
+
+        return CreateTableStm(table_tok.text, columns, storage_kind)
+
+    def parse_storage_type(self) -> StorageKind:
+        """<StorageType> ::= HEAP | SEQUENTIAL"""
+        for ttype, storage_kind in _STORAGE_TYPE_MAP.items():
+            if self.match(ttype):
+                return storage_kind
+        self.error("'HEAP' o 'SEQUENTIAL'")
 
     def parse_column_def_list(self) -> List[ColumnDef]:
         """<ColumnDefList> ::= <ColumnDef> { COMA <ColumnDef> }"""
