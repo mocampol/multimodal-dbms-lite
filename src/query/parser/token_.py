@@ -26,8 +26,34 @@ class TokenType(Enum):
     GT = auto()
     GEQ = auto()
 
+    CREATE_TABLE = auto()
+    CREATE_INDEX = auto()
+    ON = auto()
+    USING = auto()
 
-# Nombres legibles para cada tipo de token (usados en mensajes de error del parser)
+    PRIMARY_KEY = auto()
+    NOT_NULL = auto()
+    UNIQUE = auto()
+
+    T_SMALLINT = auto()
+    T_INTEGER = auto()
+    T_BIGINT = auto()
+    T_NUMERIC = auto()
+    T_REAL = auto()
+    T_DOUBLE_PRECISION = auto()
+    T_CHAR = auto()
+    T_VARCHAR = auto()
+    T_TEXT = auto()
+    T_BOOLEAN = auto()
+    T_DATE = auto()
+    T_TIME = auto()
+    T_TIMESTAMP = auto()
+    T_BYTEA = auto()
+
+    BTREE = auto()
+    HASH = auto()
+
+
 _TYPE_NAMES = {
     TokenType.SELECT: "'SELECT'",
     TokenType.FROM: "'FROM'",
@@ -52,6 +78,33 @@ _TYPE_NAMES = {
     TokenType.LEQ: "'<='",
     TokenType.GT: "'>'",
     TokenType.GEQ: "'>='",
+
+    TokenType.CREATE_TABLE: "'CREATE TABLE'",
+    TokenType.CREATE_INDEX: "'CREATE INDEX'",
+    TokenType.ON: "'ON'",
+    TokenType.USING: "'USING'",
+
+    TokenType.PRIMARY_KEY: "'PRIMARY KEY'",
+    TokenType.NOT_NULL: "'NOT NULL'",
+    TokenType.UNIQUE: "'UNIQUE'",
+
+    TokenType.T_SMALLINT: "'SMALLINT'",
+    TokenType.T_INTEGER: "'INTEGER'",
+    TokenType.T_BIGINT: "'BIGINT'",
+    TokenType.T_NUMERIC: "'NUMERIC'",
+    TokenType.T_REAL: "'REAL'",
+    TokenType.T_DOUBLE_PRECISION: "'DOUBLE PRECISION'",
+    TokenType.T_CHAR: "'CHAR'",
+    TokenType.T_VARCHAR: "'VARCHAR'",
+    TokenType.T_TEXT: "'TEXT'",
+    TokenType.T_BOOLEAN: "'BOOLEAN'",
+    TokenType.T_DATE: "'DATE'",
+    TokenType.T_TIME: "'TIME'",
+    TokenType.T_TIMESTAMP: "'TIMESTAMP'",
+    TokenType.T_BYTEA: "'BYTEA'",
+
+    TokenType.BTREE: "'BTREE'",
+    TokenType.HASH: "'HASH'",
 }
 
 
