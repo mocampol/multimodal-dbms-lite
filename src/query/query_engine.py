@@ -89,20 +89,32 @@ def execute(sql: str, catalog):
                     "INSERT", stm.table, None, None, _record_data(record)
                 ),
             )
-        return _execute_write(manager, stm.table, insert_operation, lambda rid: manager.add_undo(lambda: storage.delete(rid)))
+        return _execute_write(
+            manager,
+            stm.table,
+            insert_operation,
+            lambda rid: manager.add_undo(lambda: _undo_insert(catalog, stm.table, storage, rid)),
+        )
 
     if isinstance(stm, DeleteStm):
         storage = catalog.get_storage(stm.table)
         def before_delete(rid, record):
             manager.log_data_change("DELETE", stm.table, _rid_data(rid), _record_data(record), None)
-            manager.add_undo(lambda rid=rid, record=record: storage.insert(record))
+            manager.add_undo(
+                lambda rid=rid, record=record: _undo_delete(
+                    catalog, stm.table, storage, record
+                )
+            )
         return _execute_write(manager, stm.table, lambda: execute_delete(stm, catalog, before_delete), None)
 
     if isinstance(stm, UpdateStm):
         storage = catalog.get_storage(stm.table)
         def before_update(rid, old_record, new_record):
             manager.log_data_change("UPDATE", stm.table, _rid_data(rid), _record_data(old_record), _record_data(new_record))
-            manager.add_undo(lambda rid=rid, old_record=old_record: storage.update(rid, old_record))
+            manager.add_undo(
+                lambda rid=rid, old_record=old_record, new_record=new_record:
+                _undo_update(catalog, stm.table, storage, rid, new_record, old_record)
+            )
         return _execute_write(manager, stm.table, lambda: execute_update(stm, catalog, before_update), None)
 
     if isinstance(stm, (CreateTableStm, CreateIndexStm)):
@@ -135,3 +147,21 @@ def _record_data(record):
 
 def _rid_data(rid):
     return {"page_id": rid.page_id, "slot": rid.slot}
+
+
+def _undo_insert(catalog, table_name, storage, rid):
+    record = storage.get(rid)
+    if record is not None:
+        catalog.unregister_delete(table_name, record, rid)
+        storage.delete(rid)
+
+
+def _undo_delete(catalog, table_name, storage, record):
+    rid = storage.insert(record)
+    catalog.register_insert(table_name, record, rid)
+    catalog.register_insert_uniques(table_name, record)
+
+
+def _undo_update(catalog, table_name, storage, rid, current, previous):
+    storage.update(rid, previous)
+    catalog.register_update(table_name, rid, current, previous)

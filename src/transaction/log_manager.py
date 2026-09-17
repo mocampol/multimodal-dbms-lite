@@ -23,7 +23,7 @@ class LogManager:
                 **payload,
             }
             stream = open(self.path, "a", encoding="utf-8")
-            stream.write(json.dumps(record, sort_keys=True) + "\n")
+            stream.write(json.dumps(record, sort_keys=True, default=_json_default) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
             stream.close()
@@ -58,3 +58,13 @@ class LogManager:
         with open(self.path, encoding="utf-8") as stream:
             records = [json.loads(line) for line in stream if line.strip()]
         return records[-1]["lsn"] + 1 if records else 1
+
+
+def _json_default(value):
+    if isinstance(value, bytes):
+        return {"__bytes__": value.hex()}
+    if hasattr(value, "isoformat"):
+        return {"__datetime__": value.isoformat()}
+    if hasattr(value, "as_tuple"):
+        return {"__decimal__": str(value)}
+    return repr(value)

@@ -180,6 +180,7 @@ def execute_update(stm: UpdateStm, catalog, before_update=None) -> int:
         if before_update is not None:
             before_update(rid, old_record, new_record)
         storage.update(rid, new_record)
+        catalog.register_update(stm.table, rid, old_record, new_record)
     return len(matches)
 
 

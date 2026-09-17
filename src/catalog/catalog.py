@@ -79,6 +79,7 @@ class Catalog:
         self.indexes: dict[str, list[dict]] = {}
         self._table_storage: dict[str, object] = {}
         self._physical_indexes: dict[int, object] = {}
+        self._index_catalog_rids: dict[int, object] = {}
         self._clustered_indexes: dict[str, ClusteredIndex] = {}
 
         self._unique_values: dict[tuple, set] = {}
@@ -120,9 +121,13 @@ class Catalog:
                     )
 
             for col_name in tm.schema.unique_columns():
-                self._unique_values[(tm.table_name, col_name)] = set()
+                values = {
+                    record[tm.schema.column_index(col_name)].data
+                    for record in self._table_storage[tm.table_name].scan()
+                }
+                self._unique_values[(tm.table_name, col_name)] = values
 
-        for record in self._sys_indexes.scan():
+        for sys_rid, record in self._sys_indexes.scan_with_rid():
             values = tuple(v.data for v in record)
             index_id, table_id, column_name, index_type, root_page_id = values
             table_name = self._table_name_by_id(table_id)
@@ -132,6 +137,7 @@ class Catalog:
                 "index_type": index_type,
                 "root_page_id": root_page_id,
             })
+            self._index_catalog_rids[index_id] = sys_rid
             if self._index_buffer_factory is not None and root_page_id >= 0:
                 self._physical_indexes[index_id] = self._open_index(
                     table_name, column_name, index_type, root_page_id, index_id
@@ -278,6 +284,7 @@ class Catalog:
         }
         self.indexes.setdefault(table_name, []).append(entry)
         self._physical_indexes[index_id] = index
+        self._index_catalog_rids[index_id] = index_rid
         return entry
 
     def _create_index(self, index_type, table_name, column_name, index_id, key_type):
@@ -314,6 +321,7 @@ class Catalog:
             if index is not None:
                 column_index = self.get_schema(table_name).column_index(entry["column_name"])
                 index.insert(record[column_index], rid)
+                self._persist_index_root(entry, index)
 
     def unregister_delete(self, table_name: str, record: Record, rid):
         clustered = self._clustered_indexes.get(table_name)
@@ -328,6 +336,59 @@ class Catalog:
                     index.remove(key, rid)
                 else:
                     index.delete(key, rid)
+                self._persist_index_root(entry, index)
+        schema = self.get_schema(table_name)
+        for column_name in schema.unique_columns():
+            index = schema.column_index(column_name)
+            self._unique_values[(table_name, column_name)].discard(record[index].data)
+
+    def register_update(self, table_name: str, rid, old_record: Record, new_record: Record):
+        schema = self.get_schema(table_name)
+        for entry in self.indexes.get(table_name, []):
+            index = self._physical_indexes.get(entry["index_id"])
+            if index is None:
+                continue
+            column_index = schema.column_index(entry["column_name"])
+            old_key = old_record[column_index]
+            new_key = new_record[column_index]
+            if old_key.data != new_key.data:
+                if hasattr(index, "remove"):
+                    index.remove(old_key, rid)
+                else:
+                    index.delete(old_key, rid)
+                index.insert(new_key, rid)
+                self._persist_index_root(entry, index)
+        for column_name in schema.unique_columns():
+            column_index = schema.column_index(column_name)
+            old_value = old_record[column_index].data
+            new_value = new_record[column_index].data
+            if old_value != new_value:
+                self._unique_values[(table_name, column_name)].discard(old_value)
+                self._unique_values[(table_name, column_name)].add(new_value)
+
+    def _persist_index_root(self, entry, index):
+        if entry["index_type"] != "btree":
+            return
+        root_page_id = index.root_page_id
+        if root_page_id == entry["root_page_id"]:
+            return
+        entry["root_page_id"] = root_page_id
+        catalog_rid = self._index_catalog_rids.get(entry["index_id"])
+        if catalog_rid is None:
+            return
+        self._sys_indexes.update(catalog_rid, Record([
+            Value(DataType.INTEGER, entry["index_id"]),
+            Value(DataType.INTEGER, self.get_table_by_index_entry(entry)[0]),
+            Value(DataType.VARCHAR, entry["column_name"]),
+            Value(DataType.VARCHAR, entry["index_type"]),
+            Value(DataType.INTEGER, root_page_id),
+        ]))
+
+    def get_table_by_index_entry(self, entry):
+        for table_name, entries in self.indexes.items():
+            if entry in entries:
+                return self.tables[table_name].table_id, table_name
+        raise TableNotFoundError(f"No se encontró el índice {entry['index_id']}")
 
     # queries used by the semantic analyzer
 

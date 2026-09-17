@@ -23,7 +23,7 @@ class LockManager:
     def __init__(self):
         self._condition = threading.Condition(threading.RLock())
         self._holders = defaultdict(dict)
-        self._waiting = defaultdict(set)
+        self._waiting = defaultdict(dict)
         self._held_by_txn = defaultdict(set)
 
     def acquire(self, txn_id: int, resource: str, mode: LockMode, timeout=None):
@@ -34,11 +34,11 @@ class LockManager:
                 if not blockers:
                     self._holders[resource][txn_id] = mode
                     self._held_by_txn[txn_id].add(resource)
-                    self._waiting[txn_id].discard(resource)
+                    self._waiting[txn_id].pop(resource, None)
                     return
-                self._waiting[txn_id].add(resource)
+                self._waiting[txn_id][resource] = mode
                 if self._has_cycle(txn_id, set()):
-                    self._waiting[txn_id].discard(resource)
+                    self._waiting[txn_id].pop(resource, None)
                     raise DeadlockError(f"deadlock detected for transaction {txn_id}")
                 if timeout is not None:
                     remaining = deadline - time.monotonic()
@@ -74,8 +74,8 @@ class LockManager:
         if start in visited:
             return True
         visited.add(start)
-        for resource in self._waiting.get(start, set()):
-            for blocker in self._blockers(start, resource, LockMode.EXCLUSIVE):
+        for resource, mode in self._waiting.get(start, {}).items():
+            for blocker in self._blockers(start, resource, mode):
                 if self._has_cycle(blocker, visited.copy()):
                     return True
         return False

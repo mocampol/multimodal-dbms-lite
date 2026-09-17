@@ -1,11 +1,3 @@
-"""In-memory hash join Volcano node for equality predicates."""
-
-from typing import Optional
-
-from common.record import Record
-from query.executor.plan_node import PlanNode
-
-
 """Grace Hash Join Volcano node for equality predicates."""
 
 import hashlib

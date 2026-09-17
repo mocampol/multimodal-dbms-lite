@@ -7,3 +7,9 @@ from .exceptions import (
     ColumnNotFoundError,
     UniqueConstraintError,
 )
+
+__all__ = [
+    "Catalog", "TableMetadata", "StorageType", "ColumnMetadata",
+    "TableAlreadyExistsError", "TableNotFoundError", "ColumnNotFoundError",
+    "UniqueConstraintError",
+]
