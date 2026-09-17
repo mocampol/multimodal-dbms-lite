@@ -2,14 +2,12 @@ from abc import ABC, abstractmethod
 from enum import Enum, auto
 from typing import List, Optional
 
+from common import DataType
 
-# =============================================================================
-# Operadores de comparación (<Operator> ::= EQ | LE | LEQ | GT | GEQ)
-# =============================================================================
 
 class BinaryOp(Enum):
     EQ_OP = auto()   # =
-    LE_OP = auto()   # <
+    LE_OP = auto()   # 
     LEQ_OP = auto()  # <=
     GT_OP = auto()   # >
     GEQ_OP = auto()  # >=
@@ -28,13 +26,15 @@ def binop_to_char(op: BinaryOp) -> str:
     return _BINOP_CHARS.get(op, "?")
 
 
-# =============================================================================
-# Visitor — interfaz para recorrer el AST (patrón Visitor)
-# =============================================================================
+# Index type (<IndexType> ::= BTREE | HASH)
+class IndexType(Enum):
+    BTREE = auto()
+    HASH = auto()
 
+
+# Visitor — interface for traversing the AST (Visitor pattern)
 class Visitor(ABC):
 
-    # ---- Expresiones ----
     @abstractmethod
     def visit_num_exp(self, exp: "NumExp"):
         ...
@@ -51,7 +51,6 @@ class Visitor(ABC):
     def visit_binary_exp(self, exp: "BinaryExp"):
         ...
 
-    # ---- Sentencias ----
     @abstractmethod
     def visit_select_stm(self, stm: "SelectStm"):
         ...
@@ -64,7 +63,14 @@ class Visitor(ABC):
     def visit_delete_stm(self, stm: "DeleteStm"):
         ...
 
-    # ---- Cláusulas auxiliares ----
+    @abstractmethod
+    def visit_create_table_stm(self, stm: "CreateTableStm"):
+        ...
+
+    @abstractmethod
+    def visit_create_index_stm(self, stm: "CreateIndexStm"):
+        ...
+
     @abstractmethod
     def visit_order_by_clause(self, clause: "OrderByClause"):
         ...
@@ -74,12 +80,9 @@ class Visitor(ABC):
         ...
 
 
-# =============================================================================
-# Expresiones (<Condition>, <Value>)
-# =============================================================================
-
+# Expressions (<Condition>, <Value>)
 class Exp(ABC):
-    """Nodo base abstracto para toda expresión."""
+    """Abstract base node for every expression."""
 
     @abstractmethod
     def accept(self, visitor: Visitor):
@@ -100,7 +103,7 @@ class NumExp(Exp):
 
 
 class IdExp(Exp):
-    """<Value> ::= ID  (también se usa como lado izquierdo de <Condition>)"""
+    """<Value> ::= ID  (also used as the left-hand side of <Condition>)"""
 
     def __init__(self, value: str):
         self.value = value
@@ -113,7 +116,7 @@ class IdExp(Exp):
 
 
 class StringExp(Exp):
-    """<Value> ::= STRING — literal de texto entre comillas simples: 'texto'"""
+    """<Value> ::= STRING — text literal enclosed in single quotes: 'text'"""
 
     def __init__(self, value: str):
         self.value = value
@@ -140,10 +143,7 @@ class BinaryExp(Exp):
         return f"({self.left!r} {binop_to_char(self.op)} {self.right!r})"
 
 
-# =============================================================================
-# Cláusulas auxiliares (<GroupOrOrder>)
-# =============================================================================
-
+# Auxiliary clauses (<GroupOrOrder>)
 class OrderByClause:
     """ORDER_BY ID { COMA ID }"""
 
@@ -170,12 +170,44 @@ class GroupByClause:
         return f"GROUP BY {', '.join(self.columns)}"
 
 
-# =============================================================================
-# Sentencias (<SelectStmt> | <InsertStmt> | <DeleteStmt>)
-# =============================================================================
+# CREATE TABLE support (<ColumnDef>, <ColumnConstraint>)
+class ColumnDef:
+    """
+    <ColumnDef> ::= ID <TypeName> [ LPAREN NUM RPAREN ] { <ColumnConstraint> }
+    """
 
+    def __init__(
+        self,
+        name: str,
+        data_type: DataType,
+        size: Optional[int] = None,
+        is_primary_key: bool = False,
+        nullable: bool = True,
+        is_unique: bool = False,
+    ):
+        self.name = name
+        self.data_type = data_type
+        self.size = size
+        self.is_primary_key = is_primary_key
+        self.nullable = nullable
+        self.is_unique = is_unique
+
+    def __repr__(self):
+        flags = []
+        if self.is_primary_key:
+            flags.append("PRIMARY KEY")
+        if self.is_unique and not self.is_primary_key:
+            flags.append("UNIQUE")
+        if not self.nullable and not self.is_primary_key:
+            flags.append("NOT NULL")
+        flag_str = f" {' '.join(flags)}" if flags else ""
+        size_str = f"({self.size})" if self.size is not None else ""
+        return f"{self.name} {self.data_type.value}{size_str}{flag_str}"
+
+
+# Statements (<SelectStmt> | <InsertStmt> | <DeleteStmt> | <CreateTableStmt> | <CreateIndexStmt>)
 class Stm(ABC):
-    """Nodo base abstracto para toda sentencia SQL."""
+    """Abstract base node for every SQL statement."""
 
     @abstractmethod
     def accept(self, visitor: Visitor):
@@ -243,3 +275,37 @@ class DeleteStm(Stm):
         if self.where_cond is not None:
             base += f" WHERE {self.where_cond!r}"
         return base
+
+
+class CreateTableStm(Stm):
+    """<CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN"""
+
+    def __init__(self, table: str, columns: List[ColumnDef]):
+        self.table = table
+        self.columns = columns
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_create_table_stm(self)
+
+    def __repr__(self):
+        cols = ", ".join(repr(c) for c in self.columns)
+        return f"CREATE TABLE {self.table} ({cols})"
+
+
+class CreateIndexStm(Stm):
+    """<CreateIndexStmt> ::= CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>"""
+
+    def __init__(self, index_name: str, table: str, column: str, index_type: IndexType):
+        self.index_name = index_name
+        self.table = table
+        self.column = column
+        self.index_type = index_type
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_create_index_stm(self)
+
+    def __repr__(self):
+        return (
+            f"CREATE INDEX {self.index_name} ON {self.table} "
+            f"({self.column}) USING {self.index_type.name}"
+        )

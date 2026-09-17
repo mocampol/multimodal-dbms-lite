@@ -18,7 +18,7 @@ from ast_nodes import (
 )
 
 
-# Mapea el tipo de token de operador a su BinaryOp correspondiente
+# Maps an operator token type to its corresponding BinaryOp
 _OP_MAP = {
     TokenType.EQ: BinaryOp.EQ_OP,
     TokenType.LE: BinaryOp.LE_OP,
@@ -37,7 +37,7 @@ class Parser:
             raise RuntimeError(f"Error léxico: carácter no reconocido '{self.current.text}'")
 
     # =========================================================================
-    # Primitivas de consumo de tokens
+    # Token consumption primitives
     # =========================================================================
 
     def is_at_end(self) -> bool:
@@ -64,7 +64,7 @@ class Parser:
         return False
 
     # =========================================================================
-    # Reporte de errores
+    # Error reporting
     # =========================================================================
 
     def error(self, expected: str):
@@ -77,7 +77,7 @@ class Parser:
         raise RuntimeError(f"Error sintáctico: se esperaba {expected}, pero se encontró {found}")
 
     def expect(self, ttype: TokenType) -> Token:
-        """Consume el token si coincide y lo retorna; si no, lanza error descriptivo."""
+        """Consume and return the token if it matches; otherwise raise a descriptive error."""
         if self.check(ttype):
             tok = self.current
             self.advance()
@@ -85,7 +85,7 @@ class Parser:
         self.error(Token.type_name(ttype))
 
     # =========================================================================
-    # Reglas gramaticales
+    # Grammar rules
     # =========================================================================
 
     def parse_sql_statement(self) -> Stm:

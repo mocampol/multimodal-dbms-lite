@@ -184,8 +184,8 @@ class BTreeNode:
 
         node_type, num_entries, next_page_id, _ = self._read_header()
 
-        # Snapshot del contenido lógico ANTES de tocar la página —
-        # independiente de cualquier escritura que hagamos después.
+        # Snapshot of the logical contents BEFORE touching the page —
+        # independent of any subsequent writes.
         old_keys = self.keys()
         old_children = self.children()
 
@@ -201,11 +201,11 @@ class BTreeNode:
         needed_data_bytes = sum(len(e) for e in encoded_keys)
 
         if self.page.size - header_end < needed_data_bytes:
-            return False  # btree.py debe dividir este nodo antes de reintentar
+            return False  # btree.py must split this node before retrying
 
-        # Actualizamos el header PRIMERO: así _child_offset()/_slot_offset(),
-        # llamados más abajo, ya calculan contra el layout FINAL (new_num_entries),
-        # evitando exactamente el desfase viejo/nuevo que causaba la corrupción.
+        # Update the header FIRST so _child_offset()/_slot_offset(),
+        # called below, calculate against the FINAL layout (new_num_entries),
+        # avoiding the old/new offset mismatch that caused corruption.
         self._write_header(node_type, new_num_entries, next_page_id, self.page.size)
 
         for i, child_page_id in enumerate(new_children):

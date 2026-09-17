@@ -30,7 +30,7 @@ def build_select_plan(stm: SelectStm, catalog):
     # IndexScan(stm.table, stm.where_cond, catalog) instead, and skip
     # wrapping in Filter below (the index scan already applies the
     # condition). This is exactly the "regla heurística de selección
-    # de acceso" the assignment asks for.
+    # "access selection heuristic" the assignment asks for.
     node = SeqScan(stm.table, catalog)
 
     if stm.where_cond is not None:
