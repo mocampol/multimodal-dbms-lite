@@ -7,10 +7,14 @@ from query.parser.token_ import TokenType
 from query.parser.scanner import Scanner
 from query.parser.parser import Parser
 from query.parser.visitor import SemanticVisitor, SemanticError
-from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm
+from query.parser.ast_nodes import (
+    SelectStm, InsertStm, DeleteStm, CreateTableStm, CreateIndexStm,
+)
 
 from query.rewriter.rewriter import rewrite
-from query.planner.plan_builder import build_select_plan, execute_insert, execute_delete
+from query.planner.plan_builder import (
+    build_select_plan, execute_insert, execute_delete,
+)
 from query.executor.executor import run_plan
 
 
@@ -52,7 +56,9 @@ def execute(sql: str, catalog):
         return None
 
     if isinstance(stm, DeleteStm):
-        execute_delete(stm, catalog)
+        return execute_delete(stm, catalog)
+
+    if isinstance(stm, (CreateTableStm, CreateIndexStm)):
         return None
 
     raise QueryError(f"Tipo de sentencia no soportado: {type(stm).__name__}")

@@ -6,7 +6,7 @@ catalog reports one over the WHERE column, otherwise fall back to a
 Sequential Scan.
 """
 
-from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, IdExp
+from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, IdExp, BinaryExp
 from common.value import Value
 from common.record import Record
 
@@ -14,6 +14,7 @@ from query.executor.access.seq_scan import SeqScan
 from query.executor.processing.filter import Filter
 from query.executor.processing.projection import Projection
 from query.executor.processing.sort import Sort
+from query.executor.aggregate.group_aggregate import GroupAggregate
 
 
 def build_select_plan(stm: SelectStm, catalog):
@@ -36,12 +37,12 @@ def build_select_plan(stm: SelectStm, catalog):
     if stm.where_cond is not None:
         node = Filter(node, stm.where_cond, schema)
 
+    if stm.group_by is not None:
+        node = Sort(node, stm.group_by.columns, schema)
+        node = GroupAggregate(node, stm.group_by.columns, schema)
+
     if stm.order_by is not None:
         node = Sort(node, stm.order_by.columns, schema)
-
-    # GROUP BY without aggregate functions in the grammar has no
-    # meaningful physical operator yet — left unimplemented on purpose,
-    # see aggregate/ placeholders.
 
     node = Projection(node, stm.columns, schema)
     return node
@@ -76,16 +77,45 @@ def execute_delete(stm: DeleteStm, catalog) -> int:
     a WHERE) purely as a convenient way to iterate matching records, but
     calls storage.delete() as a side effect rather than yielding rows.
 
-    NOTE: HeapFile.scan() doesn't expose the RID of each record it
-    yields, only the Record itself — this means delete-by-scan can't
-    call storage.delete(rid) directly yet. Flagging this as a real gap:
-    either HeapFile.scan() needs to optionally yield (RID, Record) pairs,
-    or DeleteStm execution needs its own storage-level method that scans
-    and deletes matching records internally, page by page. Left as an
-    explicit TODO rather than a bad workaround.
+    HeapFile exposes stable RIDs for this operation. Sequential storage
+    supports the same operation only for its current equality-by-key API.
     """
-    raise NotImplementedError(
-        "DELETE requiere que HeapFile.scan() exponga el RID de cada "
-        "registro (actualmente solo yield-ea el Record). Ver el "
-        "docstring de execute_delete para las dos alternativas de diseño."
-    )
+    schema = catalog.get_schema(stm.table)
+    storage = catalog.get_storage(stm.table)
+
+    if hasattr(storage, "scan_with_rid"):
+        matches = []
+        for rid, record in storage.scan_with_rid():
+            if stm.where_cond is None or _condition_matches(stm.where_cond, record, schema):
+                matches.append(rid)
+        for rid in matches:
+            storage.delete(rid)
+        return len(matches)
+
+    if stm.where_cond is not None and isinstance(stm.where_cond, BinaryExp):
+        if isinstance(stm.where_cond.right, IdExp):
+            raise ValueError("DELETE sobre SequentialFile requiere un literal como clave")
+        if stm.where_cond.op.name != "EQ_OP":
+            raise ValueError("DELETE sobre SequentialFile solo soporta igualdad")
+        deleted = storage.delete(stm.where_cond.right.value)
+        return deleted
+
+    raise ValueError("DELETE sin filtro sobre SequentialFile no está soportado")
+
+
+def _condition_matches(condition, record: Record, schema) -> bool:
+    left_value = record[schema.column_index(condition.left.value)].data
+    if isinstance(condition.right, IdExp):
+        right_value = record[schema.column_index(condition.right.value)].data
+    else:
+        right_value = condition.right.value
+
+    operations = {
+        "EQ_OP": lambda: left_value == right_value,
+        "NEQ_OP": lambda: left_value != right_value,
+        "LE_OP": lambda: left_value < right_value,
+        "LEQ_OP": lambda: left_value <= right_value,
+        "GT_OP": lambda: left_value > right_value,
+        "GEQ_OP": lambda: left_value >= right_value,
+    }
+    return operations[condition.op.name]()

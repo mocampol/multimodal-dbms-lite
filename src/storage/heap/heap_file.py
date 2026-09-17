@@ -250,6 +250,21 @@ class HeapFile:
             finally:
                 self.bm.unpin_page(page_id, is_dirty=False)
 
+    def scan_with_rid(self):
+        """Yields live records together with their stable heap RIDs."""
+        for page_id in self._known_pages:
+            page = self.bm.fetch_page(page_id)
+            try:
+                num_slots, _ = self._read_header(page)
+                for slot in range(num_slots):
+                    status, a, b = self._read_slot(page, slot)
+                    if status == STATUS_VALID:
+                        yield RID(page_id, slot), decode_record(
+                            page.read_bytes(a, b), self.schema
+                        )
+            finally:
+                self.bm.unpin_page(page_id, is_dirty=False)
+
 
     def _allocate_and_init_page(self) -> int:
         page_id = self.bm.allocate_page()
