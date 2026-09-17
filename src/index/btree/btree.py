@@ -1,6 +1,6 @@
 import bisect
 
-from storage.buffer_manager.buffer_manager import BufferManager
+from storage.buffer_manager import BufferManager
 from storage.heap.rid import RID
 from common.value import DataType, Value
 
