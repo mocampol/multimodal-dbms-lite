@@ -36,11 +36,11 @@ def decode_key(data_type: DataType, buf: bytes) -> Value:
             _LENGTH_PREFIX_FORMAT, buf[:_LENGTH_PREFIX_SIZE]
         )[0]
         raw = buf[_LENGTH_PREFIX_SIZE:_LENGTH_PREFIX_SIZE + length]
-        return decode_scalar(data_type, raw)
+        return Value(data_type, decode_scalar(data_type, raw))
 
     length = FIXED_SIZE[data_type]
     raw = buf[:length]
-    return decode_scalar(data_type, raw)
+    return Value(data_type, decode_scalar(data_type, raw))
 
 
 def key_size(value: Value) -> int:

@@ -6,9 +6,12 @@ Classes:
                          and the Bucket Pages using the Buffer Manager.
 """
 
+import hashlib
+
 from storage.buffer_manager import BufferManager
 from common.value import DataType, Value
 from storage.heap.rid import RID
+from storage.heap.record_codec import encode_scalar
 from index.extendible_hash.hash_directory_page import HashDirectoryPage
 from index.extendible_hash.hash_bucket_page import HashBucketPage
 
@@ -20,6 +23,24 @@ class ExtendibleHashIndex:
         self.buffer_manager = buffer_manager
         self.directory_page_id = directory_page_id
         self.key_type = key_type
+
+    @classmethod
+    def create(cls, buffer_manager: BufferManager, key_type: DataType):
+        """Creates and formats a directory with its initial bucket."""
+        directory_page_id = buffer_manager.allocate_page()
+        bucket_page_id = buffer_manager.allocate_page()
+
+        directory_page = buffer_manager.fetch_page(directory_page_id)
+        directory = HashDirectoryPage(directory_page)
+        directory.format_page()
+        directory.set_bucket_page_id(0, bucket_page_id)
+        buffer_manager.unpin_page(directory_page_id, is_dirty=True)
+
+        bucket_page = buffer_manager.fetch_page(bucket_page_id)
+        HashBucketPage(bucket_page, key_type).format_page(local_depth=0)
+        buffer_manager.unpin_page(bucket_page_id, is_dirty=True)
+
+        return cls(buffer_manager, directory_page_id, key_type)
 
     def insert(self, key: Value, rid: RID) -> bool:
         """
@@ -56,8 +77,8 @@ class ExtendibleHashIndex:
             self._grow_directory(directory)
             
         # Allocate a new bucket page
-        new_bucket_page = self.buffer_manager.new_page()
-        new_bucket_page_id = new_bucket_page.page_id
+        new_bucket_page_id = self.buffer_manager.allocate_page()
+        new_bucket_page = self.buffer_manager.fetch_page(new_bucket_page_id)
         new_bucket = HashBucketPage(new_bucket_page, self.key_type)
         
         new_local_depth = local_depth + 1
@@ -153,9 +174,10 @@ class ExtendibleHashIndex:
 
     def _hash_key(self, key: Value) -> int:
         """
-        Returns a 32-bit positive integer hash of the key's data.
+        Returns a process-independent 32-bit hash of the encoded key.
         """
-        return abs(hash(key.data)) & 0xFFFFFFFF
+        digest = hashlib.blake2b(encode_scalar(key), digest_size=4).digest()
+        return int.from_bytes(digest, byteorder="big", signed=False)
 
     def _get_bucket_idx(self, hash_value: int, global_depth: int) -> int:
         """

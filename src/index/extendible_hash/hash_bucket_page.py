@@ -11,7 +11,7 @@ import struct
 from storage.page import Page
 from storage.heap.rid import RID
 from common.value import DataType, Value
-from storage.heap.record_codec import _encode_scalar, _decode_scalar
+from storage.heap.record_codec import encode_scalar, decode_scalar
 
 # Header Layout: local_depth (2 bytes), num_slots (2 bytes), free_space_offset (4 bytes)
 HEADER_FORMAT = ">HHI"
@@ -60,7 +60,7 @@ class HashBucketPage:
         """
         local_depth, num_slots, free_space_offset = self._read_header()
         
-        key_bytes = _encode_scalar(key)
+        key_bytes = encode_scalar(key)
         rid_bytes = struct.pack(">II", rid.page_id, rid.slot)
         
         payload = key_bytes + rid_bytes
@@ -102,7 +102,7 @@ class HashBucketPage:
                 key_len = length - 8
                 key_bytes = payload[:key_len]
 
-                stored_key_data = _decode_scalar(self.key_type, key_bytes)
+                stored_key_data = decode_scalar(self.key_type, key_bytes)
                 if stored_key_data == key.data:
                     rid_bytes = payload[key_len:]
                     rid_page, rid_slot = struct.unpack(">II", rid_bytes)
@@ -123,7 +123,7 @@ class HashBucketPage:
                 payload = self.page.read_bytes(offset, length)
                 key_len = length - 8
                 key_bytes = payload[:key_len]
-                stored_key_data = _decode_scalar(self.key_type, key_bytes)
+                stored_key_data = decode_scalar(self.key_type, key_bytes)
                 
                 if stored_key_data == key.data:
                     rid_bytes = payload[key_len:]
@@ -151,7 +151,7 @@ class HashBucketPage:
                 key_len = length - 8
                 key_bytes = payload[:key_len]
                 
-                stored_key_data = _decode_scalar(self.key_type, key_bytes)
+                stored_key_data = decode_scalar(self.key_type, key_bytes)
                 stored_key = Value(self.key_type, stored_key_data)
                 
                 rid_bytes = payload[key_len:]
