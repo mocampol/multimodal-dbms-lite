@@ -16,7 +16,18 @@ def make_sequential_factory(base_dir: str, pool_size: int = 64):
     def factory(schema):
         file_manager = FileManager(f"{base_dir}/{schema.table_name}.tbl")
         buffer_manager = BufferManager(file_manager, pool_size=pool_size)
-        return SequentialFile(schema, buffer_manager)
+        overflow_file_manager = FileManager(
+            f"{base_dir}/{schema.table_name}.overflow.tbl"
+        )
+        overflow_buffer_manager = BufferManager(
+            overflow_file_manager, pool_size=pool_size
+        )
+        return SequentialFile(
+            schema,
+            key_column=schema.primary_key().name,
+            buffer_manager=buffer_manager,
+            overflow_buffer_manager=overflow_buffer_manager,
+        )
     return factory
 
 heap_factory = make_heap_factory("data")
@@ -24,6 +35,6 @@ catalog = Catalog(
     heap_factory=heap_factory,
     storage_factories={
         StorageType.HEAP: heap_factory,
-        StorageType.SEQUENTIAL: make_sequential_factory("data"),  # necesitas escribir este helper
+        StorageType.SEQUENTIAL: make_sequential_factory("data"),
     },
 )

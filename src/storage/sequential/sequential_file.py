@@ -39,7 +39,7 @@ import struct
 import bisect
 
 from storage.page import Page, PAGE_SIZE
-from storage.buffer_manager.buffer_manager import BufferManager
+from storage.buffer_manager import BufferManager
 from storage.heap.heap_file import HeapFile
 from storage.heap.rid import RID
 from storage.heap.record_codec import encode_record, decode_record

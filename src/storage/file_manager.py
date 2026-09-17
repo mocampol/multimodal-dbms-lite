@@ -103,5 +103,5 @@ class FileManager:
         return f"FileManager(file_path={self.file_path!r}, pages={self._page_count()})"
 
     def page_count(self) -> int:
-    """Public wrapper: how many pages currently exist in the file."""
-    return self._page_count()
+        """Public wrapper: how many pages currently exist in the file."""
+        return self._page_count()

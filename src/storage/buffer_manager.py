@@ -7,9 +7,7 @@ Implements, following Ramakrishnan's structure directly:
     - Page Table: page_id -> frame_number mapping, with pin_count
       and dirty_bit tracked per frame.
     - Dirty Pages: flushed to disk before being reused or on demand.
-    - Replacement Policy: pluggable; starts as a simple "first unpinned
-      frame" policy so heap_file/sequential_file can be built without
-      waiting on LRU-K, and is swapped later without touching callers.
+        - Replacement Policy: LRU-K over unpinned frames (K defaults to 2).
 
 Classes:
     Frame: One slot of the Buffer Pool, holding a Page plus its metadata.
@@ -17,7 +15,7 @@ Classes:
 """
 
 from storage.page import Page
-from storage.file_manager.file_manager import FileManager
+from storage.file_manager import FileManager
 
 
 class Frame:
@@ -39,6 +37,7 @@ class Frame:
         self.page: Page | None = None
         self.pin_count: int = 0
         self.dirty_bit: bool = False
+        self.access_history: list[int] = []
 
     def is_empty(self) -> bool:
         return self.page is None
@@ -51,6 +50,7 @@ class Frame:
         self.page = None
         self.pin_count = 0
         self.dirty_bit = False
+        self.access_history.clear()
 
     def __repr__(self):
         pid = self.page.page_id if self.page else None
@@ -70,11 +70,17 @@ class BufferManager:
         page_table (dict[int, int]): Maps page_id -> frame index, for O(1) lookup.
     """
 
-    def __init__(self, file_manager: FileManager, pool_size: int = 64):
+    def __init__(self, file_manager: FileManager, pool_size: int = 64, lru_k: int = 2):
+        if pool_size <= 0:
+            raise ValueError("pool_size debe ser mayor que 0")
+        if lru_k <= 0:
+            raise ValueError("lru_k debe ser mayor que 0")
         self.file_manager = file_manager
         self.pool_size = pool_size
+        self.lru_k = lru_k
         self.frames: list[Frame] = [Frame() for _ in range(pool_size)]
         self.page_table: dict[int, int] = {}
+        self._access_counter = 0
 
     # ---------- core API used by heap_file / sequential_file ----------
 
@@ -99,6 +105,7 @@ class BufferManager:
             frame_idx = self.page_table[page_id]
             frame = self.frames[frame_idx]
             frame.pin_count += 1
+            self._record_access(frame)
             return frame.page
 
         frame_idx = self._find_free_or_victim_frame()
@@ -112,6 +119,7 @@ class BufferManager:
         frame.pin_count = 1
         frame.dirty_bit = False
         self.page_table[page_id] = frame_idx
+        self._record_access(frame)
 
         return page
 
@@ -193,19 +201,41 @@ class BufferManager:
 
     def _choose_victim(self) -> int | None:
         """
-        Replacement policy hook. Current implementation: returns the
-        index of the first frame with pin_count == 0 (arbitrary, but
-        correct — never picks a pinned frame). This is a deliberate
-        placeholder so heap_file/sequential_file can be developed
-        without waiting on LRU-K; replace ONLY this method's body with
-        the LRU-K logic later, no other code in this class needs to change.
+        Replacement policy hook using LRU-K over unpinned frames.
+
+        Pages with fewer than K references are preferred for eviction;
+        among them the least recently referenced page wins. Once every
+        candidate has K references, the page with the oldest K-th most
+        recent reference wins.
 
         Returns None if no unpinned frame exists (pool exhausted).
         """
-        for i, frame in enumerate(self.frames):
-            if not frame.is_empty() and frame.pin_count == 0:
-                return i
-        return None
+        candidates = [
+            (i, frame)
+            for i, frame in enumerate(self.frames)
+            if not frame.is_empty() and frame.pin_count == 0
+        ]
+        if not candidates:
+            return None
+
+        cold_candidates = [
+            (i, frame) for i, frame in candidates
+            if len(frame.access_history) < self.lru_k
+        ]
+        if cold_candidates:
+            return min(
+                cold_candidates,
+                key=lambda item: item[1].access_history[-1],
+            )[0]
+
+        return min(
+            candidates,
+            key=lambda item: item[1].access_history[-self.lru_k],
+        )[0]
+
+    def _record_access(self, frame: Frame):
+        self._access_counter += 1
+        frame.access_history.append(self._access_counter)
 
     def _evict(self, frame_idx: int):
         """

@@ -24,7 +24,7 @@ Classes:
 import struct
 
 from storage.page import Page, PAGE_SIZE
-from storage.buffer_manager.buffer_manager import BufferManager
+from storage.buffer_manager import BufferManager
 from common.schema import Schema
 from common.record import Record
 
