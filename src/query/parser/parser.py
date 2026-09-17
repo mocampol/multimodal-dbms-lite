@@ -1,8 +1,9 @@
 from typing import List, Optional
 
-from token_ import Token, TokenType
-from scanner import Scanner
-from ast_nodes import (
+from query.parser.token_ import Token, TokenType
+from query.parser.scanner import Scanner
+from common import DataType
+from query.parser.ast_nodes import (
     Exp,
     NumExp,
     IdExp,
@@ -15,16 +16,56 @@ from ast_nodes import (
     DeleteStm,
     OrderByClause,
     GroupByClause,
+    JoinClause,
+    BeginTransactionStm,
+    EndTransactionStm,
+    UpdateStm,
+    AggregateSpec,
+    ColumnDef,
+    CreateTableStm,
+    CreateIndexStm,
+    IndexType,
+    StorageKind,
 )
 
 
-# Mapea el tipo de token de operador a su BinaryOp correspondiente
+# Maps an operator token type to its corresponding BinaryOp
 _OP_MAP = {
     TokenType.EQ: BinaryOp.EQ_OP,
+    TokenType.NEQ: BinaryOp.NEQ_OP,
     TokenType.LE: BinaryOp.LE_OP,
     TokenType.LEQ: BinaryOp.LEQ_OP,
     TokenType.GT: BinaryOp.GT_OP,
     TokenType.GEQ: BinaryOp.GEQ_OP,
+}
+
+# Maps a type-name token to its DataType (common), and whether it
+# REQUIRES a declared size, per common.value.VARIABLE_SIZE_TYPES.
+_TYPE_MAP = {
+    TokenType.T_SMALLINT: DataType.SMALLINT,
+    TokenType.T_INTEGER: DataType.INTEGER,
+    TokenType.T_BIGINT: DataType.BIGINT,
+    TokenType.T_NUMERIC: DataType.NUMERIC,
+    TokenType.T_REAL: DataType.REAL,
+    TokenType.T_DOUBLE_PRECISION: DataType.DOUBLE_PRECISION,
+    TokenType.T_CHAR: DataType.CHAR,
+    TokenType.T_VARCHAR: DataType.VARCHAR,
+    TokenType.T_TEXT: DataType.TEXT,
+    TokenType.T_BOOLEAN: DataType.BOOLEAN,
+    TokenType.T_DATE: DataType.DATE,
+    TokenType.T_TIME: DataType.TIME,
+    TokenType.T_TIMESTAMP: DataType.TIMESTAMP,
+    TokenType.T_BYTEA: DataType.BYTEA,
+}
+
+_INDEX_TYPE_MAP = {
+    TokenType.BTREE: IndexType.BTREE,
+    TokenType.HASH: IndexType.HASH,
+}
+
+_STORAGE_TYPE_MAP = {
+    TokenType.HEAP: StorageKind.HEAP,
+    TokenType.SEQUENTIAL: StorageKind.SEQUENTIAL,
 }
 
 
@@ -37,7 +78,7 @@ class Parser:
             raise RuntimeError(f"Error léxico: carácter no reconocido '{self.current.text}'")
 
     # =========================================================================
-    # Primitivas de consumo de tokens
+    # Token consumption primitives
     # =========================================================================
 
     def is_at_end(self) -> bool:
@@ -64,7 +105,7 @@ class Parser:
         return False
 
     # =========================================================================
-    # Reporte de errores
+    # Error reporting
     # =========================================================================
 
     def error(self, expected: str):
@@ -77,7 +118,7 @@ class Parser:
         raise RuntimeError(f"Error sintáctico: se esperaba {expected}, pero se encontró {found}")
 
     def expect(self, ttype: TokenType) -> Token:
-        """Consume el token si coincide y lo retorna; si no, lanza error descriptivo."""
+        """Consume and return the token if it matches; otherwise raise a descriptive error."""
         if self.check(ttype):
             tok = self.current
             self.advance()
@@ -85,19 +126,34 @@ class Parser:
         self.error(Token.type_name(ttype))
 
     # =========================================================================
-    # Reglas gramaticales
+    # Grammar rules
     # =========================================================================
 
     def parse_sql_statement(self) -> Stm:
-        """<Statement> ::= ( <SelectStmt> | <InsertStmt> | <DeleteStmt> ) SEMICOL"""
+        """<Statement> ::= ( <SelectStmt> | <InsertStmt> | <DeleteStmt>
+                            | <CreateTableStmt> | <CreateIndexStmt> ) SEMICOL"""
         if self.check(TokenType.SELECT):
             stm: Stm = self.parse_select()
         elif self.check(TokenType.INSERT_INTO):
             stm = self.parse_insert()
         elif self.check(TokenType.DELETE):
             stm = self.parse_delete()
+        elif self.check(TokenType.UPDATE):
+            stm = self.parse_update()
+        elif self.check(TokenType.BEGIN_TRANSACTION):
+            self.advance()
+            stm = BeginTransactionStm()
+        elif self.check(TokenType.END_TRANSACTION):
+            self.advance()
+            stm = EndTransactionStm()
+        elif self.check(TokenType.CREATE_TABLE):
+            stm = self.parse_create_table()
+        elif self.check(TokenType.CREATE_INDEX):
+            stm = self.parse_create_index()
         else:
-            self.error("'SELECT', 'INSERT INTO' o 'DELETE'")
+            self.error(
+                "'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE' o 'CREATE INDEX'"
+            )
 
         self.expect(TokenType.SEMICOL)
         return stm
@@ -110,6 +166,15 @@ class Parser:
         table_tok = self.expect(TokenType.ID)
         table = table_tok.text
 
+        join = None
+        if self.match(TokenType.JOIN):
+            join_table = self.expect(TokenType.ID).text
+            self.expect(TokenType.ON)
+            join_left = self.parse_qualified_name()
+            self.expect(TokenType.EQ)
+            join_right = self.parse_qualified_name()
+            join = JoinClause(join_table, join_left, join_right)
+
         where_cond = None
         if self.check(TokenType.WHERE):
             where_cond = self.parse_where_clause()
@@ -119,17 +184,39 @@ class Parser:
         if self.check(TokenType.ORDER_BY) or self.check(TokenType.GROUP_BY):
             order_by, group_by = self.parse_group_or_order()
 
-        return SelectStm(columns, table, where_cond, order_by, group_by)
+        return SelectStm(columns, table, where_cond, order_by, group_by, join)
 
     def parse_select_list(self) -> List[str]:
         """<SelectList> ::= MUL | ID { COMA ID }"""
         if self.match(TokenType.MUL):
             return ["*"]
 
-        columns = [self.expect(TokenType.ID).text]
+        columns = [self.parse_select_item()]
         while self.match(TokenType.COMA):
-            columns.append(self.expect(TokenType.ID).text)
+            columns.append(self.parse_select_item())
         return columns
+
+    def parse_select_item(self):
+        name = self.expect(TokenType.ID).text
+        if not self.match(TokenType.LPAREN):
+            if self.match(TokenType.DOT):
+                name += "." + self.expect(TokenType.ID).text
+            return name
+        function = name.upper()
+        if function not in {"COUNT", "SUM", "AVG", "MIN", "MAX"}:
+            self.error("una función agregada válida")
+        if self.match(TokenType.MUL):
+            column = "*"
+        else:
+            column = self.parse_qualified_name()
+        self.expect(TokenType.RPAREN)
+        return AggregateSpec(function, column)
+
+    def parse_qualified_name(self) -> str:
+        name = self.expect(TokenType.ID).text
+        if self.match(TokenType.DOT):
+            name += "." + self.expect(TokenType.ID).text
+        return name
 
     def parse_where_clause(self) -> Exp:
         """<WhereClause> ::= WHERE <Condition>"""
@@ -147,11 +234,11 @@ class Parser:
         return BinaryExp(left, right, op)
 
     def parse_operator(self) -> BinaryOp:
-        """<Operator> ::= EQ | LE | LEQ | GT | GEQ"""
+        """<Operator> ::= EQ | NEQ | LE | LEQ | GT | GEQ"""
         for ttype, op in _OP_MAP.items():
             if self.match(ttype):
                 return op
-        self.error("un operador ('=', '<', '<=', '>' o '>=')")
+        self.error("un operador ('=', '!=', '<>', '<', '<=', '>' o '>=')")
 
     def parse_value(self) -> Exp:
         """<Value> ::= NUM | STRING | ID"""
@@ -214,3 +301,112 @@ class Parser:
             where_cond = self.parse_where_clause()
 
         return DeleteStm(table_tok.text, where_cond)
+
+    def parse_update(self) -> UpdateStm:
+        self.expect(TokenType.UPDATE)
+        table = self.expect(TokenType.ID).text
+        self.expect(TokenType.SET)
+        column = self.expect(TokenType.ID).text
+        self.expect(TokenType.EQ)
+        value = self.parse_value()
+        self.expect(TokenType.WHERE)
+        return UpdateStm(table, column, value, self.parse_condition())
+
+    # =========================================================================
+    # CREATE TABLE
+    # =========================================================================
+
+    def parse_create_table(self) -> CreateTableStm:
+        """<CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN [ USING <StorageType> ]"""
+        self.expect(TokenType.CREATE_TABLE)
+        table_tok = self.expect(TokenType.ID)
+        self.expect(TokenType.LPAREN)
+        columns = self.parse_column_def_list()
+        self.expect(TokenType.RPAREN)
+
+        storage_kind = StorageKind.HEAP  # default, per spec
+        if self.match(TokenType.USING):
+            storage_kind = self.parse_storage_type()
+
+        return CreateTableStm(table_tok.text, columns, storage_kind)
+
+    def parse_storage_type(self) -> StorageKind:
+        """<StorageType> ::= HEAP | SEQUENTIAL"""
+        for ttype, storage_kind in _STORAGE_TYPE_MAP.items():
+            if self.match(ttype):
+                return storage_kind
+        self.error("'HEAP' o 'SEQUENTIAL'")
+
+    def parse_column_def_list(self) -> List[ColumnDef]:
+        """<ColumnDefList> ::= <ColumnDef> { COMA <ColumnDef> }"""
+        columns = [self.parse_column_def()]
+        while self.match(TokenType.COMA):
+            columns.append(self.parse_column_def())
+        return columns
+
+    def parse_column_def(self) -> ColumnDef:
+        """<ColumnDef> ::= ID <TypeName> [ LPAREN NUM RPAREN ] { <ColumnConstraint> }"""
+        name_tok = self.expect(TokenType.ID)
+        data_type = self.parse_type_name()
+
+        size = None
+        if self.match(TokenType.LPAREN):
+            size_tok = self.expect(TokenType.NUM)
+            size = int(size_tok.text)
+            self.expect(TokenType.RPAREN)
+
+        is_primary_key = False
+        nullable = True
+        is_unique = False
+
+        while self.check(TokenType.PRIMARY_KEY) or self.check(TokenType.NOT_NULL) or self.check(TokenType.UNIQUE):
+            if self.match(TokenType.PRIMARY_KEY):
+                is_primary_key = True
+            elif self.match(TokenType.NOT_NULL):
+                nullable = False
+            elif self.match(TokenType.UNIQUE):
+                is_unique = True
+
+        return ColumnDef(
+            name=name_tok.text,
+            data_type=data_type,
+            size=size,
+            is_primary_key=is_primary_key,
+            nullable=nullable,
+            is_unique=is_unique,
+        )
+
+    def parse_type_name(self) -> DataType:
+        """<TypeName> ::= SMALLINT | INTEGER | BIGINT | NUMERIC | REAL | DOUBLE_PRECISION
+                         | CHAR | VARCHAR | TEXT | BOOLEAN | DATE | TIME | TIMESTAMP | BYTEA"""
+        for ttype, data_type in _TYPE_MAP.items():
+            if self.match(ttype):
+                return data_type
+        self.error("un nombre de tipo (SMALLINT, INTEGER, BIGINT, NUMERIC, REAL, "
+                    "DOUBLE PRECISION, CHAR, VARCHAR, TEXT, BOOLEAN, DATE, TIME, "
+                    "TIMESTAMP o BYTEA)")
+
+    # =========================================================================
+    # CREATE INDEX
+    # =========================================================================
+
+    def parse_create_index(self) -> CreateIndexStm:
+        """<CreateIndexStmt> ::= CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>"""
+        self.expect(TokenType.CREATE_INDEX)
+        index_name_tok = self.expect(TokenType.ID)
+        self.expect(TokenType.ON)
+        table_tok = self.expect(TokenType.ID)
+        self.expect(TokenType.LPAREN)
+        column_tok = self.expect(TokenType.ID)
+        self.expect(TokenType.RPAREN)
+        self.expect(TokenType.USING)
+        index_type = self.parse_index_type()
+
+        return CreateIndexStm(index_name_tok.text, table_tok.text, column_tok.text, index_type)
+
+    def parse_index_type(self) -> IndexType:
+        """<IndexType> ::= BTREE | HASH"""
+        for ttype, index_type in _INDEX_TYPE_MAP.items():
+            if self.match(ttype):
+                return index_type
+        self.error("'BTREE' o 'HASH'")

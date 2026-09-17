@@ -1,10 +1,10 @@
 from typing import Optional, Protocol, Tuple, Union
 
+from catalog.table_metadata import StorageType
 from common import DataType, Value, Column, Schema
 
-from ast_nodes import (
+from query.parser.ast_nodes import (
     Visitor,
-    Exp,
     NumExp,
     IdExp,
     StringExp,
@@ -16,57 +16,56 @@ from ast_nodes import (
     DeleteStm,
     OrderByClause,
     GroupByClause,
+    JoinClause,
+    AggregateSpec,
+    BeginTransactionStm,
+    EndTransactionStm,
+    UpdateStm,
+    CreateTableStm,
+    CreateIndexStm,
+    IndexType,
+    StorageKind,
 )
 
 
 class SemanticError(Exception):
     """Error de análisis semántico: tabla/columna inexistente, tipos
     incompatibles, aridad incorrecta en INSERT, valor que excede el
-    tamaño de una columna, etc. Análogo a los std::runtime_error que
-    lanza el TypeCheckerVisitor en C++."""
+    tamaño de una columna, etc."""
 
 
 _NUMERIC_TYPES = {
-    DataType.TINYINT, DataType.SMALLINT, DataType.MEDIUMINT, DataType.INT,
-    DataType.INTEGER, DataType.BIGINT, DataType.DECIMAL, DataType.NUMERIC,
-    DataType.FLOAT, DataType.DOUBLE, DataType.DOUBLE_PRECISION, DataType.BIT,
+    DataType.SMALLINT, DataType.INTEGER, DataType.BIGINT,
+    DataType.NUMERIC, DataType.REAL, DataType.DOUBLE_PRECISION,
 }
 
 _DATE_TYPES = {
-    DataType.DATE, DataType.DATETIME, DataType.TIMESTAMP, DataType.TIME, DataType.YEAR,
+    DataType.DATE, DataType.TIME, DataType.TIMESTAMP,
 }
 
 _STRING_TYPES = {
     DataType.CHAR, DataType.VARCHAR, DataType.TEXT,
-    DataType.TINYTEXT, DataType.MEDIUMTEXT, DataType.LONGTEXT,
 }
 
 ORDERABLE_TYPES = _NUMERIC_TYPES | _DATE_TYPES | _STRING_TYPES
 
 
-# =============================================================================
-# Catálogo — contrato mínimo que necesita el análisis semántico
-# =============================================================================
-
 class CatalogProtocol(Protocol):
-    """Contrato mínimo que SemanticVisitor necesita del catálogo. Es un
-    Protocol (duck typing): el catálogo real del Storage Manager NO
-    necesita heredar de esta clase, solo implementar estos dos métodos
-    y devolver/aceptar objetos Schema de common."""
-
     def table_exists(self, table_name: str) -> bool: ...
-
     def get_schema(self, table_name: str) -> Schema: ...
+    def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> None: ...
+    def create_index(self, table_name: str, column_name: str, index_type: str) -> None: ...
 
 
 class InMemoryCatalog:
-    """Catálogo de referencia en memoria, hecho de Schema/Column reales de
-    common. Útil para probar el parser y el visitor de forma aislada
-    mientras el catálogo real (respaldado por Heap File, sys_tables/
-    sys_columns) no está listo."""
+    """An in-memory reference catalog based on actual Schema/Columns from
+    common. Useful for testing the parser and visitor in isolation
+    while the actual catalog (backed by a heap file, sys_tables/
+    sys_columns) is not yet ready."""
 
     def __init__(self):
         self._schemas: dict[str, Schema] = {}
+        self._indexes: dict[str, list[dict]] = {}
 
     def define_table(self, schema: Schema) -> None:
         self._schemas[schema.table_name] = schema
@@ -79,51 +78,56 @@ class InMemoryCatalog:
             raise SemanticError(f"La tabla '{table_name}' no existe en el catálogo")
         return self._schemas[table_name]
 
+    def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> None:
+        if schema.table_name in self._schemas:
+            raise SemanticError(f"La tabla '{schema.table_name}' ya existe")
+        self._schemas[schema.table_name] = schema
+        # NOTE: InMemoryCatalog no tiene storage físico real detrás, así
+        # que storage_type se acepta solo para cumplir la firma del
+        # Protocol — no tiene ningún efecto aquí.
+
+    def create_index(self, table_name: str, column_name: str, index_type: str) -> None:
+        self.get_schema(table_name)  # raises if the table doesn't exist
+        self._indexes.setdefault(table_name, []).append({
+            "column_name": column_name,
+            "index_type": index_type,
+        })
+
+
+_STORAGE_KIND_TO_TYPE = {
+    StorageKind.HEAP: StorageType.HEAP,
+    StorageKind.SEQUENTIAL: StorageType.SEQUENTIAL,
+}
+
 _ExpResult = Tuple[str, Union[Column, int, str]]
 
 
 class SemanticVisitor(Visitor):
-    """Recorre el AST de una sentencia SQL ya parseada y valida que sea
-    semánticamente correcta contra el catálogo, antes de que el Query
-    Executor la ejecute. Análogo a TypeCheckerVisitor en el compilador
-    general.
-
-    Uso:
-        from common import DataType, Column, Schema
-
-        catalog = InMemoryCatalog()
-        catalog.define_table(Schema("alumnos", [
-            Column("id", DataType.INT, is_primary_key=True),
-            Column("nombre", DataType.VARCHAR, size=50),
-            Column("edad", DataType.INT),
-        ]))
-
-        stm = parser.parse_sql_statement()
-        SemanticVisitor(catalog).check(stm)   # lanza SemanticError si algo está mal
-    """
+    """Iterates through the AST of a parsed SQL statement and validates
+    that it is semantically correct against the catalog, before the
+    Query Executor executes it."""
 
     def __init__(self, catalog: CatalogProtocol):
         self.catalog = catalog
-        # Tabla contra la que se resuelven las columnas "sueltas"
-        # mencionadas en la sentencia que se está visitando actualmente.
         self._current_schema: Optional[Schema] = None
 
-    # -------------------------------------------------------------------
-    # Punto de entrada — análogo a TypeChecker(Program*) en C++
-    # -------------------------------------------------------------------
     def check(self, stm: Stm) -> None:
         stm.accept(self)
 
-    # -------------------------------------------------------------------
-    # Sentencias
-    # -------------------------------------------------------------------
     def visit_select_stm(self, stm: SelectStm):
         schema = self.catalog.get_schema(stm.table)
         self._current_schema = schema
         try:
+            if stm.join is not None:
+                if not self.catalog.table_exists(stm.join.table):
+                    raise SemanticError(f"La tabla '{stm.join.table}' no existe")
+                self._validate_join(stm, schema, self.catalog.get_schema(stm.join.table))
             if stm.columns != ["*"]:
                 for col in stm.columns:
-                    self._require_column(schema, col)
+                    if isinstance(col, AggregateSpec):
+                        self._validate_aggregate(stm, col)
+                    else:
+                        self._require_select_column(stm, col)
 
             if stm.where_cond is not None:
                 stm.where_cond.accept(self)
@@ -137,6 +141,51 @@ class SemanticVisitor(Visitor):
             self._current_schema = None
 
         return None
+
+    def _validate_join(self, stm, left_schema, right_schema):
+        left_table, left_column = stm.join.left.split(".", 1)
+        right_table, right_column = stm.join.right.split(".", 1)
+        if left_table not in {stm.table, stm.join.table} or right_table not in {stm.table, stm.join.table}:
+            raise SemanticError("Las columnas del JOIN deben estar cualificadas con sus tablas")
+        left = left_schema if left_table == stm.table else right_schema
+        right = left_schema if right_table == stm.table else right_schema
+        left_col = self._require_column(left, left_column)
+        right_col = self._require_column(right, right_column)
+        if left_col.data_type != right_col.data_type:
+            raise SemanticError("Las columnas del JOIN deben tener el mismo tipo")
+
+    def _validate_aggregate(self, stm, aggregate):
+        if aggregate.function == "COUNT" and aggregate.column == "*":
+            return
+        if aggregate.column == "*":
+            raise SemanticError(f"{aggregate.function}(*) no está soportado")
+        self._require_select_column(stm, aggregate.column)
+        column_name = aggregate.column.split(".")[-1]
+        schema = self._current_schema
+        column = schema.get_column(column_name)
+        if aggregate.function in {"SUM", "AVG"} and column.data_type not in _NUMERIC_TYPES:
+            raise SemanticError(f"{aggregate.function} requiere una columna numérica")
+
+    def _require_select_column(self, stm, name):
+        if "." not in name:
+            if stm.join is None:
+                self._require_column(self._current_schema, name)
+                return
+            matches = [
+                schema.get_column(name)
+                for schema in (self._current_schema, self.catalog.get_schema(stm.join.table))
+                if schema.get_column(name) is not None
+            ]
+            if len(matches) != 1:
+                raise SemanticError(f"La columna '{name}' es ambigua o no existe")
+            return
+        table, column = name.split(".", 1)
+        if table == stm.table:
+            self._require_column(self._current_schema, column)
+        elif stm.join is not None and table == stm.join.table:
+            self._require_column(self.catalog.get_schema(stm.join.table), column)
+        else:
+            raise SemanticError(f"La tabla '{table}' no participa en la consulta")
 
     def visit_insert_stm(self, stm: InsertStm):
         schema = self.catalog.get_schema(stm.table)
@@ -180,9 +229,72 @@ class SemanticVisitor(Visitor):
 
         return None
 
-    # -------------------------------------------------------------------
-    # Cláusulas auxiliares
-    # -------------------------------------------------------------------
+    def visit_update_stm(self, stm: UpdateStm):
+        schema = self.catalog.get_schema(stm.table)
+        self._current_schema = schema
+        try:
+            column = self._require_column(schema, stm.column)
+            kind, payload = stm.value.accept(self)
+            if kind == "column" or not column.validate(Value(column.data_type, payload)):
+                raise SemanticError(f"UPDATE: valor inválido para '{stm.column}'")
+            stm.where_cond.accept(self)
+        finally:
+            self._current_schema = None
+
+    def visit_begin_transaction_stm(self, stm: BeginTransactionStm):
+        return None
+
+    def visit_end_transaction_stm(self, stm: EndTransactionStm):
+        return None
+
+    def visit_create_table_stm(self, stm: CreateTableStm):
+        if self.catalog.table_exists(stm.table):
+            raise SemanticError(f"La tabla '{stm.table}' ya existe")
+
+        if not stm.columns:
+            raise SemanticError(f"CREATE TABLE {stm.table}: se requiere al menos una columna")
+
+        seen_names = set()
+        pk_count = 0
+        for col_def in stm.columns:
+            if col_def.name in seen_names:
+                raise SemanticError(
+                    f"CREATE TABLE {stm.table}: columna duplicada '{col_def.name}'"
+                )
+            seen_names.add(col_def.name)
+            if col_def.is_primary_key:
+                pk_count += 1
+
+        if pk_count > 1:
+            raise SemanticError(
+                f"CREATE TABLE {stm.table}: más de una columna marcada como PRIMARY KEY "
+                "(llave primaria compuesta no soportada)"
+            )
+
+        columns = [
+            Column(
+                name=col_def.name,
+                data_type=col_def.data_type,
+                size=col_def.size,
+                is_primary_key=col_def.is_primary_key,
+                nullable=col_def.nullable,
+                is_unique=col_def.is_unique,
+            )
+            for col_def in stm.columns
+        ]
+        schema = Schema(stm.table, columns)
+        storage_type = _STORAGE_KIND_TO_TYPE[stm.storage_kind]
+
+        self.catalog.create_table(schema, storage_type)
+        return None
+
+    def visit_create_index_stm(self, stm: CreateIndexStm):
+        schema = self.catalog.get_schema(stm.table)
+        self._require_column(schema, stm.column)
+
+        self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
+        return None
+
     def visit_order_by_clause(self, clause: OrderByClause):
         for col in clause.columns:
             self._require_column(self._current_schema, col)
@@ -193,9 +305,6 @@ class SemanticVisitor(Visitor):
             self._require_column(self._current_schema, col)
         return None
 
-    # -------------------------------------------------------------------
-    # Expresiones
-    # -------------------------------------------------------------------
     def visit_num_exp(self, exp: NumExp) -> _ExpResult:
         return ("literal", exp.value)
 
@@ -203,14 +312,10 @@ class SemanticVisitor(Visitor):
         return ("literal", exp.value)
 
     def visit_id_exp(self, exp: IdExp) -> _ExpResult:
-        """Un IdExp siempre representa una referencia a columna de la
-        tabla activa: el lado izquierdo de <Condition>, una columna en
-        ORDER BY/GROUP BY, o (en <Value>) una comparación columna-columna."""
         column = self._require_column(self._current_schema, exp.value)
         return ("column", column)
 
     def visit_binary_exp(self, exp: BinaryExp):
-        # Por gramática, el lado izquierdo de <Condition> siempre es ID.
         left_kind, left_column = exp.left.accept(self)
         assert left_kind == "column"
 
@@ -242,11 +347,15 @@ class SemanticVisitor(Visitor):
                     f"{compare_type.value} (no son ordenables)"
                 )
 
+        if exp.op == BinaryOp.NEQ_OP:
+            if compare_type not in ORDERABLE_TYPES and compare_type not in _STRING_TYPES:
+                raise SemanticError(
+                    f"El operador '{exp!r}' no aplica sobre columnas de tipo "
+                    f"{compare_type.value} (no es comparable)"
+                )
+
         return None
 
-    # -------------------------------------------------------------------
-    # Helpers internos
-    # -------------------------------------------------------------------
     def _require_column(self, schema: Optional[Schema], col_name: str) -> Column:
         if schema is None:
             raise SemanticError(f"No hay tabla activa para resolver la columna '{col_name}'")

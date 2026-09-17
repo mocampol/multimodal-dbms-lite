@@ -1,5 +1,5 @@
 import os
-from token_ import Token, TokenType
+from query.parser.token_ import Token, TokenType
 
 
 def _is_white_space(c: str) -> bool:
@@ -7,167 +7,125 @@ def _is_white_space(c: str) -> bool:
 
 
 class Scanner:
-
     def __init__(self, source: str):
         self.input = source
         self.first = 0
-        self.current = 0               
+        self.current = 0
 
     def next_token(self) -> Token:
-        # Saltar espacios en blanco
         while self.current < len(self.input) and _is_white_space(self.input[self.current]):
             self.current += 1
-
-        # Fin de la entrada
         if self.current >= len(self.input):
             return Token(TokenType.END)
 
         c = self.input[self.current]
         self.first = self.current
-
-        # ---- Números ----
         if c.isdigit():
             self.current += 1
             while self.current < len(self.input) and self.input[self.current].isdigit():
                 self.current += 1
-            lexema = self.input[self.first:self.current]
-            return Token(TokenType.NUM, lexema)
+            return Token(TokenType.NUM, self.input[self.first:self.current])
 
-        # ---- Identificadores y palabras reservadas SQL ----
         if c.isalpha() or c == "_":
             self.current += 1
-            while self.current < len(self.input) and (
-                self.input[self.current].isalnum() or self.input[self.current] == "_"
-            ):
+            while self.current < len(self.input) and (self.input[self.current].isalnum() or self.input[self.current] == "_"):
                 self.current += 1
-
-            lexema = self.input[self.first:self.current]
-            upper_lexema = lexema.upper()
-
-            # Tokens de una sola palabra
-            single_word = {
-                "SELECT": TokenType.SELECT,
-                "FROM": TokenType.FROM,
-                "WHERE": TokenType.WHERE,
-                "DELETE": TokenType.DELETE,
-                "VALUES": TokenType.VALUES,
+            lexeme = self.input[self.first:self.current]
+            upper = lexeme.upper()
+            words = {
+                "SELECT": TokenType.SELECT, "FROM": TokenType.FROM, "JOIN": TokenType.JOIN,
+                "WHERE": TokenType.WHERE, "DELETE": TokenType.DELETE, "UPDATE": TokenType.UPDATE,
+                "SET": TokenType.SET, "VALUES": TokenType.VALUES,
+                "ON": TokenType.ON, "USING": TokenType.USING, "UNIQUE": TokenType.UNIQUE,
+                "SMALLINT": TokenType.T_SMALLINT, "INTEGER": TokenType.T_INTEGER,
+                "BIGINT": TokenType.T_BIGINT, "NUMERIC": TokenType.T_NUMERIC,
+                "REAL": TokenType.T_REAL, "CHAR": TokenType.T_CHAR, "VARCHAR": TokenType.T_VARCHAR,
+                "TEXT": TokenType.T_TEXT, "BOOLEAN": TokenType.T_BOOLEAN, "DATE": TokenType.T_DATE,
+                "TIME": TokenType.T_TIME, "TIMESTAMP": TokenType.T_TIMESTAMP, "BYTEA": TokenType.T_BYTEA,
+                "BTREE": TokenType.BTREE, "HASH": TokenType.HASH, "HEAP": TokenType.HEAP,
+                "SEQUENTIAL": TokenType.SEQUENTIAL,
             }
-            if upper_lexema in single_word:
-                return Token(single_word[upper_lexema], lexema)
+            if upper in words:
+                return Token(words[upper], lexeme)
+            compounds = {
+                "BEGIN": ("TRANSACTION", TokenType.BEGIN_TRANSACTION),
+                "END": ("TRANSACTION", TokenType.END_TRANSACTION),
+                "ORDER": ("BY", TokenType.ORDER_BY), "GROUP": ("BY", TokenType.GROUP_BY),
+                "INSERT": ("INTO", TokenType.INSERT_INTO), "CREATE": ("TABLE", TokenType.CREATE_TABLE),
+                "PRIMARY": ("KEY", TokenType.PRIMARY_KEY), "NOT": ("NULL", TokenType.NOT_NULL),
+                "DOUBLE": ("PRECISION", TokenType.T_DOUBLE_PRECISION),
+            }
+            if upper in compounds:
+                expected, token_type = compounds[upper]
+                probe = self.current
+                while probe < len(self.input) and _is_white_space(self.input[probe]):
+                    probe += 1
+                end = probe
+                while end < len(self.input) and self.input[end].isalpha():
+                    end += 1
+                if self.input[probe:end].upper() == expected:
+                    self.current = end
+                    return Token(token_type, self.input[self.first:self.current])
+            if upper == "CREATE":
+                probe = self.current
+                while probe < len(self.input) and _is_white_space(self.input[probe]):
+                    probe += 1
+                end = probe
+                while end < len(self.input) and self.input[end].isalpha():
+                    end += 1
+                if self.input[probe:end].upper() == "INDEX":
+                    self.current = end
+                    return Token(TokenType.CREATE_INDEX, self.input[self.first:self.current])
+            return Token(TokenType.ID, lexeme)
 
-            # Tokens compuestos por dos palabras
-            if upper_lexema in ("ORDER", "GROUP", "INSERT"):
-                temp_current = self.current
-
-                while temp_current < len(self.input) and _is_white_space(self.input[temp_current]):
-                    temp_current += 1
-
-                if temp_current < len(self.input) and self.input[temp_current].isalpha():
-                    second_first = temp_current
-                    while temp_current < len(self.input) and self.input[temp_current].isalpha():
-                        temp_current += 1
-
-                    second_lexema = self.input[second_first:temp_current]
-                    upper_second = second_lexema.upper()
-
-                    if upper_lexema == "ORDER" and upper_second == "BY":
-                        self.current = temp_current
-                        return Token(TokenType.ORDER_BY, self.input[self.first:self.current])
-                    if upper_lexema == "GROUP" and upper_second == "BY":
-                        self.current = temp_current
-                        return Token(TokenType.GROUP_BY, self.input[self.first:self.current])
-                    if upper_lexema == "INSERT" and upper_second == "INTO":
-                        self.current = temp_current
-                        return Token(TokenType.INSERT_INTO, self.input[self.first:self.current])
-
-            return Token(TokenType.ID, lexema)
-
-        # ---- Literales de texto: 'texto' (con '' como comilla escapada) ----
         if c == "'":
-            self.current += 1  # consume la comilla de apertura
+            self.current += 1
             chars = []
-            while True:
-                if self.current >= len(self.input):
-                    # Cadena sin cerrar: se trata como error léxico
-                    err = Token(TokenType.ERR, self.input[self.first:self.current])
-                    return err
-
-                ch = self.input[self.current]
-
-                if ch == "'":
-                    # ¿Es '' (comilla escapada dentro del string) o el cierre?
+            while self.current < len(self.input):
+                char = self.input[self.current]
+                if char == "'":
                     if self.current + 1 < len(self.input) and self.input[self.current + 1] == "'":
                         chars.append("'")
                         self.current += 2
                         continue
-                    self.current += 1  # consume la comilla de cierre
-                    break
-
-                chars.append(ch)
-                self.current += 1
-
-            return Token(TokenType.STRING, "".join(chars))
-
-        # ---- Operadores y delimitadores SQL ----
-        if c in "*()=<>!;,":
-            if c == "*":
-                self.current += 1
-                return Token(TokenType.MUL, c)
-            if c == "(":
-                self.current += 1
-                return Token(TokenType.LPAREN, c)
-            if c == ")":
-                self.current += 1
-                return Token(TokenType.RPAREN, c)
-            if c == ",":
-                self.current += 1
-                return Token(TokenType.COMA, c)
-            if c == ";":
-                self.current += 1
-                return Token(TokenType.SEMICOL, c)
-            if c == "=":
-                self.current += 1
-                return Token(TokenType.EQ, c)
-            if c == "<":
-                if self.current + 1 < len(self.input) and self.input[self.current + 1] == "=":
-                    lexema = self.input[self.current:self.current + 2]
-                    self.current += 2
-                    return Token(TokenType.LEQ, lexema)
-                else:
                     self.current += 1
-                    return Token(TokenType.LE, c)
-            if c == ">":
-                if self.current + 1 < len(self.input) and self.input[self.current + 1] == "=":
-                    lexema = self.input[self.current:self.current + 2]
-                    self.current += 2
-                    return Token(TokenType.GEQ, lexema)
-                else:
-                    self.current += 1
-                    return Token(TokenType.GT, c)
+                    return Token(TokenType.STRING, "".join(chars))
+                chars.append(char)
+                self.current += 1
+            return Token(TokenType.ERR, self.input[self.first:self.current])
 
-        # ---- Carácter no reconocido (Error léxico) ----
-        err = Token(TokenType.ERR, c)
         self.current += 1
-        return err
+        simple = {"*": TokenType.MUL, "(": TokenType.LPAREN, ")": TokenType.RPAREN, ",": TokenType.COMA, ".": TokenType.DOT, ";": TokenType.SEMICOL, "=": TokenType.EQ}
+        if c in simple:
+            return Token(simple[c], c)
+        if c == "!" and self.current < len(self.input) and self.input[self.current] == "=":
+            self.current += 1
+            return Token(TokenType.NEQ, "!=")
+        if c == "<":
+            if self.current < len(self.input) and self.input[self.current] in "=>":
+                suffix = self.input[self.current]
+                self.current += 1
+                return Token(TokenType.LEQ if suffix == "=" else TokenType.NEQ, "<" + suffix)
+            return Token(TokenType.LE, c)
+        if c == ">":
+            if self.current < len(self.input) and self.input[self.current] == "=":
+                self.current += 1
+                return Token(TokenType.GEQ, ">=")
+            return Token(TokenType.GT, c)
+        return Token(TokenType.ERR, c)
 
 
 def ejecutar_scanner(scanner: Scanner, input_file: str) -> int:
     output_name, _ext = os.path.splitext(input_file)
     output_name += "_tokens.txt"
-
     with open(output_name, "w", encoding="utf-8") as out_file:
         out_file.write("Scanner\n\n")
-
         while True:
-            tok = scanner.next_token()
-
-            if tok.type == TokenType.ERR:
-                out_file.write(f"{tok}\n")
-                out_file.write(f"Error léxico: carácter inválido '{tok.text}'\n")
+            token = scanner.next_token()
+            out_file.write(f"{token}\n")
+            if token.type == TokenType.ERR:
+                out_file.write(f"Error léxico: carácter inválido '{token.text}'\n")
                 return 1
-
-            out_file.write(f"{tok}\n")
-
-            if tok.type == TokenType.END:
+            if token.type == TokenType.END:
                 out_file.write("\nScanner exitoso\n")
                 return 0

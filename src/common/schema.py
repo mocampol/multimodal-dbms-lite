@@ -45,7 +45,7 @@ class Column:
 
     def _validate_definition(self):
         """
-        Validates the SQL definition of the column (structural checks only,
+        Validates the definition of the column (structural checks only,
         not the data that will later be stored in it).
         """
         if self.size is not None and self.size <= 0:
@@ -58,7 +58,7 @@ class Column:
     def validate(self, value: Value) -> bool:
         """
         Checks whether a Value is valid for this column: type, NULL, and size.
-        Does NOT check UNIQUE — that requires looking at other rows (catalog/storage).
+        Does NOT check UNIQUE, that requires looking at other rows (catalog/storage).
         """
         if not isinstance(value, Value):
             return False

@@ -10,4 +10,6 @@
 <InsertStmt>   ::= INSERT_INTO ID VALUES LPAREN <ValueList> RPAREN
 <ValueList>    ::= <Value> { COMA <Value> }
 <DeleteStmt>   ::= DELETE FROM ID [ <WhereClause> ]
+<CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN [ USING <StorageType> ]
+<StorageType>     ::= HEAP | SEQUENTIAL
 ```
