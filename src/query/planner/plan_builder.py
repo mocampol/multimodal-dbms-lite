@@ -6,7 +6,7 @@ catalog reports one over the WHERE column, otherwise fall back to a
 Sequential Scan.
 """
 
-from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, IdExp, BinaryExp, AggregateSpec
+from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, UpdateStm, IdExp, BinaryExp, AggregateSpec
 from common.value import Value
 from common.record import Record
 from common.schema import Schema, Column
@@ -99,7 +99,7 @@ def build_select_plan(stm: SelectStm, catalog):
     return node
 
 
-def execute_insert(stm: InsertStm, catalog) -> None:
+def execute_insert(stm: InsertStm, catalog, before_insert=None) -> None:
     """
     INSERT has no plan tree: it's a single direct write, not a pull-based
     stream of tuples. Builds a Record from the AST's literal values (in
@@ -117,12 +117,15 @@ def execute_insert(stm: InsertStm, catalog) -> None:
         raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
 
     record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, stm.values)])
+    if before_insert is not None:
+        before_insert(record)
     rid = storage.insert(record)
     catalog.register_insert(stm.table, record, rid)
     catalog.register_insert_uniques(stm.table, record)
+    return rid
 
 
-def execute_delete(stm: DeleteStm, catalog) -> int:
+def execute_delete(stm: DeleteStm, catalog, before_delete=None) -> int:
     """
     DELETE also has no meaningful plan tree to stream to a consumer —
     it's a scan-and-mutate operation. Reuses SeqScan (+ Filter, if there's
@@ -143,6 +146,8 @@ def execute_delete(stm: DeleteStm, catalog) -> int:
         for rid in matches:
             record = storage.get(rid)
             if record is not None:
+                if before_delete is not None:
+                    before_delete(rid, record)
                 catalog.unregister_delete(stm.table, record, rid)
             storage.delete(rid)
         return len(matches)
@@ -156,6 +161,26 @@ def execute_delete(stm: DeleteStm, catalog) -> int:
         return deleted
 
     raise ValueError("DELETE sin filtro sobre SequentialFile no está soportado")
+
+
+def execute_update(stm: UpdateStm, catalog, before_update=None) -> int:
+    schema = catalog.get_schema(stm.table)
+    storage = catalog.get_storage(stm.table)
+    if not hasattr(storage, "scan_with_rid"):
+        raise ValueError("UPDATE requiere HeapFile con RIDs")
+    column_index = schema.column_index(stm.column)
+    new_value = Value(schema.columns[column_index].data_type, stm.value.value)
+    matches = []
+    for rid, record in storage.scan_with_rid():
+        if _condition_matches(stm.where_cond, record, schema):
+            values = list(record.values)
+            values[column_index] = new_value
+            matches.append((rid, record, Record(values)))
+    for rid, old_record, new_record in matches:
+        if before_update is not None:
+            before_update(rid, old_record, new_record)
+        storage.update(rid, new_record)
+    return len(matches)
 
 
 def _equality_index(catalog, table_name, condition):

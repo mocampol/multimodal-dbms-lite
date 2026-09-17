@@ -70,6 +70,18 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
+    def visit_update_stm(self, stm: "UpdateStm"):
+        ...
+
+    @abstractmethod
+    def visit_begin_transaction_stm(self, stm: "BeginTransactionStm"):
+        ...
+
+    @abstractmethod
+    def visit_end_transaction_stm(self, stm: "EndTransactionStm"):
+        ...
+
+    @abstractmethod
     def visit_create_table_stm(self, stm: "CreateTableStm"):
         ...
 
@@ -243,6 +255,16 @@ class Stm(ABC):
         ...
 
 
+class BeginTransactionStm(Stm):
+    def accept(self, visitor: Visitor):
+        return visitor.visit_begin_transaction_stm(self)
+
+
+class EndTransactionStm(Stm):
+    def accept(self, visitor: Visitor):
+        return visitor.visit_end_transaction_stm(self)
+
+
 class SelectStm(Stm):
     """<SelectStmt> ::= SELECT <SelectList> FROM ID [ <WhereClause> ] [ <GroupOrOrder> ]"""
 
@@ -308,6 +330,17 @@ class DeleteStm(Stm):
         if self.where_cond is not None:
             base += f" WHERE {self.where_cond!r}"
         return base
+
+
+class UpdateStm(Stm):
+    def __init__(self, table: str, column: str, value: Exp, where_cond: Optional[Exp] = None):
+        self.table = table
+        self.column = column
+        self.value = value
+        self.where_cond = where_cond
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_update_stm(self)
 
 
 class CreateTableStm(Stm):

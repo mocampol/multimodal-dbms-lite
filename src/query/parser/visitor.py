@@ -18,6 +18,9 @@ from query.parser.ast_nodes import (
     GroupByClause,
     JoinClause,
     AggregateSpec,
+    BeginTransactionStm,
+    EndTransactionStm,
+    UpdateStm,
     CreateTableStm,
     CreateIndexStm,
     IndexType,
@@ -224,6 +227,24 @@ class SemanticVisitor(Visitor):
         finally:
             self._current_schema = None
 
+        return None
+
+    def visit_update_stm(self, stm: UpdateStm):
+        schema = self.catalog.get_schema(stm.table)
+        self._current_schema = schema
+        try:
+            column = self._require_column(schema, stm.column)
+            kind, payload = stm.value.accept(self)
+            if kind == "column" or not column.validate(Value(column.data_type, payload)):
+                raise SemanticError(f"UPDATE: valor inválido para '{stm.column}'")
+            stm.where_cond.accept(self)
+        finally:
+            self._current_schema = None
+
+    def visit_begin_transaction_stm(self, stm: BeginTransactionStm):
+        return None
+
+    def visit_end_transaction_stm(self, stm: EndTransactionStm):
         return None
 
     def visit_create_table_stm(self, stm: CreateTableStm):

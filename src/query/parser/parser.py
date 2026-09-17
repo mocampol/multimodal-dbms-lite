@@ -17,6 +17,9 @@ from query.parser.ast_nodes import (
     OrderByClause,
     GroupByClause,
     JoinClause,
+    BeginTransactionStm,
+    EndTransactionStm,
+    UpdateStm,
     AggregateSpec,
     ColumnDef,
     CreateTableStm,
@@ -135,6 +138,14 @@ class Parser:
             stm = self.parse_insert()
         elif self.check(TokenType.DELETE):
             stm = self.parse_delete()
+        elif self.check(TokenType.UPDATE):
+            stm = self.parse_update()
+        elif self.check(TokenType.BEGIN_TRANSACTION):
+            self.advance()
+            stm = BeginTransactionStm()
+        elif self.check(TokenType.END_TRANSACTION):
+            self.advance()
+            stm = EndTransactionStm()
         elif self.check(TokenType.CREATE_TABLE):
             stm = self.parse_create_table()
         elif self.check(TokenType.CREATE_INDEX):
@@ -290,6 +301,16 @@ class Parser:
             where_cond = self.parse_where_clause()
 
         return DeleteStm(table_tok.text, where_cond)
+
+    def parse_update(self) -> UpdateStm:
+        self.expect(TokenType.UPDATE)
+        table = self.expect(TokenType.ID).text
+        self.expect(TokenType.SET)
+        column = self.expect(TokenType.ID).text
+        self.expect(TokenType.EQ)
+        value = self.parse_value()
+        self.expect(TokenType.WHERE)
+        return UpdateStm(table, column, value, self.parse_condition())
 
     # =========================================================================
     # CREATE TABLE

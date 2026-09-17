@@ -5,10 +5,14 @@ class TokenType(Enum):
     SELECT = auto()
     FROM = auto()
     JOIN = auto()
+    BEGIN_TRANSACTION = auto()
+    END_TRANSACTION = auto()
     WHERE = auto()
     ORDER_BY = auto()
     GROUP_BY = auto()
     DELETE = auto()
+    UPDATE = auto()
+    SET = auto()
     INSERT_INTO = auto()
     VALUES = auto()
     END = auto()
@@ -62,10 +66,15 @@ class TokenType(Enum):
 _TYPE_NAMES = {
     TokenType.SELECT: "'SELECT'",
     TokenType.FROM: "'FROM'",
+    TokenType.JOIN: "'JOIN'",
+    TokenType.BEGIN_TRANSACTION: "'BEGIN TRANSACTION'",
+    TokenType.END_TRANSACTION: "'END TRANSACTION'",
     TokenType.WHERE: "'WHERE'",
     TokenType.ORDER_BY: "'ORDER BY'",
     TokenType.GROUP_BY: "'GROUP BY'",
     TokenType.DELETE: "'DELETE'",
+    TokenType.UPDATE: "'UPDATE'",
+    TokenType.SET: "'SET'",
     TokenType.INSERT_INTO: "'INSERT INTO'",
     TokenType.VALUES: "'VALUES'",
     TokenType.END: "'END'",

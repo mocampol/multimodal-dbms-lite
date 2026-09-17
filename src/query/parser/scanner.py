@@ -34,7 +34,8 @@ class Scanner:
             upper = lexeme.upper()
             words = {
                 "SELECT": TokenType.SELECT, "FROM": TokenType.FROM, "JOIN": TokenType.JOIN,
-                "WHERE": TokenType.WHERE, "DELETE": TokenType.DELETE, "VALUES": TokenType.VALUES,
+                "WHERE": TokenType.WHERE, "DELETE": TokenType.DELETE, "UPDATE": TokenType.UPDATE,
+                "SET": TokenType.SET, "VALUES": TokenType.VALUES,
                 "ON": TokenType.ON, "USING": TokenType.USING, "UNIQUE": TokenType.UNIQUE,
                 "SMALLINT": TokenType.T_SMALLINT, "INTEGER": TokenType.T_INTEGER,
                 "BIGINT": TokenType.T_BIGINT, "NUMERIC": TokenType.T_NUMERIC,
@@ -47,6 +48,8 @@ class Scanner:
             if upper in words:
                 return Token(words[upper], lexeme)
             compounds = {
+                "BEGIN": ("TRANSACTION", TokenType.BEGIN_TRANSACTION),
+                "END": ("TRANSACTION", TokenType.END_TRANSACTION),
                 "ORDER": ("BY", TokenType.ORDER_BY), "GROUP": ("BY", TokenType.GROUP_BY),
                 "INSERT": ("INTO", TokenType.INSERT_INTO), "CREATE": ("TABLE", TokenType.CREATE_TABLE),
                 "PRIMARY": ("KEY", TokenType.PRIMARY_KEY), "NOT": ("NULL", TokenType.NOT_NULL),
