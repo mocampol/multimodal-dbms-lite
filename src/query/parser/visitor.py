@@ -16,6 +16,9 @@ from ast_nodes import (
     DeleteStm,
     OrderByClause,
     GroupByClause,
+    CreateTableStm,
+    CreateIndexStm,
+    IndexType,
 )
 
 
@@ -45,22 +48,39 @@ ORDERABLE_TYPES = _NUMERIC_TYPES | _DATE_TYPES | _STRING_TYPES
 class CatalogProtocol(Protocol):
     """Minimum contract that SemanticVisitor requires from the catalog. It is a
     Protocol (duck typing): the actual Storage Manager catalog does NOT
-    need to inherit from this class; it only needs to implement these two methods
-    and return/accept Schema objects from the common module. """
+    need to inherit from this class; it only needs to implement these
+    four methods.
+
+    table_exists / get_schema: used to validate SELECT/INSERT/DELETE
+    against a table that must already exist.
+
+    create_table / create_index: used to validate AND EXECUTE
+    CREATE TABLE / CREATE INDEX. Unlike the read-only methods above,
+    these are mutating calls — visit_create_table_stm/visit_create_index_stm
+    invoke them directly as part of semantic checking, since for these
+    two statements "is it valid?" and "make it so" are the same step
+    (there's no separate physical plan to build afterwards, unlike
+    SELECT/INSERT/DELETE, which the executor runs later).
+    """
 
     def table_exists(self, table_name: str) -> bool: ...
 
     def get_schema(self, table_name: str) -> Schema: ...
+
+    def create_table(self, schema: Schema) -> None: ...
+
+    def create_index(self, table_name: str, column_name: str, index_type: str) -> None: ...
 
 
 class InMemoryCatalog:
     """An in-memory reference catalog based on actual Schema/Columns from
     common. Useful for testing the parser and visitor in isolation
     while the actual catalog (backed by a heap file, sys_tables/
-    sys_columns) is not yet ready. """
+    sys_columns) is not yet ready."""
 
     def __init__(self):
         self._schemas: dict[str, Schema] = {}
+        self._indexes: dict[str, list[dict]] = {}
 
     def define_table(self, schema: Schema) -> None:
         self._schemas[schema.table_name] = schema
@@ -72,6 +92,19 @@ class InMemoryCatalog:
         if table_name not in self._schemas:
             raise SemanticError(f"La tabla '{table_name}' no existe en el catálogo")
         return self._schemas[table_name]
+
+    def create_table(self, schema: Schema) -> None:
+        if schema.table_name in self._schemas:
+            raise SemanticError(f"La tabla '{schema.table_name}' ya existe")
+        self._schemas[schema.table_name] = schema
+
+    def create_index(self, table_name: str, column_name: str, index_type: str) -> None:
+        self.get_schema(table_name)  # raises if the table doesn't exist
+        self._indexes.setdefault(table_name, []).append({
+            "column_name": column_name,
+            "index_type": index_type,
+        })
+
 
 _ExpResult = Tuple[str, Union[Column, int, str]]
 
@@ -86,14 +119,14 @@ class SemanticVisitor(Visitor):
         from common import DataType, Column, Schema
 
         catalog = InMemoryCatalog()
-        catalog.define_table(Schema(“students”, [
-            Column(“id”, DataType.INT, is_primary_key=True),
-            Column(“name”, DataType.VARCHAR, size=50),
-            Column(“age”, DataType.INT),
+        catalog.define_table(Schema("students", [
+            Column("id", DataType.INTEGER, is_primary_key=True),
+            Column("name", DataType.VARCHAR, size=50),
+            Column("age", DataType.INTEGER),
         ]))
 
         stm = parser.parse_sql_statement()
-        SemanticVisitor(catalog).check(stm)+
+        SemanticVisitor(catalog).check(stm)
     """
 
     def __init__(self, catalog: CatalogProtocol):
@@ -166,6 +199,63 @@ class SemanticVisitor(Visitor):
 
         return None
 
+    def visit_create_table_stm(self, stm: CreateTableStm):
+        """
+        Validates and EXECUTES a CREATE TABLE statement. Unlike SELECT/
+        INSERT/DELETE, there's no separate plan for the executor to run
+        afterwards — the table is created right here, as part of semantic
+        checking, by calling catalog.create_table().
+        """
+        if self.catalog.table_exists(stm.table):
+            raise SemanticError(f"La tabla '{stm.table}' ya existe")
+
+        if not stm.columns:
+            raise SemanticError(f"CREATE TABLE {stm.table}: se requiere al menos una columna")
+
+        seen_names = set()
+        pk_count = 0
+        for col_def in stm.columns:
+            if col_def.name in seen_names:
+                raise SemanticError(
+                    f"CREATE TABLE {stm.table}: columna duplicada '{col_def.name}'"
+                )
+            seen_names.add(col_def.name)
+            if col_def.is_primary_key:
+                pk_count += 1
+
+        if pk_count > 1:
+            raise SemanticError(
+                f"CREATE TABLE {stm.table}: más de una columna marcada como PRIMARY KEY "
+                "(llave primaria compuesta no soportada)"
+            )
+
+        columns = [
+            Column(
+                name=col_def.name,
+                data_type=col_def.data_type,
+                size=col_def.size,
+                is_primary_key=col_def.is_primary_key,
+                nullable=col_def.nullable,
+                is_unique=col_def.is_unique,
+            )
+            for col_def in stm.columns
+        ]
+        schema = Schema(stm.table, columns)
+
+        self.catalog.create_table(schema)
+        return None
+
+    def visit_create_index_stm(self, stm: CreateIndexStm):
+        """
+        Validates and EXECUTES a CREATE INDEX statement, same rationale
+        as visit_create_table_stm: no separate plan needed afterwards.
+        """
+        schema = self.catalog.get_schema(stm.table)  # raises SemanticError if missing
+        self._require_column(schema, stm.column)
+
+        self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
+        return None
+
     def visit_order_by_clause(self, clause: OrderByClause):
         for col in clause.columns:
             self._require_column(self._current_schema, col)
@@ -183,9 +273,9 @@ class SemanticVisitor(Visitor):
         return ("literal", exp.value)
 
     def visit_id_exp(self, exp: IdExp) -> _ExpResult:
-        """Un IdExp siempre representa una referencia a columna de la
-        tabla activa: el lado izquierdo de <Condition>, una columna en
-        ORDER BY/GROUP BY, o (en <Value>) una comparación columna-columna."""
+        """An IdExp always represents a column reference from the
+        current table: the left-hand side of <Condition>, a column in
+        ORDER BY/GROUP BY, or (in <Value>) a column-to-column comparison."""
         column = self._require_column(self._current_schema, exp.value)
         return ("column", column)
 
