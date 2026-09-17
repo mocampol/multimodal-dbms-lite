@@ -1,4 +1,4 @@
-from storage.buffer_manager.buffer_manager import BufferManager
+from storage.buffer_manager import BufferManager
 from common.value import DataType, Value
 
 from .node import BTreeNode
