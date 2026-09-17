@@ -14,18 +14,18 @@ class Scanner:
         self.current = 0               
 
     def next_token(self) -> Token:
-        # Saltar espacios en blanco
+        # Skip whitespace
         while self.current < len(self.input) and _is_white_space(self.input[self.current]):
             self.current += 1
 
-        # Fin de la entrada
+        # End of input
         if self.current >= len(self.input):
             return Token(TokenType.END)
 
         c = self.input[self.current]
         self.first = self.current
 
-        # ---- Números ----
+        # Numbers
         if c.isdigit():
             self.current += 1
             while self.current < len(self.input) and self.input[self.current].isdigit():
@@ -33,7 +33,7 @@ class Scanner:
             lexema = self.input[self.first:self.current]
             return Token(TokenType.NUM, lexema)
 
-        # ---- Identificadores y palabras reservadas SQL ----
+        # Identifiers and SQL reserved words
         if c.isalpha() or c == "_":
             self.current += 1
             while self.current < len(self.input) and (
@@ -44,19 +44,39 @@ class Scanner:
             lexema = self.input[self.first:self.current]
             upper_lexema = lexema.upper()
 
-            # Tokens de una sola palabra
             single_word = {
                 "SELECT": TokenType.SELECT,
                 "FROM": TokenType.FROM,
                 "WHERE": TokenType.WHERE,
                 "DELETE": TokenType.DELETE,
                 "VALUES": TokenType.VALUES,
+
+                "ON": TokenType.ON,
+                "USING": TokenType.USING,
+
+                "UNIQUE": TokenType.UNIQUE,
+
+                "SMALLINT": TokenType.T_SMALLINT,
+                "INTEGER": TokenType.T_INTEGER,
+                "BIGINT": TokenType.T_BIGINT,
+                "NUMERIC": TokenType.T_NUMERIC,
+                "REAL": TokenType.T_REAL,
+                "CHAR": TokenType.T_CHAR,
+                "VARCHAR": TokenType.T_VARCHAR,
+                "TEXT": TokenType.T_TEXT,
+                "BOOLEAN": TokenType.T_BOOLEAN,
+                "DATE": TokenType.T_DATE,
+                "TIME": TokenType.T_TIME,
+                "TIMESTAMP": TokenType.T_TIMESTAMP,
+                "BYTEA": TokenType.T_BYTEA,
+
+                "BTREE": TokenType.BTREE,
+                "HASH": TokenType.HASH,
             }
             if upper_lexema in single_word:
                 return Token(single_word[upper_lexema], lexema)
 
-            # Tokens compuestos por dos palabras
-            if upper_lexema in ("ORDER", "GROUP", "INSERT"):
+            if upper_lexema in ("ORDER", "GROUP", "INSERT", "CREATE", "PRIMARY", "NOT", "DOUBLE"):
                 temp_current = self.current
 
                 while temp_current < len(self.input) and _is_white_space(self.input[temp_current]):
@@ -79,28 +99,40 @@ class Scanner:
                     if upper_lexema == "INSERT" and upper_second == "INTO":
                         self.current = temp_current
                         return Token(TokenType.INSERT_INTO, self.input[self.first:self.current])
+                    if upper_lexema == "CREATE" and upper_second == "TABLE":
+                        self.current = temp_current
+                        return Token(TokenType.CREATE_TABLE, self.input[self.first:self.current])
+                    if upper_lexema == "CREATE" and upper_second == "INDEX":
+                        self.current = temp_current
+                        return Token(TokenType.CREATE_INDEX, self.input[self.first:self.current])
+                    if upper_lexema == "PRIMARY" and upper_second == "KEY":
+                        self.current = temp_current
+                        return Token(TokenType.PRIMARY_KEY, self.input[self.first:self.current])
+                    if upper_lexema == "NOT" and upper_second == "NULL":
+                        self.current = temp_current
+                        return Token(TokenType.NOT_NULL, self.input[self.first:self.current])
+                    if upper_lexema == "DOUBLE" and upper_second == "PRECISION":
+                        self.current = temp_current
+                        return Token(TokenType.T_DOUBLE_PRECISION, self.input[self.first:self.current])
 
             return Token(TokenType.ID, lexema)
 
-        # ---- Literales de texto: 'texto' (con '' como comilla escapada) ----
         if c == "'":
-            self.current += 1  # consume la comilla de apertura
+            self.current += 1
             chars = []
             while True:
                 if self.current >= len(self.input):
-                    # Cadena sin cerrar: se trata como error léxico
                     err = Token(TokenType.ERR, self.input[self.first:self.current])
                     return err
 
                 ch = self.input[self.current]
 
                 if ch == "'":
-                    # ¿Es '' (comilla escapada dentro del string) o el cierre?
                     if self.current + 1 < len(self.input) and self.input[self.current + 1] == "'":
                         chars.append("'")
                         self.current += 2
                         continue
-                    self.current += 1  # consume la comilla de cierre
+                    self.current += 1
                     break
 
                 chars.append(ch)
@@ -108,7 +140,7 @@ class Scanner:
 
             return Token(TokenType.STRING, "".join(chars))
 
-        # ---- Operadores y delimitadores SQL ----
+        # SQL operators and delimiters
         if c in "*()=<>!;,":
             if c == "*":
                 self.current += 1
@@ -145,7 +177,7 @@ class Scanner:
                     self.current += 1
                     return Token(TokenType.GT, c)
 
-        # ---- Carácter no reconocido (Error léxico) ----
+        # Lexical error
         err = Token(TokenType.ERR, c)
         self.current += 1
         return err
