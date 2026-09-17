@@ -20,7 +20,8 @@ class IndexScan(PlanNode):
 		self._cursor = 0
 
 	def open(self) -> None:
-		rids = self.index.search(self.key)
+		search_all = getattr(self.index, "search_all", None)
+		rids = search_all(self.key) if search_all is not None else self.index.search(self.key)
 		if rids is None:
 			rids = []
 		if not isinstance(rids, list):

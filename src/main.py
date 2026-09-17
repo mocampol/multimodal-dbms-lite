@@ -30,6 +30,14 @@ def make_sequential_factory(base_dir: str, pool_size: int = 64):
         )
     return factory
 
+def make_index_buffer_factory(base_dir: str, pool_size: int = 64):
+    def factory(table_name, column_name, index_id):
+        file_manager = FileManager(
+            f"{base_dir}/{table_name}.{column_name}.{index_id}.idx"
+        )
+        return BufferManager(file_manager, pool_size=pool_size)
+    return factory
+
 heap_factory = make_heap_factory("data")
 catalog = Catalog(
     heap_factory=heap_factory,
@@ -37,4 +45,5 @@ catalog = Catalog(
         StorageType.HEAP: heap_factory,
         StorageType.SEQUENTIAL: make_sequential_factory("data"),
     },
+    index_buffer_factory=make_index_buffer_factory("data"),
 )

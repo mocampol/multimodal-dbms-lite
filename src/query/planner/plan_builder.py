@@ -11,6 +11,7 @@ from common.value import Value
 from common.record import Record
 
 from query.executor.access.seq_scan import SeqScan
+from query.executor.access.index_scan import IndexScan
 from query.executor.processing.filter import Filter
 from query.executor.processing.projection import Projection
 from query.executor.processing.sort import Sort
@@ -33,8 +34,12 @@ def build_select_plan(stm: SelectStm, catalog):
     # condition). This is exactly the "regla heurística de selección
     # "access selection heuristic" the assignment asks for.
     node = SeqScan(stm.table, catalog)
+    indexed = _equality_index(catalog, stm.table, stm.where_cond)
+    if indexed is not None:
+        index, key = indexed
+        node = IndexScan(index, catalog.get_storage(stm.table), key)
 
-    if stm.where_cond is not None:
+    if stm.where_cond is not None and indexed is None:
         node = Filter(node, stm.where_cond, schema)
 
     if stm.group_by is not None:
@@ -66,7 +71,8 @@ def execute_insert(stm: InsertStm, catalog) -> None:
         raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
 
     record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, stm.values)])
-    storage.insert(record)
+    rid = storage.insert(record)
+    catalog.register_insert(stm.table, record, rid)
     catalog.register_insert_uniques(stm.table, record)
 
 
@@ -89,6 +95,9 @@ def execute_delete(stm: DeleteStm, catalog) -> int:
             if stm.where_cond is None or _condition_matches(stm.where_cond, record, schema):
                 matches.append(rid)
         for rid in matches:
+            record = storage.get(rid)
+            if record is not None:
+                catalog.unregister_delete(stm.table, record, rid)
             storage.delete(rid)
         return len(matches)
 
@@ -101,6 +110,19 @@ def execute_delete(stm: DeleteStm, catalog) -> int:
         return deleted
 
     raise ValueError("DELETE sin filtro sobre SequentialFile no está soportado")
+
+
+def _equality_index(catalog, table_name, condition):
+    if not isinstance(condition, BinaryExp) or condition.op.name != "EQ_OP":
+        return None
+    if not isinstance(condition.right, (IdExp,)) and not hasattr(condition.right, "value"):
+        return None
+    column_name = condition.left.value
+    index = catalog.get_physical_index(table_name, column_name)
+    if index is None or isinstance(condition.right, IdExp):
+        return None
+    schema = catalog.get_schema(table_name)
+    return index, Value(schema.get_column(column_name).data_type, condition.right.value)
 
 
 def _condition_matches(condition, record: Record, schema) -> bool:

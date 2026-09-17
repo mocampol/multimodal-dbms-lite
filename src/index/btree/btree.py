@@ -39,15 +39,36 @@ class BTree:
         return self._root_page_id
 
     def search(self, key: Value) -> RID | None:
+        """Returns one matching RID, preserving the legacy API."""
+        matches = self.search_all(key)
+        return matches[0] if matches else None
+
+    def search_all(self, key: Value) -> list[RID]:
+        """Returns every RID stored under ``key``."""
         leaf = self._find_leaf(key)
         try:
             entries = leaf.entries()
             idx = leaf.find_entry_index(key)
-            if idx < len(entries) and entries[idx][0].data == key.data:
-                return entries[idx][1]
-            return None
+            results = []
+            while idx < len(entries) and entries[idx][0].data == key.data:
+                results.append(entries[idx][1])
+                idx += 1
+            next_page_id = leaf.next_leaf_page_id()
         finally:
             self.bm.unpin_page(leaf.page.page_id, is_dirty=False)
+
+        while next_page_id is not None:
+            page = self.bm.fetch_page(next_page_id)
+            leaf = BTreeNode(page, self.key_type)
+            try:
+                for stored_key, rid in leaf.entries():
+                    if stored_key.data != key.data:
+                        return results
+                    results.append(rid)
+            finally:
+                next_page_id = leaf.next_leaf_page_id()
+                self.bm.unpin_page(page.page_id, is_dirty=False)
+        return results
 
     def range(self, start_key: Value, end_key: Value) -> list[tuple]:
         results = []
@@ -89,8 +110,8 @@ class BTree:
             split_key, new_right_page_id = result
             self._create_new_root(split_key, old_root_id, new_right_page_id)
 
-    def delete(self, key: Value):
-        self._delete_recursive(self._root_page_id, key)
+    def delete(self, key: Value, rid: RID = None):
+        self._delete_recursive(self._root_page_id, key, rid)
         self._shrink_root_if_needed()
 
     def _find_leaf(self, key: Value) -> BTreeNode:
@@ -200,12 +221,12 @@ class BTree:
         self.bm.unpin_page(new_root_page_id, is_dirty=True)
         self._root_page_id = new_root_page_id
 
-    def _delete_recursive(self, page_id: int, key: Value) -> bool:
+    def _delete_recursive(self, page_id: int, key: Value, rid: RID = None) -> bool:
         page = self.bm.fetch_page(page_id)
         node = BTreeNode(page, self.key_type)
 
         if node.is_leaf():
-            removed = node.remove_leaf_entry(key)
+            removed = node.remove_leaf_entry(key, rid)
             if not removed:
                 self.bm.unpin_page(page_id, is_dirty=False)
                 raise KeyNotFoundError(f"La clave {key.data!r} no existe en el índice")
@@ -218,7 +239,7 @@ class BTree:
         child_page_id = node.children()[child_idx]
         self.bm.unpin_page(page_id, is_dirty=False)
 
-        child_underflow = self._delete_recursive(child_page_id, key)
+        child_underflow = self._delete_recursive(child_page_id, key, rid)
         if not child_underflow:
             return False
 

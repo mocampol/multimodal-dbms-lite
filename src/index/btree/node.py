@@ -162,7 +162,7 @@ class BTreeNode:
         self._write_header(node_type, num_entries + 1, next_page_id, new_offset)
         return True
 
-    def remove_leaf_entry(self, key: Value) -> bool:
+    def remove_leaf_entry(self, key: Value, rid=None) -> bool:
         if not self.is_leaf():
             raise ValueError("remove_leaf_entry() solo aplica a nodos hoja")
 
@@ -170,6 +170,17 @@ class BTreeNode:
         idx = self.find_entry_index(key)
         if idx >= num_entries or self.keys()[idx].data != key.data:
             return False
+
+        if rid is not None:
+            while idx < num_entries:
+                stored_key, stored_rid = self.entries()[idx]
+                if stored_key.data != key.data:
+                    return False
+                if stored_rid == rid:
+                    break
+                idx += 1
+            if idx >= num_entries:
+                return False
 
         for i in range(idx, num_entries - 1):
             offset, length = self._read_slot(i + 1)

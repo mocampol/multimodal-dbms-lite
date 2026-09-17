@@ -10,6 +10,8 @@ are small and are consulted on every query.
 from common.value import DataType, Value
 from common.schema import Schema, Column
 from common.record import Record
+from index.btree.btree import BTree
+from index.extendible_hash.extendible_hash_index import ExtendibleHashIndex
 
 from .table_metadata import TableMetadata, StorageType
 from .column import ColumnMetadata
@@ -55,7 +57,7 @@ class Catalog:
         indexes (dict[str, list[dict]]): table_name -> list of index metadata.
     """
 
-    def __init__(self, heap_factory, storage_factories=None):
+    def __init__(self, heap_factory, storage_factories=None, index_buffer_factory=None):
         """
         Args:
             heap_factory: callable(schema: Schema) -> heap-like object exposing:
@@ -70,10 +72,12 @@ class Catalog:
         self._sys_indexes = heap_factory(SYS_INDEXES_SCHEMA)
 
         self._storage_factories = storage_factories or {StorageType.HEAP: heap_factory}
+        self._index_buffer_factory = index_buffer_factory
 
         self.tables: dict[str, TableMetadata] = {}
         self.indexes: dict[str, list[dict]] = {}
         self._table_storage: dict[str, object] = {}
+        self._physical_indexes: dict[int, object] = {}
 
         self._unique_values: dict[tuple, set] = {}
 
@@ -119,6 +123,10 @@ class Catalog:
                 "index_type": index_type,
                 "root_page_id": root_page_id,
             })
+            if self._index_buffer_factory is not None and root_page_id >= 0:
+                self._physical_indexes[index_id] = self._open_index(
+                    table_name, column_name, index_type, root_page_id, index_id
+                )
             self._next_index_id = max(self._next_index_id, index_id + 1)
 
     def _table_name_by_id(self, table_id: int) -> str:
@@ -220,22 +228,79 @@ class Catalog:
         index_id = self._next_index_id
         self._next_index_id += 1
 
-        self._sys_indexes.insert(Record([
+        column = tm.schema.get_column(column_name)
+        if index_type not in {"btree", "hash"}:
+            raise ValueError(f"Tipo de índice no soportado: {index_type}")
+        if self._index_buffer_factory is None:
+            raise ValueError("No hay fábrica de BufferManager para índices")
+
+        index = self._create_index(index_type, table_name, column_name, index_id, column.data_type)
+        for rid, record in self._scan_with_rids(self._table_storage[table_name]):
+            index.insert(record[tm.schema.column_index(column_name)], rid)
+
+        root_page_id = (
+            index.root_page_id if index_type == "btree" else index.directory_page_id
+        )
+        index_rid = self._sys_indexes.insert(Record([
             Value(DataType.INTEGER, index_id),
             Value(DataType.INTEGER, tm.table_id),
             Value(DataType.VARCHAR, column_name),
             Value(DataType.VARCHAR, index_type),
-            Value(DataType.INTEGER, -1),  # root_page_id, set once the index is built
+            Value(DataType.INTEGER, root_page_id),
         ]))
 
         entry = {
             "index_id": index_id,
             "column_name": column_name,
             "index_type": index_type,
-            "root_page_id": -1,
+            "root_page_id": root_page_id,
         }
         self.indexes.setdefault(table_name, []).append(entry)
+        self._physical_indexes[index_id] = index
         return entry
+
+    def _create_index(self, index_type, table_name, column_name, index_id, key_type):
+        manager = self._index_buffer_factory(table_name, column_name, index_id)
+        if index_type == "btree":
+            return BTree(key_type, manager)
+        return ExtendibleHashIndex.create(manager, key_type)
+
+    def _open_index(self, table_name, column_name, index_type, root_page_id, index_id):
+        manager = self._index_buffer_factory(table_name, column_name, index_id)
+        key_type = self.get_schema(table_name).get_column(column_name).data_type
+        if index_type == "btree":
+            return BTree(key_type, manager, root_page_id=root_page_id)
+        return ExtendibleHashIndex(manager, root_page_id, key_type)
+
+    @staticmethod
+    def _scan_with_rids(storage):
+        if not hasattr(storage, "scan_with_rid"):
+            raise ValueError("Los índices secundarios requieren HeapFile con RIDs")
+        return storage.scan_with_rid()
+
+    def get_physical_index(self, table_name: str, column_name: str):
+        for entry in self.indexes.get(table_name, []):
+            if entry["column_name"] == column_name:
+                return self._physical_indexes.get(entry["index_id"])
+        return None
+
+    def register_insert(self, table_name: str, record: Record, rid):
+        for entry in self.indexes.get(table_name, []):
+            index = self._physical_indexes.get(entry["index_id"])
+            if index is not None:
+                column_index = self.get_schema(table_name).column_index(entry["column_name"])
+                index.insert(record[column_index], rid)
+
+    def unregister_delete(self, table_name: str, record: Record, rid):
+        for entry in self.indexes.get(table_name, []):
+            index = self._physical_indexes.get(entry["index_id"])
+            if index is not None:
+                column_index = self.get_schema(table_name).column_index(entry["column_name"])
+                key = record[column_index]
+                if hasattr(index, "remove"):
+                    index.remove(key, rid)
+                else:
+                    index.delete(key, rid)
 
     # queries used by the semantic analyzer
 
