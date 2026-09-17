@@ -27,32 +27,26 @@ class SemanticError(Exception):
 
 
 _NUMERIC_TYPES = {
-    DataType.TINYINT, DataType.SMALLINT, DataType.MEDIUMINT, DataType.INT,
-    DataType.INTEGER, DataType.BIGINT, DataType.DECIMAL, DataType.NUMERIC,
-    DataType.FLOAT, DataType.DOUBLE, DataType.DOUBLE_PRECISION, DataType.BIT,
+    DataType.SMALLINT, DataType.INTEGER, DataType.BIGINT,
+    DataType.NUMERIC, DataType.REAL, DataType.DOUBLE_PRECISION,
 }
 
 _DATE_TYPES = {
-    DataType.DATE, DataType.DATETIME, DataType.TIMESTAMP, DataType.TIME, DataType.YEAR,
+    DataType.DATE, DataType.TIME, DataType.TIMESTAMP,
 }
 
 _STRING_TYPES = {
     DataType.CHAR, DataType.VARCHAR, DataType.TEXT,
-    DataType.TINYTEXT, DataType.MEDIUMTEXT, DataType.LONGTEXT,
 }
 
 ORDERABLE_TYPES = _NUMERIC_TYPES | _DATE_TYPES | _STRING_TYPES
 
 
-# =============================================================================
-# Catálogo — contrato mínimo que necesita el análisis semántico
-# =============================================================================
-
 class CatalogProtocol(Protocol):
-    """Contrato mínimo que SemanticVisitor necesita del catálogo. Es un
-    Protocol (duck typing): el catálogo real del Storage Manager NO
-    necesita heredar de esta clase, solo implementar estos dos métodos
-    y devolver/aceptar objetos Schema de common."""
+    """Minimum contract that SemanticVisitor requires from the catalog. It is a
+    Protocol (duck typing): the actual Storage Manager catalog does NOT
+    need to inherit from this class; it only needs to implement these two methods
+    and return/accept Schema objects from the common module. """
 
     def table_exists(self, table_name: str) -> bool: ...
 
@@ -60,10 +54,10 @@ class CatalogProtocol(Protocol):
 
 
 class InMemoryCatalog:
-    """Catálogo de referencia en memoria, hecho de Schema/Column reales de
-    common. Útil para probar el parser y el visitor de forma aislada
-    mientras el catálogo real (respaldado por Heap File, sys_tables/
-    sys_columns) no está listo."""
+    """An in-memory reference catalog based on actual Schema/Columns from
+    common. Useful for testing the parser and visitor in isolation
+    while the actual catalog (backed by a heap file, sys_tables/
+    sys_columns) is not yet ready. """
 
     def __init__(self):
         self._schemas: dict[str, Schema] = {}
@@ -83,40 +77,32 @@ _ExpResult = Tuple[str, Union[Column, int, str]]
 
 
 class SemanticVisitor(Visitor):
-    """Recorre el AST de una sentencia SQL ya parseada y valida que sea
-    semánticamente correcta contra el catálogo, antes de que el Query
-    Executor la ejecute. Análogo a TypeCheckerVisitor en el compilador
-    general.
+    """Iterates through the AST of a parsed SQL statement and validates that it is
+    semantically correct against the catalog, before the Query
+    Executor executes it. Analogous to TypeCheckerVisitor in the general
+    compiler.
 
-    Uso:
+    Usage:
         from common import DataType, Column, Schema
 
         catalog = InMemoryCatalog()
-        catalog.define_table(Schema("alumnos", [
-            Column("id", DataType.INT, is_primary_key=True),
-            Column("nombre", DataType.VARCHAR, size=50),
-            Column("edad", DataType.INT),
+        catalog.define_table(Schema(“students”, [
+            Column(“id”, DataType.INT, is_primary_key=True),
+            Column(“name”, DataType.VARCHAR, size=50),
+            Column(“age”, DataType.INT),
         ]))
 
         stm = parser.parse_sql_statement()
-        SemanticVisitor(catalog).check(stm)   # lanza SemanticError si algo está mal
+        SemanticVisitor(catalog).check(stm)+
     """
 
     def __init__(self, catalog: CatalogProtocol):
         self.catalog = catalog
-        # Tabla contra la que se resuelven las columnas "sueltas"
-        # mencionadas en la sentencia que se está visitando actualmente.
         self._current_schema: Optional[Schema] = None
 
-    # -------------------------------------------------------------------
-    # Punto de entrada — análogo a TypeChecker(Program*) en C++
-    # -------------------------------------------------------------------
     def check(self, stm: Stm) -> None:
         stm.accept(self)
 
-    # -------------------------------------------------------------------
-    # Sentencias
-    # -------------------------------------------------------------------
     def visit_select_stm(self, stm: SelectStm):
         schema = self.catalog.get_schema(stm.table)
         self._current_schema = schema
@@ -180,9 +166,6 @@ class SemanticVisitor(Visitor):
 
         return None
 
-    # -------------------------------------------------------------------
-    # Cláusulas auxiliares
-    # -------------------------------------------------------------------
     def visit_order_by_clause(self, clause: OrderByClause):
         for col in clause.columns:
             self._require_column(self._current_schema, col)
@@ -193,9 +176,6 @@ class SemanticVisitor(Visitor):
             self._require_column(self._current_schema, col)
         return None
 
-    # -------------------------------------------------------------------
-    # Expresiones
-    # -------------------------------------------------------------------
     def visit_num_exp(self, exp: NumExp) -> _ExpResult:
         return ("literal", exp.value)
 
@@ -210,7 +190,6 @@ class SemanticVisitor(Visitor):
         return ("column", column)
 
     def visit_binary_exp(self, exp: BinaryExp):
-        # Por gramática, el lado izquierdo de <Condition> siempre es ID.
         left_kind, left_column = exp.left.accept(self)
         assert left_kind == "column"
 
@@ -244,9 +223,6 @@ class SemanticVisitor(Visitor):
 
         return None
 
-    # -------------------------------------------------------------------
-    # Helpers internos
-    # -------------------------------------------------------------------
     def _require_column(self, schema: Optional[Schema], col_name: str) -> Column:
         if schema is None:
             raise SemanticError(f"No hay tabla activa para resolver la columna '{col_name}'")
