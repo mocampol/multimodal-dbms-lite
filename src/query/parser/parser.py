@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from token_ import Token, TokenType
 from scanner import Scanner
+from common import DataType
 from ast_nodes import (
     Exp,
     NumExp,
@@ -15,6 +16,10 @@ from ast_nodes import (
     DeleteStm,
     OrderByClause,
     GroupByClause,
+    ColumnDef,
+    CreateTableStm,
+    CreateIndexStm,
+    IndexType,
 )
 
 
@@ -25,6 +30,30 @@ _OP_MAP = {
     TokenType.LEQ: BinaryOp.LEQ_OP,
     TokenType.GT: BinaryOp.GT_OP,
     TokenType.GEQ: BinaryOp.GEQ_OP,
+}
+
+# Maps a type-name token to its DataType (common), and whether it
+# REQUIRES a declared size, per common.value.VARIABLE_SIZE_TYPES.
+_TYPE_MAP = {
+    TokenType.T_SMALLINT: DataType.SMALLINT,
+    TokenType.T_INTEGER: DataType.INTEGER,
+    TokenType.T_BIGINT: DataType.BIGINT,
+    TokenType.T_NUMERIC: DataType.NUMERIC,
+    TokenType.T_REAL: DataType.REAL,
+    TokenType.T_DOUBLE_PRECISION: DataType.DOUBLE_PRECISION,
+    TokenType.T_CHAR: DataType.CHAR,
+    TokenType.T_VARCHAR: DataType.VARCHAR,
+    TokenType.T_TEXT: DataType.TEXT,
+    TokenType.T_BOOLEAN: DataType.BOOLEAN,
+    TokenType.T_DATE: DataType.DATE,
+    TokenType.T_TIME: DataType.TIME,
+    TokenType.T_TIMESTAMP: DataType.TIMESTAMP,
+    TokenType.T_BYTEA: DataType.BYTEA,
+}
+
+_INDEX_TYPE_MAP = {
+    TokenType.BTREE: IndexType.BTREE,
+    TokenType.HASH: IndexType.HASH,
 }
 
 
@@ -89,15 +118,22 @@ class Parser:
     # =========================================================================
 
     def parse_sql_statement(self) -> Stm:
-        """<Statement> ::= ( <SelectStmt> | <InsertStmt> | <DeleteStmt> ) SEMICOL"""
+        """<Statement> ::= ( <SelectStmt> | <InsertStmt> | <DeleteStmt>
+                            | <CreateTableStmt> | <CreateIndexStmt> ) SEMICOL"""
         if self.check(TokenType.SELECT):
             stm: Stm = self.parse_select()
         elif self.check(TokenType.INSERT_INTO):
             stm = self.parse_insert()
         elif self.check(TokenType.DELETE):
             stm = self.parse_delete()
+        elif self.check(TokenType.CREATE_TABLE):
+            stm = self.parse_create_table()
+        elif self.check(TokenType.CREATE_INDEX):
+            stm = self.parse_create_index()
         else:
-            self.error("'SELECT', 'INSERT INTO' o 'DELETE'")
+            self.error(
+                "'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE' o 'CREATE INDEX'"
+            )
 
         self.expect(TokenType.SEMICOL)
         return stm
@@ -214,3 +250,90 @@ class Parser:
             where_cond = self.parse_where_clause()
 
         return DeleteStm(table_tok.text, where_cond)
+
+    # =========================================================================
+    # CREATE TABLE
+    # =========================================================================
+
+    def parse_create_table(self) -> CreateTableStm:
+        """<CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN"""
+        self.expect(TokenType.CREATE_TABLE)
+        table_tok = self.expect(TokenType.ID)
+        self.expect(TokenType.LPAREN)
+        columns = self.parse_column_def_list()
+        self.expect(TokenType.RPAREN)
+        return CreateTableStm(table_tok.text, columns)
+
+    def parse_column_def_list(self) -> List[ColumnDef]:
+        """<ColumnDefList> ::= <ColumnDef> { COMA <ColumnDef> }"""
+        columns = [self.parse_column_def()]
+        while self.match(TokenType.COMA):
+            columns.append(self.parse_column_def())
+        return columns
+
+    def parse_column_def(self) -> ColumnDef:
+        """<ColumnDef> ::= ID <TypeName> [ LPAREN NUM RPAREN ] { <ColumnConstraint> }"""
+        name_tok = self.expect(TokenType.ID)
+        data_type = self.parse_type_name()
+
+        size = None
+        if self.match(TokenType.LPAREN):
+            size_tok = self.expect(TokenType.NUM)
+            size = int(size_tok.text)
+            self.expect(TokenType.RPAREN)
+
+        is_primary_key = False
+        nullable = True
+        is_unique = False
+
+        while self.check(TokenType.PRIMARY_KEY) or self.check(TokenType.NOT_NULL) or self.check(TokenType.UNIQUE):
+            if self.match(TokenType.PRIMARY_KEY):
+                is_primary_key = True
+            elif self.match(TokenType.NOT_NULL):
+                nullable = False
+            elif self.match(TokenType.UNIQUE):
+                is_unique = True
+
+        return ColumnDef(
+            name=name_tok.text,
+            data_type=data_type,
+            size=size,
+            is_primary_key=is_primary_key,
+            nullable=nullable,
+            is_unique=is_unique,
+        )
+
+    def parse_type_name(self) -> DataType:
+        """<TypeName> ::= SMALLINT | INTEGER | BIGINT | NUMERIC | REAL | DOUBLE_PRECISION
+                         | CHAR | VARCHAR | TEXT | BOOLEAN | DATE | TIME | TIMESTAMP | BYTEA"""
+        for ttype, data_type in _TYPE_MAP.items():
+            if self.match(ttype):
+                return data_type
+        self.error("un nombre de tipo (SMALLINT, INTEGER, BIGINT, NUMERIC, REAL, "
+                    "DOUBLE PRECISION, CHAR, VARCHAR, TEXT, BOOLEAN, DATE, TIME, "
+                    "TIMESTAMP o BYTEA)")
+
+    # =========================================================================
+    # CREATE INDEX
+    # =========================================================================
+
+    def parse_create_index(self) -> CreateIndexStm:
+        """<CreateIndexStmt> ::= CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>"""
+        self.expect(TokenType.CREATE_INDEX)
+        index_name_tok = self.expect(TokenType.ID)
+        self.expect(TokenType.ON)
+        table_tok = self.expect(TokenType.ID)
+        self.expect(TokenType.LPAREN)
+        column_tok = self.expect(TokenType.ID)
+        self.expect(TokenType.RPAREN)
+        self.expect(TokenType.USING)
+        index_type = self.parse_index_type()
+
+        return CreateIndexStm(index_name_tok.text, table_tok.text, column_tok.text, index_type)
+
+    def parse_index_type(self) -> IndexType:
+        """<IndexType> ::= BTREE | HASH"""
+        for ttype, index_type in _INDEX_TYPE_MAP.items():
+            if self.match(ttype):
+                return index_type
+        self.error("'BTREE' o 'HASH'")
