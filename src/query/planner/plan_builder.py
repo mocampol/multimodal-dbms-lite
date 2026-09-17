@@ -78,14 +78,7 @@ def build_select_plan(stm: SelectStm, catalog):
         node = Projection(node, selected, combined_schema)
         return node
 
-    # Access method: SeqScan is the only one implemented so far.
-    # TODO once index_scan.py is wired up: if stm.where_cond is a
-    # BinaryExp comparing an indexed column with EQ_OP, and
-    # catalog.get_indexes(stm.table) has a matching entry, use
-    # IndexScan(stm.table, stm.where_cond, catalog) instead, and skip
-    # wrapping in Filter below (the index scan already applies the
-    # condition). This is exactly the "regla heurística de selección
-    # "access selection heuristic" the assignment asks for.
+    # Equality predicates use a physical index when one is available.
     node = SeqScan(stm.table, catalog)
     indexed = _equality_index(catalog, stm.table, stm.where_cond)
     if indexed is not None:
