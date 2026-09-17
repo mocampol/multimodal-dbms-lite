@@ -16,6 +16,8 @@ from query.parser.ast_nodes import (
     DeleteStm,
     OrderByClause,
     GroupByClause,
+    JoinClause,
+    AggregateSpec,
     ColumnDef,
     CreateTableStm,
     CreateIndexStm,
@@ -153,6 +155,15 @@ class Parser:
         table_tok = self.expect(TokenType.ID)
         table = table_tok.text
 
+        join = None
+        if self.match(TokenType.JOIN):
+            join_table = self.expect(TokenType.ID).text
+            self.expect(TokenType.ON)
+            join_left = self.parse_qualified_name()
+            self.expect(TokenType.EQ)
+            join_right = self.parse_qualified_name()
+            join = JoinClause(join_table, join_left, join_right)
+
         where_cond = None
         if self.check(TokenType.WHERE):
             where_cond = self.parse_where_clause()
@@ -162,17 +173,39 @@ class Parser:
         if self.check(TokenType.ORDER_BY) or self.check(TokenType.GROUP_BY):
             order_by, group_by = self.parse_group_or_order()
 
-        return SelectStm(columns, table, where_cond, order_by, group_by)
+        return SelectStm(columns, table, where_cond, order_by, group_by, join)
 
     def parse_select_list(self) -> List[str]:
         """<SelectList> ::= MUL | ID { COMA ID }"""
         if self.match(TokenType.MUL):
             return ["*"]
 
-        columns = [self.expect(TokenType.ID).text]
+        columns = [self.parse_select_item()]
         while self.match(TokenType.COMA):
-            columns.append(self.expect(TokenType.ID).text)
+            columns.append(self.parse_select_item())
         return columns
+
+    def parse_select_item(self):
+        name = self.expect(TokenType.ID).text
+        if not self.match(TokenType.LPAREN):
+            if self.match(TokenType.DOT):
+                name += "." + self.expect(TokenType.ID).text
+            return name
+        function = name.upper()
+        if function not in {"COUNT", "SUM", "AVG", "MIN", "MAX"}:
+            self.error("una función agregada válida")
+        if self.match(TokenType.MUL):
+            column = "*"
+        else:
+            column = self.parse_qualified_name()
+        self.expect(TokenType.RPAREN)
+        return AggregateSpec(function, column)
+
+    def parse_qualified_name(self) -> str:
+        name = self.expect(TokenType.ID).text
+        if self.match(TokenType.DOT):
+            name += "." + self.expect(TokenType.ID).text
+        return name
 
     def parse_where_clause(self) -> Exp:
         """<WhereClause> ::= WHERE <Condition>"""

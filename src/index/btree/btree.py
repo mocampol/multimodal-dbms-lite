@@ -70,6 +70,34 @@ class BTree:
                 self.bm.unpin_page(page.page_id, is_dirty=False)
         return results
 
+    def predecessor(self, key: Value) -> RID | None:
+        """Returns the RID associated with the greatest key <= ``key``."""
+        page_id = self._root_page_id
+        while True:
+            page = self.bm.fetch_page(page_id)
+            node = BTreeNode(page, self.key_type)
+            if node.is_leaf():
+                break
+            children = node.children()
+            page_id = children[node.find_child_index(key)]
+            self.bm.unpin_page(page.page_id, is_dirty=False)
+
+        result = None
+        while True:
+            entries = node.entries()
+            for stored_key, rid in entries:
+                if stored_key.data > key.data:
+                    self.bm.unpin_page(node.page.page_id, is_dirty=False)
+                    return result
+                result = rid
+            next_page_id = node.next_leaf_page_id()
+            self.bm.unpin_page(node.page.page_id, is_dirty=False)
+            if next_page_id is None:
+                return result
+            page = self.bm.fetch_page(next_page_id)
+            node = BTreeNode(page, self.key_type)
+        return results
+
     def range(self, start_key: Value, end_key: Value) -> list[tuple]:
         results = []
         leaf = self._find_leaf(start_key)

@@ -16,6 +16,8 @@ from query.parser.ast_nodes import (
     DeleteStm,
     OrderByClause,
     GroupByClause,
+    JoinClause,
+    AggregateSpec,
     CreateTableStm,
     CreateIndexStm,
     IndexType,
@@ -113,9 +115,16 @@ class SemanticVisitor(Visitor):
         schema = self.catalog.get_schema(stm.table)
         self._current_schema = schema
         try:
+            if stm.join is not None:
+                if not self.catalog.table_exists(stm.join.table):
+                    raise SemanticError(f"La tabla '{stm.join.table}' no existe")
+                self._validate_join(stm, schema, self.catalog.get_schema(stm.join.table))
             if stm.columns != ["*"]:
                 for col in stm.columns:
-                    self._require_column(schema, col)
+                    if isinstance(col, AggregateSpec):
+                        self._validate_aggregate(stm, col)
+                    else:
+                        self._require_select_column(stm, col)
 
             if stm.where_cond is not None:
                 stm.where_cond.accept(self)
@@ -129,6 +138,51 @@ class SemanticVisitor(Visitor):
             self._current_schema = None
 
         return None
+
+    def _validate_join(self, stm, left_schema, right_schema):
+        left_table, left_column = stm.join.left.split(".", 1)
+        right_table, right_column = stm.join.right.split(".", 1)
+        if left_table not in {stm.table, stm.join.table} or right_table not in {stm.table, stm.join.table}:
+            raise SemanticError("Las columnas del JOIN deben estar cualificadas con sus tablas")
+        left = left_schema if left_table == stm.table else right_schema
+        right = left_schema if right_table == stm.table else right_schema
+        left_col = self._require_column(left, left_column)
+        right_col = self._require_column(right, right_column)
+        if left_col.data_type != right_col.data_type:
+            raise SemanticError("Las columnas del JOIN deben tener el mismo tipo")
+
+    def _validate_aggregate(self, stm, aggregate):
+        if aggregate.function == "COUNT" and aggregate.column == "*":
+            return
+        if aggregate.column == "*":
+            raise SemanticError(f"{aggregate.function}(*) no está soportado")
+        self._require_select_column(stm, aggregate.column)
+        column_name = aggregate.column.split(".")[-1]
+        schema = self._current_schema
+        column = schema.get_column(column_name)
+        if aggregate.function in {"SUM", "AVG"} and column.data_type not in _NUMERIC_TYPES:
+            raise SemanticError(f"{aggregate.function} requiere una columna numérica")
+
+    def _require_select_column(self, stm, name):
+        if "." not in name:
+            if stm.join is None:
+                self._require_column(self._current_schema, name)
+                return
+            matches = [
+                schema.get_column(name)
+                for schema in (self._current_schema, self.catalog.get_schema(stm.join.table))
+                if schema.get_column(name) is not None
+            ]
+            if len(matches) != 1:
+                raise SemanticError(f"La columna '{name}' es ambigua o no existe")
+            return
+        table, column = name.split(".", 1)
+        if table == stm.table:
+            self._require_column(self._current_schema, column)
+        elif stm.join is not None and table == stm.join.table:
+            self._require_column(self.catalog.get_schema(stm.join.table), column)
+        else:
+            raise SemanticError(f"La tabla '{table}' no participa en la consulta")
 
     def visit_insert_stm(self, stm: InsertStm):
         schema = self.catalog.get_schema(stm.table)

@@ -134,6 +134,19 @@ class StringExp(Exp):
         return f"'{self.value}'"
 
 
+class AggregateSpec:
+    def __init__(self, function: str, column: str = "*"):
+        self.function = function.upper()
+        self.column = column
+
+    @property
+    def name(self) -> str:
+        return f"{self.function}({self.column})"
+
+    def __repr__(self):
+        return self.name
+
+
 class BinaryExp(Exp):
     """<Condition> ::= ID <Operator> <Value>"""
 
@@ -174,6 +187,16 @@ class GroupByClause:
 
     def __repr__(self):
         return f"GROUP BY {', '.join(self.columns)}"
+
+
+class JoinClause:
+    def __init__(self, table: str, left: str, right: str):
+        self.table = table
+        self.left = left
+        self.right = right
+
+    def __repr__(self):
+        return f"JOIN {self.table} ON {self.left} = {self.right}"
 
 
 # CREATE TABLE support (<ColumnDef>, <ColumnConstraint>)
@@ -230,12 +253,14 @@ class SelectStm(Stm):
         where_cond: Optional[Exp] = None,
         order_by: Optional[OrderByClause] = None,
         group_by: Optional[GroupByClause] = None,
+        join: Optional[JoinClause] = None,
     ):
         self.columns = columns
         self.table = table
         self.where_cond = where_cond
         self.order_by = order_by
         self.group_by = group_by
+        self.join = join
 
     def accept(self, visitor: Visitor):
         return visitor.visit_select_stm(self)
@@ -248,6 +273,8 @@ class SelectStm(Stm):
             parts.append(repr(self.order_by))
         if self.group_by is not None:
             parts.append(repr(self.group_by))
+        if self.join is not None:
+            parts.insert(2, repr(self.join))
         return " ".join(parts)
 
 

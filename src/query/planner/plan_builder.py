@@ -6,16 +6,20 @@ catalog reports one over the WHERE column, otherwise fall back to a
 Sequential Scan.
 """
 
-from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, IdExp, BinaryExp
+from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, IdExp, BinaryExp, AggregateSpec
 from common.value import Value
 from common.record import Record
+from common.schema import Schema, Column
 
 from query.executor.access.seq_scan import SeqScan
 from query.executor.access.index_scan import IndexScan
+from query.executor.access.clustered_scan import ClusteredScan
 from query.executor.processing.filter import Filter
 from query.executor.processing.projection import Projection
 from query.executor.processing.sort import Sort
 from query.executor.aggregate.group_aggregate import GroupAggregate
+from query.executor.aggregate.hash_aggregate import HashAggregate
+from query.executor.join.hash_join import HashJoin
 
 
 def build_select_plan(stm: SelectStm, catalog):
@@ -24,6 +28,55 @@ def build_select_plan(stm: SelectStm, catalog):
     (Sequential/Index Scan) -> [Filter] -> [Sort] -> Projection
     """
     schema = catalog.get_schema(stm.table)
+
+    if stm.where_cond is not None and catalog.get_clustered_index(stm.table) is not None:
+        if isinstance(stm.where_cond, BinaryExp) and stm.where_cond.op.name == "EQ_OP":
+            clustered = catalog.get_clustered_index(stm.table)
+            key_column = schema.primary_key()
+            if stm.where_cond.left.value == key_column.name and not isinstance(stm.where_cond.right, IdExp):
+                key = Value(key_column.data_type, stm.where_cond.right.value)
+                return Projection(ClusteredScan(clustered, key), stm.columns, schema)
+
+    aggregate_items = [item for item in stm.columns if isinstance(item, AggregateSpec)]
+    if aggregate_items:
+        if stm.join is not None:
+            raise ValueError("Agregaciones sobre JOIN aún no están soportadas")
+        child = SeqScan(stm.table, catalog)
+        if stm.where_cond is not None:
+            child = Filter(child, stm.where_cond, schema)
+        aggregate = HashAggregate(child, stm.group_by.columns if stm.group_by else [], schema, stm.columns)
+        return aggregate
+
+    if stm.join is not None:
+        right_schema = catalog.get_schema(stm.join.table)
+        left_join_table, left_join_column = stm.join.left.split(".", 1)
+        right_join_table, right_join_column = stm.join.right.split(".", 1)
+        left_schema = schema if left_join_table == stm.table else right_schema
+        right_join_schema = schema if right_join_table == stm.table else right_schema
+        left_index = left_schema.column_index(left_join_column)
+        right_index = right_join_schema.column_index(right_join_column)
+        node = HashJoin(
+            SeqScan(stm.table, catalog),
+            SeqScan(stm.join.table, catalog),
+            left_index if left_join_table == stm.table else right_index,
+            right_index if right_join_table == stm.join.table else left_index,
+        )
+        combined_columns = [
+            Column(f"{stm.table}.{column.name}", column.data_type, column.size, nullable=column.nullable)
+            for column in schema.columns
+        ] + [
+            Column(f"{stm.join.table}.{column.name}", column.data_type, column.size, nullable=column.nullable)
+            for column in right_schema.columns
+        ]
+        combined_schema = Schema(f"{stm.table}_join_{stm.join.table}", combined_columns)
+        selected = stm.columns
+        if selected != ["*"]:
+            selected = [
+                name if "." in name else f"{stm.table}.{name}"
+                for name in selected
+            ]
+        node = Projection(node, selected, combined_schema)
+        return node
 
     # Access method: SeqScan is the only one implemented so far.
     # TODO once index_scan.py is wired up: if stm.where_cond is a

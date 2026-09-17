@@ -12,6 +12,7 @@ from common.schema import Schema, Column
 from common.record import Record
 from index.btree.btree import BTree
 from index.extendible_hash.extendible_hash_index import ExtendibleHashIndex
+from index.btree.clustered_index import ClusteredIndex
 
 from .table_metadata import TableMetadata, StorageType
 from .column import ColumnMetadata
@@ -78,6 +79,7 @@ class Catalog:
         self.indexes: dict[str, list[dict]] = {}
         self._table_storage: dict[str, object] = {}
         self._physical_indexes: dict[int, object] = {}
+        self._clustered_indexes: dict[str, ClusteredIndex] = {}
 
         self._unique_values: dict[tuple, set] = {}
 
@@ -109,6 +111,13 @@ class Catalog:
 
             factory = self._storage_factories[tm.storage_type]
             self._table_storage[tm.table_name] = factory(tm.schema)
+            if tm.storage_type == StorageType.SEQUENTIAL and self._index_buffer_factory is not None:
+                primary_key = tm.schema.primary_key()
+                if primary_key is not None:
+                    manager = self._index_buffer_factory(tm.table_name, "clustered", tm.table_id)
+                    self._clustered_indexes[tm.table_name] = ClusteredIndex(
+                        primary_key.data_type, manager, self._table_storage[tm.table_name]
+                    )
 
             for col_name in tm.schema.unique_columns():
                 self._unique_values[(tm.table_name, col_name)] = set()
@@ -179,6 +188,15 @@ class Catalog:
         storage = self._storage_factories[storage_type](schema)
         self._table_storage[schema.table_name] = storage
 
+        if storage_type == StorageType.SEQUENTIAL and self._index_buffer_factory is not None:
+            primary_key = schema.primary_key()
+            if primary_key is None:
+                raise ValueError("SequentialFile requiere una clave primaria para el índice agrupado")
+            manager = self._index_buffer_factory(schema.table_name, "clustered", table_id)
+            self._clustered_indexes[schema.table_name] = ClusteredIndex(
+                primary_key.data_type, manager, storage
+            )
+
         if hasattr(storage, "root_page_id"):
             tm.root_page_id = storage.root_page_id
             self._sys_tables.update(table_rid, Record([
@@ -214,6 +232,9 @@ class Catalog:
         if table_name not in self._table_storage:
             raise TableNotFoundError(f"La tabla '{table_name}' no existe")
         return self._table_storage[table_name]
+
+    def get_clustered_index(self, table_name: str):
+        return self._clustered_indexes.get(table_name)
 
     def create_index(self, table_name: str, column_name: str, index_type: str) -> dict:
         """
@@ -285,6 +306,9 @@ class Catalog:
         return None
 
     def register_insert(self, table_name: str, record: Record, rid):
+        clustered = self._clustered_indexes.get(table_name)
+        if clustered is not None:
+            clustered.sync()
         for entry in self.indexes.get(table_name, []):
             index = self._physical_indexes.get(entry["index_id"])
             if index is not None:
@@ -292,6 +316,9 @@ class Catalog:
                 index.insert(record[column_index], rid)
 
     def unregister_delete(self, table_name: str, record: Record, rid):
+        clustered = self._clustered_indexes.get(table_name)
+        if clustered is not None:
+            clustered.sync()
         for entry in self.indexes.get(table_name, []):
             index = self._physical_indexes.get(entry["index_id"])
             if index is not None:

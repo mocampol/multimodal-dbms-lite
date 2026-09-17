@@ -4,6 +4,7 @@ from enum import Enum, auto
 class TokenType(Enum):
     SELECT = auto()
     FROM = auto()
+    JOIN = auto()
     WHERE = auto()
     ORDER_BY = auto()
     GROUP_BY = auto()
@@ -19,6 +20,7 @@ class TokenType(Enum):
     LPAREN = auto()
     RPAREN = auto()
     COMA = auto()
+    DOT = auto()
     SEMICOL = auto()
     EQ = auto()
     NEQ = auto()
@@ -75,6 +77,7 @@ _TYPE_NAMES = {
     TokenType.LPAREN: "'('",
     TokenType.RPAREN: "')'",
     TokenType.COMA: "','",
+    TokenType.DOT: "'.'",
     TokenType.SEMICOL: "';'",
     TokenType.EQ: "'='",
     TokenType.NEQ: "'!=' o '<>'",

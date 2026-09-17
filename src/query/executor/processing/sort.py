@@ -1,6 +1,7 @@
 """External ORDER BY using sorted runs and a k-way merge."""
 
 import heapq
+import os
 import pickle
 import tempfile
 from typing import Optional
@@ -42,6 +43,14 @@ class Sort(PlanNode):
                 run = []
         if run:
             self._write_run(run)
+
+        fan_in = max(2, self.memory_records - 1)
+        while len(self._runs) > fan_in:
+            next_runs = []
+            for start in range(0, len(self._runs), fan_in):
+                group = self._runs[start:start + fan_in]
+                next_runs.append(self._merge_runs(group))
+            self._runs = next_runs
 
         for run_index, path in enumerate(self._runs):
             handle = open(path, "rb")
@@ -88,3 +97,38 @@ class Sort(PlanNode):
             for record in records:
                 pickle.dump(record, handle, protocol=pickle.HIGHEST_PROTOCOL)
         self._runs.append(path)
+
+    def _merge_runs(self, paths: list[str]) -> str:
+        output_path = tempfile.NamedTemporaryFile(
+            dir=self._temp_dir.name, prefix="merge-", suffix=".bin", delete=False
+        ).name
+        handles = [open(path, "rb") for path in paths]
+        heap = []
+        try:
+            for index, handle in enumerate(handles):
+                try:
+                    record = pickle.load(handle)
+                except EOFError:
+                    continue
+                heapq.heappush(heap, (self._sort_key(record), index, record))
+            with open(output_path, "wb") as output:
+                while heap:
+                    _, index, record = heapq.heappop(heap)
+                    pickle.dump(record, output, protocol=pickle.HIGHEST_PROTOCOL)
+                    try:
+                        next_record = pickle.load(handles[index])
+                    except EOFError:
+                        continue
+                    heapq.heappush(
+                        heap,
+                        (self._sort_key(next_record), index, next_record),
+                    )
+        finally:
+            for handle in handles:
+                handle.close()
+            for path in paths:
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+        return output_path
