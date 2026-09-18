@@ -38,6 +38,10 @@ SYS_COLUMNS_SCHEMA = Schema("sys_columns", [
     Column("col_size", DataType.INTEGER, nullable=True),
     Column("position", DataType.INTEGER),
     Column("is_primary_key", DataType.BOOLEAN),
+    # FIX: antes is_unique no se persistía, así que una columna UNIQUE
+    # no-PK perdía su constraint al reconstruir el catálogo tras un
+    # reboot (Catalog._load() nunca sabía que debía vigilarla).
+    Column("is_unique", DataType.BOOLEAN),
 ])
 
 SYS_INDEXES_SCHEMA = Schema("sys_indexes", [
@@ -189,6 +193,7 @@ class Catalog:
                 Value(DataType.INTEGER, cm.col_size) if cm.col_size is not None else Value(DataType.INTEGER, None),
                 Value(DataType.INTEGER, cm.position),
                 Value(DataType.BOOLEAN, cm.is_primary_key),
+                Value(DataType.BOOLEAN, cm.is_unique),
             ]))
 
         storage = self._storage_factories[storage_type](schema)
@@ -457,3 +462,4 @@ class Catalog:
         for col_name in schema.unique_columns():
             idx = schema.column_index(col_name)
             self.register_unique(table_name, col_name, record[idx].data)
+            
