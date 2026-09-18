@@ -20,6 +20,7 @@ class ColumnMetadata:
         col_size: int,
         position: int,
         is_primary_key: bool,
+        is_unique: bool = False,
     ):
         self.table_id = table_id
         self.column_name = column_name
@@ -27,6 +28,11 @@ class ColumnMetadata:
         self.col_size = col_size
         self.position = position
         self.is_primary_key = is_primary_key
+        # NOTE (fix): is_unique ahora SÍ se persiste. Antes solo se
+        # derivaba en memoria vía Column(is_primary_key=True) -> is_unique
+        # implícito, así que una columna UNIQUE no-PK perdía su constraint
+        # al reconstruirse desde sys_columns tras un reboot.
+        self.is_unique = is_unique
 
   
     def to_values(self) -> tuple:
@@ -40,26 +46,27 @@ class ColumnMetadata:
             self.col_size,
             self.position,
             self.is_primary_key,
+            self.is_unique,
         )
 
   
     @classmethod
     def from_values(cls, values: tuple) -> "ColumnMetadata":
-        table_id, column_name, col_type, col_size, position, is_primary_key = values
-        return cls(table_id, column_name, col_type, col_size, position, is_primary_key)
+        table_id, column_name, col_type, col_size, position, is_primary_key, is_unique = values
+        return cls(table_id, column_name, col_type, col_size, position, is_primary_key, is_unique)
 
     def to_column(self) -> Column:
         """
         Builds the runtime common.schema.Column used for validation.
-        NOTE: is_unique is not part of sys_columns per the spec — only
-        is_primary_key is tracked there. A PK is unique by definition
-        (enforced inside Column itself).
+        is_unique ahora se lee directamente de sys_columns (antes se
+        perdía para columnas UNIQUE que no eran PK).
         """
         return Column(
             name=self.column_name,
             data_type=DataType(self.col_type),
             size=self.col_size,
             is_primary_key=self.is_primary_key,
+            is_unique=self.is_unique,
         )
 
     @classmethod
@@ -75,6 +82,7 @@ class ColumnMetadata:
             col_size=column.size,
             position=position,
             is_primary_key=column.is_primary_key,
+            is_unique=column.is_unique,
         )
 
     def __repr__(self):

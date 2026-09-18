@@ -1,22 +1,14 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
+# Python - archivos compilados
+
+**pycache**/
 *.py[cod]
 *$py.class
 
-# Pytest / Coverage / Benchmarks
+# Pytest
+
 .pytest_cache/
-.benchmarks/
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
+# IDEs / editores
 
-# OS generated files
-.DS_Store
-
-# IDEs
 .vscode/
 .idea/
