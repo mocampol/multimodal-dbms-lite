@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ApiError, runQuery, type QueryResult } from './api'
+import ExecutionPlanPanel from './ExecutionPlanPanel'
 import FilesPanel from './FilesPanel'
 import QueryPanel from './QueryPanel'
 import ResultsPanel from './ResultsPanel'
@@ -44,7 +45,7 @@ function App() {
 
           <section className="panel" aria-label="Execution Plan">
             <h2>Execution Plan</h2>
-            <p className="panel-placeholder">Execution steps will be listed here.</p>
+            <ExecutionPlanPanel result={result} error={error} running={running} />
           </section>
         </div>
       </div>
