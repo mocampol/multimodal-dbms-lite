@@ -1,14 +1,49 @@
-# Python - archivos compilados
-
-**pycache**/
+# Python
+__pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
-
-# Pytest
-
+*.pyo
+*.pyd
 .pytest_cache/
+.pytype/ 
 
-# IDEs / editores
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
 
+# Python packaging / tooling
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+*.log
+npm-debug.log*
+
+# Local data / generated DB files
+data/
+*.db
+*.sqlite3
+*.sqlite
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
 .vscode/
 .idea/
