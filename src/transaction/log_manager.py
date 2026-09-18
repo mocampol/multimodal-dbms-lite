@@ -5,6 +5,10 @@ import json
 import os
 import threading
 
+from common.value import DataType, Value
+from common.record import Record
+from storage.heap.rid import RID
+
 
 class LogManager:
     def __init__(self, path: str):
@@ -52,7 +56,10 @@ class LogManager:
 
     def records(self):
         with self._lock, open(self.path, encoding="utf-8") as stream:
-            return [json.loads(line) for line in stream if line.strip()]
+            return [
+                json.loads(line, object_hook=_json_object_hook)
+                for line in stream if line.strip()
+            ]
 
     def _next_lsn_unlocked(self):
         with open(self.path, encoding="utf-8") as stream:
@@ -61,10 +68,53 @@ class LogManager:
 
 
 def _json_default(value):
+    if isinstance(value, RID):
+        return {"__rid__": [value.page_id, value.slot]}
+
+    if isinstance(value, Record):
+        return {
+            "__record__": [
+                {"type": v.data_type.value, "data": _encode_value_data(v)}
+                for v in value.values
+            ]
+        }
+
     if isinstance(value, bytes):
         return {"__bytes__": value.hex()}
+
     if hasattr(value, "isoformat"):
         return {"__datetime__": value.isoformat()}
+
     if hasattr(value, "as_tuple"):
         return {"__decimal__": str(value)}
+
     return repr(value)
+
+
+def _encode_value_data(value: Value):
+    return value.data
+
+
+def _json_object_hook(obj: dict):
+    if "__rid__" in obj:
+        page_id, slot = obj["__rid__"]
+        return RID(page_id, slot)
+
+    if "__record__" in obj:
+        values = [
+            Value(DataType(entry["type"]), entry["data"])
+            for entry in obj["__record__"]
+        ]
+        return Record(values)
+
+    if "__bytes__" in obj:
+        return bytes.fromhex(obj["__bytes__"])
+
+    if "__datetime__" in obj:
+        return datetime.fromisoformat(obj["__datetime__"])
+
+    if "__decimal__" in obj:
+        from decimal import Decimal
+        return Decimal(obj["__decimal__"])
+
+    return obj
