@@ -27,9 +27,6 @@ export interface TableDetail {
   storage_type: string
   columns: ColumnInfo[]
   indexes: IndexInfo[]
-  // Not returned by the backend yet; panels must tolerate undefined.
-  record_count?: number
-  page_count?: number
 }
 
 export interface PlanNode {
@@ -49,7 +46,7 @@ export interface PlanNode {
 export interface SelectQueryResult {
   type: 'SELECT'
   columns: string[]
-  rows: Record<string, unknown>[]
+  rows: unknown[][]
   row_count: number
   execution_ms: number
   plan: PlanNode

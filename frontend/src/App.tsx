@@ -1,3 +1,5 @@
+import FilesPanel from './FilesPanel'
+
 function App() {
   return (
     <>
@@ -8,7 +10,7 @@ function App() {
       <div className="app-layout">
         <section className="panel" aria-label="Files">
           <h2>Files</h2>
-          <p className="panel-placeholder">Tables will be listed here.</p>
+          <FilesPanel />
         </section>
 
         <div className="main-column">

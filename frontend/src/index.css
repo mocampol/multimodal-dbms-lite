@@ -89,6 +89,61 @@ h1, h2, h3 {
   font-size: 14px;
 }
 
+.table-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.table-item {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 14px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.table-item:hover {
+  background: var(--accent-bg, rgba(124, 58, 237, 0.08));
+}
+
+.table-item.selected {
+  background: rgba(124, 58, 237, 0.12);
+  border-color: var(--border);
+  font-weight: 600;
+}
+
+.table-detail {
+  margin: 6px 0 4px 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.columns-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.columns-table th,
+.columns-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.columns-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
 .query-editor {
   width: 100%;
   min-height: 120px;
