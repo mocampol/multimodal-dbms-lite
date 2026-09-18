@@ -1,4 +1,4 @@
-import type { PlanNode, QueryResult } from './api'
+import { isBatchQueryResult, type PlanNode, type QueryResult, type SingleQueryResult } from './api'
 
 interface ExecutionPlanPanelProps {
   result: QueryResult | null
@@ -44,6 +44,24 @@ function ExecutionPlanPanel({ result, error, running }: ExecutionPlanPanelProps)
   if (running) return <p className="panel-placeholder">Ejecutando consulta...</p>
   if (error) return <p className="error-text">Error: {error}</p>
   if (!result) return <p className="panel-placeholder">Execution steps will be listed here.</p>
+  if (isBatchQueryResult(result)) {
+    const planned = result.statements.filter(
+      (statement): statement is SingleQueryResult => !isBatchQueryResult(statement) && statement.plan !== null,
+    )
+    if (planned.length === 0) return <p className="panel-placeholder">Estas operaciones no tienen plan de ejecución.</p>
+    return (
+      <ol className="plan-list">
+        {planned.map((statement, index) => (
+          <li key={index}>
+            {statement.type}
+            <ol className="plan-list">
+              {flattenPlan(statement.plan!).map((step, stepIndex) => <li key={stepIndex}>{step}</li>)}
+            </ol>
+          </li>
+        ))}
+      </ol>
+    )
+  }
   if (!result.plan) return <p className="panel-placeholder">Esta operación no tiene plan de ejecución.</p>
 
   const steps = flattenPlan(result.plan)

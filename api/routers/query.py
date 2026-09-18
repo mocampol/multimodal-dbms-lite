@@ -7,30 +7,31 @@ from explain import describe_plan, output_columns
 from schemas import QueryRequest
 from serialize import serialize_record
 
-from query.parser.scanner import Scanner
-from query.parser.parser import Parser
 from query.parser.ast_nodes import SelectStm, InsertStm, UpdateStm, DeleteStm, BeginTransactionStm
 from query.rewriter.rewriter import rewrite
 from query.planner.plan_builder import build_select_plan
-from query.query_engine import execute
+from query.query_engine import execute_many
 
 router = APIRouter()
 
 
-def _classify(sql: str):
-    try:
-        return Parser(Scanner(sql)).parse_sql_statement()
-    except Exception:
-        return None
-
-
 @router.post("/query")
 def run_query(payload: QueryRequest):
-    stm = _classify(payload.sql)
-
     t0 = time.perf_counter()
-    result = execute(payload.sql, catalog)
+    executed = execute_many(payload.sql, catalog)
     execution_ms = (time.perf_counter() - t0) * 1000
+
+    responses = [_response_for_statement(stm, result, execution_ms / len(executed)) for stm, result in executed]
+    if len(responses) == 1:
+        return responses[0]
+    return {
+        "type": "BATCH",
+        "statements": responses,
+        "execution_ms": execution_ms,
+    }
+
+
+def _response_for_statement(stm, result, execution_ms):
 
     if isinstance(stm, SelectStm):
         root = build_select_plan(rewrite(stm), catalog)

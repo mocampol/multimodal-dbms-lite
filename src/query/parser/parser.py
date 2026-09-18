@@ -158,6 +158,17 @@ class Parser:
         self.expect(TokenType.SEMICOL)
         return stm
 
+    def parse_sql_statements(self) -> List[Stm]:
+        """Parse a block containing zero or more semicolon-terminated statements."""
+        statements: List[Stm] = []
+        while not self.is_at_end():
+            if self.match(TokenType.SEMICOL):
+                continue
+            statements.append(self.parse_sql_statement())
+        if not statements:
+            self.error("una sentencia SQL")
+        return statements
+
     def parse_select(self) -> SelectStm:
         """<SelectStmt> ::= SELECT <SelectList> FROM ID [ <WhereClause> ] [ <GroupOrOrder> ]"""
         self.expect(TokenType.SELECT)

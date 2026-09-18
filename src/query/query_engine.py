@@ -43,12 +43,28 @@ def execute(sql: str, catalog):
 
     Raises QueryError on any lexical, syntactic, or semantic failure.
     """
+    statements = _parse_statements(sql)
+    if len(statements) != 1:
+        raise QueryError("Se recibieron varias sentencias; usa execute_many para ejecutar un bloque")
+    return _execute_statement(statements[0], catalog)
+
+
+def execute_many(sql: str, catalog):
+    """Run every semicolon-terminated statement in a SQL block in order."""
+    return [
+        (stm, _execute_statement(stm, catalog))
+        for stm in _parse_statements(sql)
+    ]
+
+
+def _parse_statements(sql: str):
     try:
-        scanner = Scanner(sql)
-        parser = Parser(scanner)
-        stm = parser.parse_sql_statement()
+        return Parser(Scanner(sql)).parse_sql_statements()
     except RuntimeError as e:
         raise QueryError(str(e)) from e
+
+
+def _execute_statement(stm, catalog):
 
     try:
         SemanticVisitor(catalog).check(stm)

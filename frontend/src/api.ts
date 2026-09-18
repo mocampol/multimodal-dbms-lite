@@ -67,7 +67,18 @@ export interface OtherQueryResult {
   transaction_id?: number
 }
 
-export type QueryResult = SelectQueryResult | MutationQueryResult | OtherQueryResult
+export interface BatchQueryResult {
+  type: 'BATCH'
+  statements: QueryResult[]
+  execution_ms: number
+}
+
+export type QueryResult = SelectQueryResult | MutationQueryResult | OtherQueryResult | BatchQueryResult
+export type SingleQueryResult = SelectQueryResult | MutationQueryResult | OtherQueryResult
+
+export function isBatchQueryResult(result: QueryResult): result is BatchQueryResult {
+  return 'statements' in result
+}
 
 export class ApiError extends Error {
   status: number

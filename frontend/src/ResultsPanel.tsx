@@ -1,4 +1,4 @@
-import type { QueryResult } from './api'
+import { isBatchQueryResult, type QueryResult, type SingleQueryResult } from './api'
 
 interface ResultsPanelProps {
   result: QueryResult | null
@@ -10,6 +10,27 @@ function ResultsPanel({ result, error, running }: ResultsPanelProps) {
   if (running) return <p className="panel-placeholder">Ejecutando consulta...</p>
   if (error) return <p className="error-text">Error: {error}</p>
   if (!result) return <p className="panel-placeholder">Query results will be shown here.</p>
+
+  if (isBatchQueryResult(result)) {
+    return (
+      <>
+        <p className="meta-line">
+          {result.statements.length} sentencia(s) · {result.execution_ms.toFixed(2)} ms
+        </p>
+        {result.statements.map((statement, index) => (
+          <div key={index}>
+            <p className="meta-line">#{index + 1} · {statement.type}</p>
+            {!isBatchQueryResult(statement) && <ResultContent result={statement} />}
+          </div>
+        ))}
+      </>
+    )
+  }
+
+  return <ResultContent result={result} />
+}
+
+function ResultContent({ result }: { result: SingleQueryResult }) {
 
   if (!('row_count' in result)) {
     const affected = 'rows_affected' in result ? `${result.rows_affected} fila(s) afectada(s)` : 'OK'
