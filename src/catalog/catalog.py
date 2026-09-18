@@ -347,7 +347,7 @@ class Catalog:
             index = schema.column_index(column_name)
             self._unique_values[(table_name, column_name)].discard(record[index].data)
 
-    def register_update(self, table_name: str, rid, old_record: Record, new_record: Record):
+    def register_update(self, table_name: str, old_rid, new_rid, old_record: Record, new_record: Record):
         schema = self.get_schema(table_name)
         for entry in self.indexes.get(table_name, []):
             index = self._physical_indexes.get(entry["index_id"])
@@ -356,12 +356,12 @@ class Catalog:
             column_index = schema.column_index(entry["column_name"])
             old_key = old_record[column_index]
             new_key = new_record[column_index]
-            if old_key.data != new_key.data:
+            if old_key.data != new_key.data or old_rid != new_rid:
                 if hasattr(index, "remove"):
-                    index.remove(old_key, rid)
+                    index.remove(old_key, old_rid)
                 else:
-                    index.delete(old_key, rid)
-                index.insert(new_key, rid)
+                    index.delete(old_key, old_rid)
+                index.insert(new_key, new_rid)
                 self._persist_index_root(entry, index)
         for column_name in schema.unique_columns():
             column_index = schema.column_index(column_name)
