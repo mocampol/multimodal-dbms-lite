@@ -147,13 +147,11 @@ def execute_delete(stm: DeleteStm, catalog, lock_rid=None, before_delete=None) -
             if stm.where_cond is None or _condition_matches(stm.where_cond, record, schema):
                 if lock_rid is not None:
                     lock_rid(rid, LockMode.EXCLUSIVE)
-                matches.append(rid)
-        for rid in matches:
-            record = storage.get(rid)
-            if record is not None:
-                if before_delete is not None:
-                    before_delete(rid, record)
-                catalog.unregister_delete(stm.table, record, rid)
+                matches.append((rid, record))
+        for rid, record in matches:
+            if before_delete is not None:
+                before_delete(rid, record)
+            catalog.unregister_delete(stm.table, record, rid)
             storage.delete(rid)
         return len(matches)
 
