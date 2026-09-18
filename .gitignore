@@ -1,0 +1,14 @@
+# Python - archivos compilados
+
+**pycache**/
+*.py[cod]
+*$py.class
+
+# Pytest
+
+.pytest_cache/
+
+# IDEs / editores
+
+.vscode/
+.idea/
