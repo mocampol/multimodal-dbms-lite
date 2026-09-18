@@ -10,12 +10,16 @@ function App() {
   const [result, setResult] = useState<QueryResult | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
 
   function handleRun() {
     setRunning(true)
     setError(null)
     runQuery(sql)
-      .then(setResult)
+      .then((data) => {
+        setResult(data)
+        setRefreshKey((key) => key + 1)
+      })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'No se pudo conectar con la API'))
       .finally(() => setRunning(false))
   }
@@ -29,7 +33,7 @@ function App() {
       <div className="app-layout">
         <section className="panel" aria-label="Files">
           <h2>Files</h2>
-          <FilesPanel />
+          <FilesPanel refreshKey={refreshKey} />
         </section>
 
         <div className="main-column">

@@ -8,7 +8,7 @@ interface ResultsPanelProps {
 
 function ResultsPanel({ result, error, running }: ResultsPanelProps) {
   if (running) return <p className="panel-placeholder">Ejecutando consulta...</p>
-  if (error) return <p className="panel-placeholder">Error: {error}</p>
+  if (error) return <p className="error-text">Error: {error}</p>
   if (!result) return <p className="panel-placeholder">Query results will be shown here.</p>
 
   if (!('row_count' in result)) {
@@ -25,26 +25,30 @@ function ResultsPanel({ result, error, running }: ResultsPanelProps) {
       <p className="meta-line">
         {result.row_count} fila(s) · {result.execution_ms.toFixed(2)} ms
       </p>
-      <div className="results-table-wrap">
-        <table className="columns-table">
-          <thead>
-            <tr>
-              {result.columns.map((column) => (
-                <th key={column}>{column}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {result.rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>
-                {row.map((value, cellIndex) => (
-                  <td key={cellIndex}>{value === null ? 'NULL' : String(value)}</td>
+      {result.row_count === 0 ? (
+        <p className="panel-placeholder">Sin resultados.</p>
+      ) : (
+        <div className="results-table-wrap">
+          <table className="columns-table">
+            <thead>
+              <tr>
+                {result.columns.map((column) => (
+                  <th key={column}>{column}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {result.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((value, cellIndex) => (
+                    <td key={cellIndex}>{value === null ? 'NULL' : String(value)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   )
 }

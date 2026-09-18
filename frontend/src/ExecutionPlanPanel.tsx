@@ -42,7 +42,7 @@ function flattenPlan(node: PlanNode): string[] {
 
 function ExecutionPlanPanel({ result, error, running }: ExecutionPlanPanelProps) {
   if (running) return <p className="panel-placeholder">Ejecutando consulta...</p>
-  if (error) return <p className="panel-placeholder">Error: {error}</p>
+  if (error) return <p className="error-text">Error: {error}</p>
   if (!result) return <p className="panel-placeholder">Execution steps will be listed here.</p>
   if (!result.plan) return <p className="panel-placeholder">Esta operación no tiene plan de ejecución.</p>
 

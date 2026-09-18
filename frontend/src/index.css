@@ -7,6 +7,7 @@
   --border: #e4d9f7;
   --text: #2e1065;
   --text-muted: #6b6375;
+  --error: #b3261e;
 
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
@@ -87,6 +88,12 @@ h1, h2, h3 {
 .panel-placeholder {
   color: var(--text-muted);
   font-size: 14px;
+}
+
+.error-text {
+  color: var(--error);
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .table-list {
