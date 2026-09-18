@@ -24,6 +24,7 @@ from query.parser.ast_nodes import (
     ColumnDef,
     CreateTableStm,
     CreateIndexStm,
+    DropTableStm,
     IndexType,
     StorageKind,
 )
@@ -150,9 +151,12 @@ class Parser:
             stm = self.parse_create_table()
         elif self.check(TokenType.CREATE_INDEX):
             stm = self.parse_create_index()
+        elif self.check(TokenType.DROP_TABLE):
+            self.advance()
+            stm = DropTableStm(self.expect(TokenType.ID).text)
         else:
             self.error(
-                "'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE' o 'CREATE INDEX'"
+                "'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE', 'CREATE INDEX' o 'DROP TABLE'"
             )
 
         self.expect(TokenType.SEMICOL)

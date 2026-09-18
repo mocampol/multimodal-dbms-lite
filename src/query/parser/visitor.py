@@ -23,6 +23,7 @@ from query.parser.ast_nodes import (
     UpdateStm,
     CreateTableStm,
     CreateIndexStm,
+    DropTableStm,
     IndexType,
     StorageKind,
 )
@@ -293,6 +294,12 @@ class SemanticVisitor(Visitor):
         self._require_column(schema, stm.column)
 
         self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
+        return None
+
+    def visit_drop_table_stm(self, stm: DropTableStm):
+        if not self.catalog.table_exists(stm.table):
+            raise SemanticError(f"La tabla '{stm.table}' no existe")
+        self.catalog.drop_table(stm.table)
         return None
 
     def visit_order_by_clause(self, clause: OrderByClause):

@@ -35,6 +35,7 @@ class TokenType(Enum):
 
     CREATE_TABLE = auto()
     CREATE_INDEX = auto()
+    DROP_TABLE = auto()
     ON = auto()
     USING = auto()
 
@@ -97,6 +98,7 @@ _TYPE_NAMES = {
 
     TokenType.CREATE_TABLE: "'CREATE TABLE'",
     TokenType.CREATE_INDEX: "'CREATE INDEX'",
+    TokenType.DROP_TABLE: "'DROP TABLE'",
     TokenType.ON: "'ON'",
     TokenType.USING: "'USING'",
 

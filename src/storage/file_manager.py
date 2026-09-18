@@ -61,6 +61,11 @@ class FileManager:
 
         return page_id
 
+    def reset(self):
+        """Truncate this file so a derived structure can be rebuilt."""
+        with open(self.file_path, "wb"):
+            pass
+
     def read_page(self, page_id: int) -> Page:
         """
         Reads page_id from disk and returns it as a Page object.

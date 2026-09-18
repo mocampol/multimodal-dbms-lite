@@ -163,6 +163,15 @@ class BufferManager:
                 self.file_manager.write_page(frame.page)
                 frame.dirty_bit = False
 
+    def reset(self):
+        """Discard cached pages and reset the backing file to empty."""
+        if any(frame.pin_count > 0 for frame in self.frames):
+            raise RuntimeError("No se puede resetear un Buffer Pool con páginas pinneadas")
+        self.frames = [Frame() for _ in range(self.pool_size)]
+        self.page_table.clear()
+        self._access_counter = 0
+        self.file_manager.reset()
+
     def allocate_page(self) -> int:
         """
         Allocates a brand-new page on disk (via FileManager) and returns

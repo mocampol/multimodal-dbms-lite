@@ -7,6 +7,8 @@ system tables are loaded fully into memory at engine startup, since they
 are small and are consulted on every query.
 """
 
+import os
+
 from common.value import DataType, Value
 from common.schema import Schema, Column
 from common.record import Record
@@ -227,11 +229,58 @@ class Catalog:
         if table_name not in self.tables:
             raise TableNotFoundError(f"La tabla '{table_name}' no existe")
 
+        table_id = self.tables[table_name].table_id
+        storage = self._table_storage[table_name]
+
+        index_entries = self.indexes.get(table_name, [])
+        index_ids = {entry["index_id"] for entry in index_entries}
+        for rid, record in self._sys_indexes.scan_with_rid():
+            if record[1].data == table_id:
+                self._sys_indexes.delete(rid)
+        for index_id in index_ids:
+            index = self._physical_indexes.pop(index_id, None)
+            self._index_catalog_rids.pop(index_id, None)
+            self._remove_file(self._buffer_file_path(index))
+
+        for rid, record in self._sys_columns.scan_with_rid():
+            if record[0].data == table_id:
+                self._sys_columns.delete(rid)
+        for rid, record in self._sys_tables.scan_with_rid():
+            if record[0].data == table_id:
+                self._sys_tables.delete(rid)
+
+        self._sys_indexes.bm.flush_all()
+        self._sys_columns.bm.flush_all()
+        self._sys_tables.bm.flush_all()
+
         del self.tables[table_name]
         self._table_storage.pop(table_name, None)
         self.indexes.pop(table_name, None)
+        self._clustered_indexes.pop(table_name, None)
         for key in [k for k in self._unique_values if k[0] == table_name]:
             del self._unique_values[key]
+
+        self._remove_file(self._buffer_file_path(storage))
+        if hasattr(storage, "overflow"):
+            self._remove_file(self._buffer_file_path(storage.overflow))
+
+    @staticmethod
+    def _buffer_file_path(buffer_owner):
+        if buffer_owner is None:
+            return None
+        buffer_manager = getattr(buffer_owner, "bm", None)
+        if buffer_manager is None:
+            buffer_manager = getattr(buffer_owner, "buffer_manager", None)
+        file_manager = getattr(buffer_manager, "file_manager", None)
+        return getattr(file_manager, "file_path", None)
+
+    @staticmethod
+    def _remove_file(file_path):
+        if file_path is not None:
+            try:
+                os.remove(file_path)
+            except FileNotFoundError:
+                pass
 
     def get_storage(self, table_name: str):
         """
@@ -294,6 +343,8 @@ class Catalog:
 
     def _create_index(self, index_type, table_name, column_name, index_id, key_type):
         manager = self._index_buffer_factory(table_name, column_name, index_id)
+        if manager.file_manager.page_count() > 0:
+            manager.reset()
         if index_type == "btree":
             return BTree(key_type, manager)
         return ExtendibleHashIndex.create(manager, key_type)

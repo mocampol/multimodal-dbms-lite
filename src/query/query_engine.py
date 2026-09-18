@@ -9,7 +9,7 @@ from query.parser.parser import Parser
 from query.parser.visitor import SemanticVisitor, SemanticError
 from query.parser.ast_nodes import (
     SelectStm, InsertStm, DeleteStm, UpdateStm, CreateTableStm, CreateIndexStm,
-    BeginTransactionStm, EndTransactionStm,
+    DropTableStm, BeginTransactionStm, EndTransactionStm,
 )
 from transaction import TransactionManager, LockMode
 
@@ -139,7 +139,7 @@ def _execute_statement(stm, catalog):
             )
         return _execute_write(manager, stm.table, lambda: execute_update(stm, catalog, lock_rid=lock_rid, on_update=on_update), None)
 
-    if isinstance(stm, (CreateTableStm, CreateIndexStm)):
+    if isinstance(stm, (CreateTableStm, CreateIndexStm, DropTableStm)):
         return None
 
     raise QueryError(f"Tipo de sentencia no soportado: {type(stm).__name__}")

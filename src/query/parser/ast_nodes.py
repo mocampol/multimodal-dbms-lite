@@ -90,6 +90,10 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
+    def visit_drop_table_stm(self, stm: "DropTableStm"):
+        ...
+
+    @abstractmethod
     def visit_order_by_clause(self, clause: "OrderByClause"):
         ...
 
@@ -377,3 +381,14 @@ class CreateIndexStm(Stm):
             f"CREATE INDEX {self.index_name} ON {self.table} "
             f"({self.column}) USING {self.index_type.name}"
         )
+
+
+class DropTableStm(Stm):
+    def __init__(self, table: str):
+        self.table = table
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_drop_table_stm(self)
+
+    def __repr__(self):
+        return f"DROP TABLE {self.table}"

@@ -42,6 +42,8 @@ class ClusteredIndex:
                 if key is not None
             }
             if self._tree is None and current:
+                if self.bm.file_manager.page_count() > 0:
+                    self.bm.reset()
                 self._tree = BTree(self.key_type, self.bm)
 
             for page_id, old_key in list(self._page_minima.items()):
