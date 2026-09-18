@@ -483,7 +483,7 @@ class SequentialFile:
         header_end = HEADER_SIZE + num_slots * SLOT_SIZE
         contiguous_free = free_space_offset - header_end
         if contiguous_free < SLOT_SIZE + len(payload):
-            return False
+            return None
 
         insert_at = 0
         for i in range(num_slots):
