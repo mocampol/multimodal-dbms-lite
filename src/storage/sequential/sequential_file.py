@@ -59,29 +59,33 @@ STATUS_VALID = 1
 NO_NEXT_PAGE = -1
 
 
-class SeqRID:
+class SeqRID(RID):
     """
     Identifies where a record physically lives: either a slot in the
     main sorted chain, or a record in the overflow HeapFile.
 
-    Attributes:
-        in_overflow (bool): True if this points into the overflow file.
-        page_id (int): Main-chain page_id (ignored if in_overflow).
-        slot (int): Main-chain slot number (ignored if in_overflow).
-        overflow_rid (RID | None): RID into the overflow HeapFile,
-            set only when in_overflow is True.
+    Inherits from RID so it can be serialized by BTree nodes, which
+    expect a standard RID. We use the highest bit of page_id (1 << 31)
+    to encode whether this record is in the overflow file.
     """
 
     def __init__(self, in_overflow: bool, page_id: int = None, slot: int = None, overflow_rid: RID = None):
+        if in_overflow:
+            super().__init__(overflow_rid.page_id | (1 << 31), overflow_rid.slot)
+        else:
+            super().__init__(page_id, slot)
+        
         self.in_overflow = in_overflow
-        self.page_id = page_id
-        self.slot = slot
         self.overflow_rid = overflow_rid
+
+    @property
+    def real_page_id(self):
+        return self.page_id & ~(1 << 31)
 
     def __repr__(self):
         if self.in_overflow:
             return f"SeqRID(overflow={self.overflow_rid})"
-        return f"SeqRID(page={self.page_id}, slot={self.slot})"
+        return f"SeqRID(page={self.real_page_id}, slot={self.slot})"
 
 
 class SequentialFile:
@@ -171,17 +175,29 @@ class SequentialFile:
         """
         return self.search_in_page(self._find_target_page(key), key)
 
+    def _is_overflow(self, rid: RID) -> bool:
+        return getattr(rid, 'in_overflow', False) or bool(rid.page_id & (1 << 31))
+
+    def _get_overflow_rid(self, rid: RID) -> RID:
+        if getattr(rid, 'in_overflow', False) and getattr(rid, 'overflow_rid', None):
+            return rid.overflow_rid
+        return RID(rid.page_id & ~(1 << 31), rid.slot)
+
+    def _get_real_page_id(self, rid: RID) -> int:
+        return rid.page_id & ~(1 << 31)
+
     def delete(self, key_or_rid) -> int:
         """
         Lazily deletes every record matching key, or deletes a specific SeqRID.
         """
-        if isinstance(key_or_rid, SeqRID):
+        if isinstance(key_or_rid, RID):
             rid = key_or_rid
-            if rid.in_overflow:
-                self.overflow.delete(rid.overflow_rid)
+            if self._is_overflow(rid):
+                self.overflow.delete(self._get_overflow_rid(rid))
                 return 1
             else:
-                page = self.bm.fetch_page(rid.page_id)
+                real_page_id = self._get_real_page_id(rid)
+                page = self.bm.fetch_page(real_page_id)
                 try:
                     status, a, b = self._read_slot(page, rid.slot)
                     if status == STATUS_VALID:
@@ -189,7 +205,7 @@ class SequentialFile:
                         return 1
                     return 0
                 finally:
-                    self.bm.unpin_page(rid.page_id, is_dirty=True)
+                    self.bm.unpin_page(real_page_id, is_dirty=True)
         
         key = key_or_rid
         page_id = self._find_target_page(key)
@@ -222,9 +238,9 @@ class SequentialFile:
 
         return deleted
 
-    def update(self, rid: SeqRID, new_record: Record) -> SeqRID:
+    def update(self, rid: RID, new_record: Record) -> SeqRID:
         """
-        Updates a record by its SeqRID. If it fits in place and the key is
+        Updates a record by its SeqRID (or plain RID). If it fits in place and the key is
         unchanged, updates in place. Otherwise, deletes and re-inserts.
         """
         if not new_record.validate(self.schema):
@@ -233,11 +249,15 @@ class SequentialFile:
                 f"'{self.schema.table_name}': {new_record}"
             )
         
-        if rid.in_overflow:
-            self.overflow.update(rid.overflow_rid, new_record)
-            return rid
+        if self._is_overflow(rid):
+            self.overflow.update(self._get_overflow_rid(rid), new_record)
+            # Retain the SeqRID wrapper if it had one, otherwise reconstruct it
+            if getattr(rid, 'in_overflow', False):
+                return rid
+            return SeqRID(in_overflow=True, overflow_rid=self._get_overflow_rid(rid))
         
-        page = self.bm.fetch_page(rid.page_id)
+        real_page_id = self._get_real_page_id(rid)
+        page = self.bm.fetch_page(real_page_id)
         try:
             status, a, b = self._read_slot(page, rid.slot)
             payload = encode_record(new_record, self.schema)
@@ -246,12 +266,32 @@ class SequentialFile:
             if len(payload) <= b and old_record[self._key_index].data == new_record[self._key_index].data:
                 page.write_bytes(a, payload)
                 self._write_slot(page, rid.slot, STATUS_VALID, a, len(payload))
-                return rid
+                if getattr(rid, 'in_overflow', None) is not None:
+                    return rid
+                return SeqRID(in_overflow=False, page_id=real_page_id, slot=rid.slot)
         finally:
-            self.bm.unpin_page(rid.page_id, is_dirty=True)
+            self.bm.unpin_page(real_page_id, is_dirty=True)
 
         self.delete(rid)
         return self.insert(new_record)
+
+    def get(self, rid: RID) -> Record | None:
+        """
+        Retrieves a record by its RID. Used by secondary indexes which deserialize
+        plain RIDs instead of SeqRIDs.
+        """
+        if self._is_overflow(rid):
+            return self.overflow.get(self._get_overflow_rid(rid))
+
+        real_page_id = self._get_real_page_id(rid)
+        page = self.bm.fetch_page(real_page_id)
+        try:
+            status, a, b = self._read_slot(page, rid.slot)
+            if status == STATUS_VALID:
+                return decode_record(page.read_bytes(a, b), self.schema)
+            return None
+        finally:
+            self.bm.unpin_page(real_page_id, is_dirty=False)
 
     def scan(self):
         """
