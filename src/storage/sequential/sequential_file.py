@@ -152,15 +152,16 @@ class SequentialFile:
 
         page_id = self._find_target_page(key)
         page = self.bm.fetch_page(page_id)
-        inserted = self._try_insert_sorted(page, key, payload)
-        self.bm.unpin_page(page_id, is_dirty=inserted)
+        slot = self._try_insert_sorted(page, key, payload)
+        self.bm.unpin_page(page_id, is_dirty=(slot is not None))
 
-        if inserted:
-            return
+        if slot is not None:
+            return SeqRID(in_overflow=False, page_id=page_id, slot=slot)
 
         overflow_rid = self.overflow.insert(record)
         chain = self._overflow_chain.setdefault(page_id, [])
         bisect.insort(chain, (key, overflow_rid))
+        return SeqRID(in_overflow=True, overflow_rid=overflow_rid)
 
     def search(self, key) -> list[Record]:
         """
@@ -170,11 +171,27 @@ class SequentialFile:
         """
         return self.search_in_page(self._find_target_page(key), key)
 
-    def delete(self, key) -> int:
+    def delete(self, key_or_rid) -> int:
         """
-        Lazily deletes every record matching key (main chain and
-        overflow). Returns how many records were deleted.
+        Lazily deletes every record matching key, or deletes a specific SeqRID.
         """
+        if isinstance(key_or_rid, SeqRID):
+            rid = key_or_rid
+            if rid.in_overflow:
+                self.overflow.delete(rid.overflow_rid)
+                return 1
+            else:
+                page = self.bm.fetch_page(rid.page_id)
+                try:
+                    status, a, b = self._read_slot(page, rid.slot)
+                    if status == STATUS_VALID:
+                        self._write_slot(page, rid.slot, STATUS_EMPTY, a, b)
+                        return 1
+                    return 0
+                finally:
+                    self.bm.unpin_page(rid.page_id, is_dirty=True)
+        
+        key = key_or_rid
         page_id = self._find_target_page(key)
         deleted = 0
 
@@ -205,6 +222,37 @@ class SequentialFile:
 
         return deleted
 
+    def update(self, rid: SeqRID, new_record: Record) -> SeqRID:
+        """
+        Updates a record by its SeqRID. If it fits in place and the key is
+        unchanged, updates in place. Otherwise, deletes and re-inserts.
+        """
+        if not new_record.validate(self.schema):
+            raise ValueError(
+                f"El registro no es válido para el schema de "
+                f"'{self.schema.table_name}': {new_record}"
+            )
+        
+        if rid.in_overflow:
+            self.overflow.update(rid.overflow_rid, new_record)
+            return rid
+        
+        page = self.bm.fetch_page(rid.page_id)
+        try:
+            status, a, b = self._read_slot(page, rid.slot)
+            payload = encode_record(new_record, self.schema)
+            old_record = decode_record(page.read_bytes(a, b), self.schema)
+            
+            if len(payload) <= b and old_record[self._key_index].data == new_record[self._key_index].data:
+                page.write_bytes(a, payload)
+                self._write_slot(page, rid.slot, STATUS_VALID, a, len(payload))
+                return rid
+        finally:
+            self.bm.unpin_page(rid.page_id, is_dirty=True)
+
+        self.delete(rid)
+        return self.insert(new_record)
+
     def scan(self):
         """
         Yields every live record across the whole file, in ascending
@@ -213,6 +261,49 @@ class SequentialFile:
         a standard two-pointer merge, then moves to the next page.
         """
         yield from self.scan_from(self._head_page_id)
+
+    def scan_with_rid(self):
+        """
+        Yields (SeqRID, Record) for every live record in the file in ascending key order.
+        """
+        page_id = self._head_page_id
+        while page_id != NO_NEXT_PAGE:
+            page = self.bm.fetch_page(page_id)
+            try:
+                num_slots, _, next_page_id = self._read_header(page)
+                main_entries = []
+                for i in range(num_slots):
+                    status, a, b = self._read_slot(page, i)
+                    if status == STATUS_VALID:
+                        record = decode_record(page.read_bytes(a, b), self.schema)
+                        main_entries.append((record[self._key_index].data, SeqRID(in_overflow=False, page_id=page_id, slot=i), record))
+            finally:
+                self.bm.unpin_page(page_id, is_dirty=False)
+
+            overflow_entries = []
+            for k, overflow_rid in self._overflow_chain.get(page_id, []):
+                record = self.overflow.get(overflow_rid)
+                if record is not None:
+                    overflow_entries.append((k, SeqRID(in_overflow=True, overflow_rid=overflow_rid), record))
+
+            yield from self._merge_by_key_with_rid(main_entries, overflow_entries)
+            page_id = next_page_id
+
+    def _merge_by_key_with_rid(self, left: list, right: list):
+        i, j = 0, 0
+        while i < len(left) and j < len(right):
+            if left[i][0] <= right[j][0]:
+                yield left[i][1], left[i][2]
+                i += 1
+            else:
+                yield right[j][1], right[j][2]
+                j += 1
+        while i < len(left):
+            yield left[i][1], left[i][2]
+            i += 1
+        while j < len(right):
+            yield right[j][1], right[j][2]
+            j += 1
 
     def reorganize(self):
         """
@@ -381,11 +472,11 @@ class SequentialFile:
             yield right[j][1]
             j += 1
 
-    def _try_insert_sorted(self, page: Page, key, payload: bytes) -> bool:
+    def _try_insert_sorted(self, page: Page, key, payload: bytes) -> int | None:
         """
         Attempts to insert payload (whose key is key) into page,
-        keeping the ItemId Array sorted by key. Returns True on success,
-        False if there isn't enough contiguous free space.
+        keeping the ItemId Array sorted by key. Returns slot index on success,
+        None if there isn't enough contiguous free space.
         """
         num_slots, free_space_offset, next_page_id = self._read_header(page)
 
@@ -414,7 +505,7 @@ class SequentialFile:
         page.write_bytes(new_offset, payload)
         self._write_slot(page, insert_at, STATUS_VALID, new_offset, len(payload))
         self._write_header(page, num_slots + 1, new_offset, next_page_id)
-        return True
+        return insert_at
 
     def _next_reusable_page_id(self, ordinal: int) -> int:
         """

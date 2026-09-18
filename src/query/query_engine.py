@@ -69,8 +69,8 @@ def execute(sql: str, catalog):
         if implicit:
             manager.begin()
         try:
-            manager.lock(f"table:{stm.table}", LockMode.SHARED)
-            plan = build_select_plan(stm, catalog)
+            lock_rid = lambda rid, mode: manager.lock(f"rid:{stm.table}:{rid}", mode)
+            plan = build_select_plan(stm, catalog, lock_rid=lock_rid)
             result = list(run_plan(plan))
             if implicit:
                 manager.commit()
@@ -82,9 +82,11 @@ def execute(sql: str, catalog):
 
     if isinstance(stm, InsertStm):
         storage = catalog.get_storage(stm.table)
+        lock_rid = lambda rid, mode: manager.lock(f"rid:{stm.table}:{rid}", mode)
         def insert_operation():
             return execute_insert(
                 stm, catalog,
+                lock_rid=lock_rid,
                 before_insert=lambda record: manager.log_data_change(
                     "INSERT", stm.table, None, None, _record_data(record)
                 ),
@@ -98,6 +100,7 @@ def execute(sql: str, catalog):
 
     if isinstance(stm, DeleteStm):
         storage = catalog.get_storage(stm.table)
+        lock_rid = lambda rid, mode: manager.lock(f"rid:{stm.table}:{rid}", mode)
         def before_delete(rid, record):
             manager.log_data_change("DELETE", stm.table, _rid_data(rid), _record_data(record), None)
             manager.add_undo(
@@ -105,17 +108,20 @@ def execute(sql: str, catalog):
                     catalog, stm.table, storage, record
                 )
             )
-        return _execute_write(manager, stm.table, lambda: execute_delete(stm, catalog, before_delete), None)
+        return _execute_write(manager, stm.table, lambda: execute_delete(stm, catalog, lock_rid=lock_rid, before_delete=before_delete), None)
 
     if isinstance(stm, UpdateStm):
         storage = catalog.get_storage(stm.table)
-        def before_update(rid, old_record, new_record):
-            manager.log_data_change("UPDATE", stm.table, _rid_data(rid), _record_data(old_record), _record_data(new_record))
+        lock_rid = lambda rid, mode: manager.lock(f"rid:{stm.table}:{rid}", mode)
+        def on_update(old_rid, new_rid, old_record, new_record):
+            if new_rid != old_rid:
+                manager.lock(f"rid:{stm.table}:{new_rid}", LockMode.EXCLUSIVE)
+            manager.log_data_change("UPDATE", stm.table, _rid_data(old_rid), _record_data(old_record), _record_data(new_record))
             manager.add_undo(
-                lambda rid=rid, old_record=old_record, new_record=new_record:
-                _undo_update(catalog, stm.table, storage, rid, new_record, old_record)
+                lambda old_rid=old_rid, new_rid=new_rid, old_record=old_record, new_record=new_record:
+                _undo_update(catalog, stm.table, storage, old_rid, new_rid, new_record, old_record)
             )
-        return _execute_write(manager, stm.table, lambda: execute_update(stm, catalog, before_update), None)
+        return _execute_write(manager, stm.table, lambda: execute_update(stm, catalog, lock_rid=lock_rid, on_update=on_update), None)
 
     if isinstance(stm, (CreateTableStm, CreateIndexStm)):
         return None
@@ -128,7 +134,6 @@ def _execute_write(manager, table_name, operation, after):
     if implicit:
         manager.begin()
     try:
-        manager.lock(f"table:{table_name}", LockMode.EXCLUSIVE)
         result = operation()
         if after is not None:
             after(result)
@@ -162,6 +167,6 @@ def _undo_delete(catalog, table_name, storage, record):
     catalog.register_insert_uniques(table_name, record)
 
 
-def _undo_update(catalog, table_name, storage, rid, current, previous):
-    storage.update(rid, previous)
-    catalog.register_update(table_name, rid, current, previous)
+def _undo_update(catalog, table_name, storage, old_rid, new_rid, current, previous):
+    restored_rid = storage.update(new_rid, previous)
+    catalog.register_update(table_name, new_rid, restored_rid, current, previous)

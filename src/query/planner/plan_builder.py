@@ -10,6 +10,7 @@ from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, UpdateStm, I
 from common.value import Value
 from common.record import Record
 from common.schema import Schema, Column
+from transaction.lock_manager import LockMode
 
 from query.executor.access.seq_scan import SeqScan
 from query.executor.access.index_scan import IndexScan
@@ -22,7 +23,7 @@ from query.executor.aggregate.hash_aggregate import HashAggregate
 from query.executor.join.hash_join import HashJoin
 
 
-def build_select_plan(stm: SelectStm, catalog):
+def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
     """
     Builds the physical plan for a SELECT statement:
     (Sequential/Index Scan) -> [Filter] -> [Sort] -> Projection
@@ -41,7 +42,7 @@ def build_select_plan(stm: SelectStm, catalog):
     if aggregate_items:
         if stm.join is not None:
             raise ValueError("Agregaciones sobre JOIN aún no están soportadas")
-        child = SeqScan(stm.table, catalog)
+        child = SeqScan(stm.table, catalog, lock_rid=lock_rid)
         if stm.where_cond is not None:
             child = Filter(child, stm.where_cond, schema)
         aggregate = HashAggregate(child, stm.group_by.columns if stm.group_by else [], schema, stm.columns)
@@ -56,8 +57,8 @@ def build_select_plan(stm: SelectStm, catalog):
         left_index = left_schema.column_index(left_join_column)
         right_index = right_join_schema.column_index(right_join_column)
         node = HashJoin(
-            SeqScan(stm.table, catalog),
-            SeqScan(stm.join.table, catalog),
+            SeqScan(stm.table, catalog, lock_rid=lock_rid),
+            SeqScan(stm.join.table, catalog, lock_rid=lock_rid),
             left_index if left_join_table == stm.table else right_index,
             right_index if right_join_table == stm.join.table else left_index,
         )
@@ -79,11 +80,11 @@ def build_select_plan(stm: SelectStm, catalog):
         return node
 
     # Equality predicates use a physical index when one is available.
-    node = SeqScan(stm.table, catalog)
+    node = SeqScan(stm.table, catalog, lock_rid=lock_rid)
     indexed = _equality_index(catalog, stm.table, stm.where_cond)
     if indexed is not None:
         index, key = indexed
-        node = IndexScan(index, catalog.get_storage(stm.table), key)
+        node = IndexScan(index, catalog.get_storage(stm.table), key, lock_rid=lock_rid)
 
     if stm.where_cond is not None and indexed is None:
         node = Filter(node, stm.where_cond, schema)
@@ -99,7 +100,7 @@ def build_select_plan(stm: SelectStm, catalog):
     return node
 
 
-def execute_insert(stm: InsertStm, catalog, before_insert=None) -> None:
+def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -> None:
     """
     INSERT has no plan tree: it's a single direct write, not a pull-based
     stream of tuples. Builds a Record from the AST's literal values (in
@@ -120,12 +121,14 @@ def execute_insert(stm: InsertStm, catalog, before_insert=None) -> None:
     if before_insert is not None:
         before_insert(record)
     rid = storage.insert(record)
+    if lock_rid is not None:
+        lock_rid(rid, LockMode.EXCLUSIVE)
     catalog.register_insert(stm.table, record, rid)
     catalog.register_insert_uniques(stm.table, record)
     return rid
 
 
-def execute_delete(stm: DeleteStm, catalog, before_delete=None) -> int:
+def execute_delete(stm: DeleteStm, catalog, lock_rid=None, before_delete=None) -> int:
     """
     DELETE also has no meaningful plan tree to stream to a consumer —
     it's a scan-and-mutate operation. Reuses SeqScan (+ Filter, if there's
@@ -142,6 +145,8 @@ def execute_delete(stm: DeleteStm, catalog, before_delete=None) -> int:
         matches = []
         for rid, record in storage.scan_with_rid():
             if stm.where_cond is None or _condition_matches(stm.where_cond, record, schema):
+                if lock_rid is not None:
+                    lock_rid(rid, LockMode.EXCLUSIVE)
                 matches.append(rid)
         for rid in matches:
             record = storage.get(rid)
@@ -163,7 +168,7 @@ def execute_delete(stm: DeleteStm, catalog, before_delete=None) -> int:
     raise ValueError("DELETE sin filtro sobre SequentialFile no está soportado")
 
 
-def execute_update(stm: UpdateStm, catalog, before_update=None) -> int:
+def execute_update(stm: UpdateStm, catalog, lock_rid=None, on_update=None) -> int:
     schema = catalog.get_schema(stm.table)
     storage = catalog.get_storage(stm.table)
     if not hasattr(storage, "scan_with_rid"):
@@ -173,14 +178,16 @@ def execute_update(stm: UpdateStm, catalog, before_update=None) -> int:
     matches = []
     for rid, record in storage.scan_with_rid():
         if _condition_matches(stm.where_cond, record, schema):
+            if lock_rid is not None:
+                lock_rid(rid, LockMode.EXCLUSIVE)
             values = list(record.values)
             values[column_index] = new_value
             matches.append((rid, record, Record(values)))
     for rid, old_record, new_record in matches:
-        if before_update is not None:
-            before_update(rid, old_record, new_record)
-        storage.update(rid, new_record)
-        catalog.register_update(stm.table, rid, old_record, new_record)
+        new_rid = storage.update(rid, new_record)
+        if on_update is not None:
+            on_update(rid, new_rid, old_record, new_record)
+        catalog.register_update(stm.table, rid, new_rid, old_record, new_record)
     return len(matches)
 
 

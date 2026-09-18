@@ -191,7 +191,7 @@ class HeapFile:
         self._write_slot(page, rid.slot, STATUS_FORWARDED, new_rid.page_id, new_rid.slot)
         self.bm.unpin_page(rid.page_id, is_dirty=True)
 
-        return rid
+        return new_rid
 
     def compact_page(self, page_id: int):
         """
