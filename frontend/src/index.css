@@ -126,6 +126,16 @@ h1, h2, h3 {
   border-left: 2px solid var(--border);
 }
 
+.meta-line {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.results-table-wrap {
+  overflow-x: auto;
+}
+
 .columns-table {
   width: 100%;
   border-collapse: collapse;
