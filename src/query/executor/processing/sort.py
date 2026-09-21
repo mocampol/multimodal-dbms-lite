@@ -86,7 +86,10 @@ class Sort(PlanNode):
             self._temp_dir = None
 
     def _sort_key(self, record: Record):
-        return tuple(record[index].data for index in self._indices)
+        return tuple(
+            (record[index].data is not None, record[index].data)
+            for index in self._indices
+        )
 
     def _write_run(self, records: list[Record]):
         records.sort(key=self._sort_key)

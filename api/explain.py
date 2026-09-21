@@ -32,14 +32,18 @@ def describe_plan(node) -> dict:
         children = [node.child]
     elif isinstance(node, Sort):
         info["order_by"] = node.columns
+        info["strategy"] = "external_sort_k_way_merge"
         children = [node.child]
     elif isinstance(node, HashAggregate):
         info["group_by"] = node.group_columns
+        info["strategy"] = "external_hash_partitioning"
         children = [node.child]
     elif isinstance(node, GroupAggregate):
+        info["strategy"] = "external_sort_then_stream"
         children = [node.child]
     elif isinstance(node, HashJoin):
         info["join_type"] = "hash"
+        info["strategy"] = "grace_hash_external"
         children = [node.left, node.right]
 
     if children:
