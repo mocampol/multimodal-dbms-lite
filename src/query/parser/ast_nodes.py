@@ -305,9 +305,9 @@ class SelectStm(Stm):
 
 
 class InsertStm(Stm):
-    """<InsertStmt> ::= INSERT_INTO ID VALUES LPAREN <ValueList> RPAREN"""
+    """<InsertStmt> ::= INSERT_INTO ID VALUES <ValueRow> { COMA <ValueRow> }"""
 
-    def __init__(self, table: str, values: List[Exp]):
+    def __init__(self, table: str, values: List[List[Exp]]):
         self.table = table
         self.values = values
 
@@ -315,8 +315,11 @@ class InsertStm(Stm):
         return visitor.visit_insert_stm(self)
 
     def __repr__(self):
-        vals = ", ".join(repr(v) for v in self.values)
-        return f"INSERT INTO {self.table} VALUES ({vals})"
+        rows = ", ".join(
+            f"({', '.join(repr(value) for value in row)})"
+            for row in self.values
+        )
+        return f"INSERT INTO {self.table} VALUES {rows}"
 
 
 class DeleteStm(Stm):

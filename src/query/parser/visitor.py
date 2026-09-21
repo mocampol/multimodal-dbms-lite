@@ -192,28 +192,29 @@ class SemanticVisitor(Visitor):
         schema = self.catalog.get_schema(stm.table)
         self._current_schema = schema
         try:
-            if len(stm.values) != len(schema.columns):
-                raise SemanticError(
-                    f"INSERT INTO {stm.table}: se esperaban {len(schema.columns)} "
-                    f"valores (uno por columna), pero se recibieron {len(stm.values)}"
-                )
-
-            for column, value_exp in zip(schema.columns, stm.values):
-                kind, payload = value_exp.accept(self)
-
-                if kind == "column":
+            for row in stm.values:
+                if len(row) != len(schema.columns):
                     raise SemanticError(
-                        f"INSERT INTO {stm.table}: '{payload.name}' es una referencia a "
-                        f"columna, no un literal. INSERT VALUES solo acepta literales "
-                        f"(NUM o STRING), no nombres de columna."
+                        f"INSERT INTO {stm.table}: se esperaban {len(schema.columns)} "
+                        f"valores (uno por columna), pero se recibieron {len(row)}"
                     )
 
-                value = Value(column.data_type, payload)
-                if not column.validate(value):
-                    raise SemanticError(
-                        f"INSERT INTO {stm.table}: el valor {payload!r} no es válido para "
-                        f"la columna '{column.name}' ({column!r})"
-                    )
+                for column, value_exp in zip(schema.columns, row):
+                    kind, payload = value_exp.accept(self)
+
+                    if kind == "column":
+                        raise SemanticError(
+                            f"INSERT INTO {stm.table}: '{payload.name}' es una referencia a "
+                            f"columna, no un literal. INSERT VALUES solo acepta literales "
+                            f"(NUM o STRING), no nombres de columna."
+                        )
+
+                    value = Value(column.data_type, payload)
+                    if not column.validate(value):
+                        raise SemanticError(
+                            f"INSERT INTO {stm.table}: el valor {payload!r} no es válido para "
+                            f"la columna '{column.name}' ({column!r})"
+                        )
         finally:
             self._current_schema = None
 

@@ -102,30 +102,27 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
 
 def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -> None:
     """
-    INSERT has no plan tree: it's a single direct write, not a pull-based
-    stream of tuples. Builds a Record from the AST's literal values (in
-    schema column order, already validated by SemanticVisitor) and
-    writes it straight to storage.
+    INSERT has no plan tree: it writes each literal row directly to storage.
     """
     schema = catalog.get_schema(stm.table)
     storage = catalog.get_storage(stm.table)
 
-    violated = catalog.check_insert_uniques(
-        stm.table,
-        Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, stm.values)]),
-    )
-    if violated:
-        raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
+    rids = []
+    for values in stm.values:
+        record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, values)])
+        violated = catalog.check_insert_uniques(stm.table, record)
+        if violated:
+            raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
 
-    record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, stm.values)])
-    if before_insert is not None:
-        before_insert(record)
-    rid = storage.insert(record)
-    if lock_rid is not None:
-        lock_rid(rid, LockMode.EXCLUSIVE)
-    catalog.register_insert(stm.table, record, rid)
-    catalog.register_insert_uniques(stm.table, record)
-    return rid
+        if before_insert is not None:
+            before_insert(record)
+        rid = storage.insert(record)
+        if lock_rid is not None:
+            lock_rid(rid, LockMode.EXCLUSIVE)
+        catalog.register_insert(stm.table, record, rid)
+        catalog.register_insert_uniques(stm.table, record)
+        rids.append(rid)
+    return rids
 
 
 def execute_delete(stm: DeleteStm, catalog, lock_rid=None, before_delete=None) -> int:

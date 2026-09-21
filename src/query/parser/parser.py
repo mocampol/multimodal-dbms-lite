@@ -289,14 +289,21 @@ class Parser:
         return order_by, group_by
 
     def parse_insert(self) -> InsertStm:
-        """<InsertStmt> ::= INSERT_INTO ID VALUES LPAREN <ValueList> RPAREN"""
+        """<InsertStmt> ::= INSERT_INTO ID VALUES <ValueRow> { COMA <ValueRow> }"""
         self.expect(TokenType.INSERT_INTO)
         table_tok = self.expect(TokenType.ID)
         self.expect(TokenType.VALUES)
+        rows = [self.parse_value_row()]
+        while self.match(TokenType.COMA):
+            rows.append(self.parse_value_row())
+        return InsertStm(table_tok.text, rows)
+
+    def parse_value_row(self) -> List[Exp]:
+        """<ValueRow> ::= LPAREN <ValueList> RPAREN"""
         self.expect(TokenType.LPAREN)
         values = self.parse_value_list()
         self.expect(TokenType.RPAREN)
-        return InsertStm(table_tok.text, values)
+        return values
 
     def parse_value_list(self) -> List[Exp]:
         """<ValueList> ::= <Value> { COMA <Value> }"""

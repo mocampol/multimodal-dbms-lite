@@ -111,7 +111,12 @@ def _execute_statement(stm, catalog):
             manager,
             stm.table,
             insert_operation,
-            lambda rid: manager.add_undo(lambda: _undo_insert(catalog, stm.table, storage, rid)),
+            lambda rids: [
+                manager.add_undo(
+                    lambda rid=rid: _undo_insert(catalog, stm.table, storage, rid)
+                )
+                for rid in rids
+            ],
         )
 
     if isinstance(stm, DeleteStm):
