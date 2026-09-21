@@ -23,6 +23,29 @@ class TransactionManager:
         self._local = threading.local()
         self._mutex = threading.Lock()
         self._states = {}
+        self._buffer_managers = []
+
+    def register_buffer_manager(self, buffer_manager):
+        """Register a buffer manager whose dirty pages can be flushed."""
+        if buffer_manager not in self._buffer_managers:
+            self._buffer_managers.append(buffer_manager)
+
+    def flush(self, buffer_managers=()):
+        """Persist the WAL before flushing registered dirty pages.
+
+        A FLUSH marker makes the durability boundary visible in the WAL. The
+        marker is durable before any data page is written, preserving WAL.
+        """
+        txn_id = self.current() or 0
+        self.log_manager.append(txn_id, "FLUSH")
+        self.log_manager.flush()
+
+        managers = list(self._buffer_managers)
+        for buffer_manager in buffer_managers:
+            if buffer_manager not in managers:
+                managers.append(buffer_manager)
+        for buffer_manager in managers:
+            buffer_manager.flush_all()
 
     def begin(self) -> int:
         if getattr(self._local, "txn_id", None) is not None:
@@ -62,6 +85,7 @@ class TransactionManager:
     def commit(self):
         txn_id = self.require()
         self.log_manager.commit(txn_id)
+        self.log_manager.flush()
         with self._mutex:
             self._states[txn_id] = TransactionState.COMMITTED
         self.lock_manager.release_all(txn_id)

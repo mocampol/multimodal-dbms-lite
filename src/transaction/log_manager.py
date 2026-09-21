@@ -33,6 +33,16 @@ class LogManager:
             stream.close()
         return record
 
+    def flush(self):
+        """Force all WAL bytes to stable storage."""
+        with self._lock:
+            stream = open(self.path, "a", encoding="utf-8")
+            try:
+                stream.flush()
+                os.fsync(stream.fileno())
+            finally:
+                stream.close()
+
     def begin(self, txn_id: int):
         return self.append(txn_id, "BEGIN")
 
