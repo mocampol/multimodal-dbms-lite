@@ -17,6 +17,13 @@ Physical layout of one page:
         status = FORWARDED:  (a, b) = (page_id, slot) of where this record
                               now actually lives, on a DIFFERENT page.
 
+Free-space strategy:
+    Inserts reuse EMPTY slots first. If no slot fits, pages containing EMPTY
+    slots are compacted in place before a new page is allocated. Compaction
+    preserves slot numbers and forwarding pointers, so existing RIDs remain
+    valid. Deletes through forwarding pointers invalidate the original RID
+    and release the target slot as well.
+
 Classes:
     HeapFile: insert/get/delete/update/scan over slotted pages.
 """
@@ -101,6 +108,21 @@ class HeapFile:
                 self._page_hint = idx
                 return RID(page_id, slot)
 
+        # Reclaim fragmented data areas before growing the file. Compacting
+        # only pages with deleted slots keeps the common insert path cheap.
+        for offset in range(n):
+            idx = (self._page_hint + offset) % n
+            page_id = self._known_pages[idx]
+            if not self._page_has_empty_slot(page_id):
+                continue
+            self.compact_page(page_id)
+            page = self.bm.fetch_page(page_id)
+            slot = self._try_insert_into_page(page, payload)
+            self.bm.unpin_page(page_id, is_dirty=(slot is not None))
+            if slot is not None:
+                self._page_hint = idx
+                return RID(page_id, slot)
+
         # No existing page had room: allocate a new one.
         page_id = self._allocate_and_init_page()
         self._known_pages.append(page_id)
@@ -137,12 +159,17 @@ class HeapFile:
         try:
             status, a, b = self._read_slot(page, rid.slot)
             if status == STATUS_FORWARDED:
-                self.bm.unpin_page(rid.page_id, is_dirty=False)
-                self.delete(RID(a, b))
-                return
-            self._write_slot(page, rid.slot, STATUS_EMPTY, a, b)
+                target = RID(a, b)
+                self._write_slot(page, rid.slot, STATUS_EMPTY, 0, 0)
+            else:
+                target = None
+                if status == STATUS_EMPTY:
+                    return
+                self._write_slot(page, rid.slot, STATUS_EMPTY, a, b)
         finally:
-            self.bm.unpin_page(rid.page_id, is_dirty=True)
+            self.bm.unpin_page(rid.page_id, is_dirty=(status != STATUS_EMPTY))
+        if target is not None:
+            self.delete(target)
 
     def update(self, rid: RID, new_record: Record) -> RID:
         """
@@ -300,6 +327,17 @@ class HeapFile:
         self._write_slot(page, num_slots, STATUS_VALID, new_offset, len(payload))
         self._write_header(page, num_slots + 1, new_offset)
         return num_slots
+
+    def _page_has_empty_slot(self, page_id: int) -> bool:
+        page = self.bm.fetch_page(page_id)
+        try:
+            num_slots, _ = self._read_header(page)
+            return any(
+                self._read_slot(page, slot)[0] == STATUS_EMPTY
+                for slot in range(num_slots)
+            )
+        finally:
+            self.bm.unpin_page(page_id, is_dirty=False)
 
 
     def _read_header(self, page: Page) -> tuple:
