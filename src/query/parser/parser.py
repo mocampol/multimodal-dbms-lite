@@ -12,6 +12,7 @@ from query.parser.ast_nodes import (
     BinaryOp,
     Stm,
     SelectStm,
+    ExplainStm,
     InsertStm,
     DeleteStm,
     OrderByClause,
@@ -24,7 +25,6 @@ from query.parser.ast_nodes import (
     ColumnDef,
     CreateTableStm,
     CreateIndexStm,
-    DropTableStm,
     IndexType,
     StorageKind,
 )
@@ -131,10 +131,15 @@ class Parser:
     # =========================================================================
 
     def parse_sql_statement(self) -> Stm:
-        """<Statement> ::= ( <SelectStmt> | <InsertStmt> | <DeleteStmt>
-                            | <CreateTableStmt> | <CreateIndexStmt> ) SEMICOL"""
-        if self.check(TokenType.SELECT):
-            stm: Stm = self.parse_select()
+        """<Statement> ::= [ EXPLAIN [ ANALYZE ] ] ( <SelectStmt> | <InsertStmt>
+                            | <DeleteStmt> | <CreateTableStmt> | <CreateIndexStmt> ) SEMICOL
+
+        EXPLAIN / EXPLAIN ANALYZE solo envuelven un <SelectStmt> por ahora
+        (ver ExplainStm en ast_nodes.py)."""
+        if self.check(TokenType.EXPLAIN):
+            stm: Stm = self.parse_explain()
+        elif self.check(TokenType.SELECT):
+            stm = self.parse_select()
         elif self.check(TokenType.INSERT_INTO):
             stm = self.parse_insert()
         elif self.check(TokenType.DELETE):
@@ -151,27 +156,22 @@ class Parser:
             stm = self.parse_create_table()
         elif self.check(TokenType.CREATE_INDEX):
             stm = self.parse_create_index()
-        elif self.check(TokenType.DROP_TABLE):
-            self.advance()
-            stm = DropTableStm(self.expect(TokenType.ID).text)
         else:
             self.error(
-                "'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE', 'CREATE INDEX' o 'DROP TABLE'"
+                "'EXPLAIN', 'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE' o 'CREATE INDEX'"
             )
 
         self.expect(TokenType.SEMICOL)
         return stm
 
-    def parse_sql_statements(self) -> List[Stm]:
-        """Parse a block containing zero or more semicolon-terminated statements."""
-        statements: List[Stm] = []
-        while not self.is_at_end():
-            if self.match(TokenType.SEMICOL):
-                continue
-            statements.append(self.parse_sql_statement())
-        if not statements:
-            self.error("una sentencia SQL")
-        return statements
+    def parse_explain(self) -> ExplainStm:
+        """<Statement> ::= EXPLAIN [ ANALYZE ] <SelectStmt>"""
+        self.expect(TokenType.EXPLAIN)
+        analyze = self.match(TokenType.ANALYZE)
+        if not self.check(TokenType.SELECT):
+            self.error("'SELECT' (EXPLAIN solo soporta SELECT por ahora)")
+        inner = self.parse_select()
+        return ExplainStm(inner, analyze)
 
     def parse_select(self) -> SelectStm:
         """<SelectStmt> ::= SELECT <SelectList> FROM ID [ <WhereClause> ] [ <GroupOrOrder> ]"""
@@ -289,21 +289,14 @@ class Parser:
         return order_by, group_by
 
     def parse_insert(self) -> InsertStm:
-        """<InsertStmt> ::= INSERT_INTO ID VALUES <ValueRow> { COMA <ValueRow> }"""
+        """<InsertStmt> ::= INSERT_INTO ID VALUES LPAREN <ValueList> RPAREN"""
         self.expect(TokenType.INSERT_INTO)
         table_tok = self.expect(TokenType.ID)
         self.expect(TokenType.VALUES)
-        rows = [self.parse_value_row()]
-        while self.match(TokenType.COMA):
-            rows.append(self.parse_value_row())
-        return InsertStm(table_tok.text, rows)
-
-    def parse_value_row(self) -> List[Exp]:
-        """<ValueRow> ::= LPAREN <ValueList> RPAREN"""
         self.expect(TokenType.LPAREN)
         values = self.parse_value_list()
         self.expect(TokenType.RPAREN)
-        return values
+        return InsertStm(table_tok.text, values)
 
     def parse_value_list(self) -> List[Exp]:
         """<ValueList> ::= <Value> { COMA <Value> }"""

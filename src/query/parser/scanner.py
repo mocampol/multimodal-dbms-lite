@@ -33,6 +33,7 @@ class Scanner:
             lexeme = self.input[self.first:self.current]
             upper = lexeme.upper()
             words = {
+                "EXPLAIN": TokenType.EXPLAIN, "ANALYZE": TokenType.ANALYZE,
                 "SELECT": TokenType.SELECT, "FROM": TokenType.FROM, "JOIN": TokenType.JOIN,
                 "WHERE": TokenType.WHERE, "DELETE": TokenType.DELETE, "UPDATE": TokenType.UPDATE,
                 "SET": TokenType.SET, "VALUES": TokenType.VALUES,
@@ -52,7 +53,6 @@ class Scanner:
                 "END": ("TRANSACTION", TokenType.END_TRANSACTION),
                 "ORDER": ("BY", TokenType.ORDER_BY), "GROUP": ("BY", TokenType.GROUP_BY),
                 "INSERT": ("INTO", TokenType.INSERT_INTO), "CREATE": ("TABLE", TokenType.CREATE_TABLE),
-                "DROP": ("TABLE", TokenType.DROP_TABLE),
                 "PRIMARY": ("KEY", TokenType.PRIMARY_KEY), "NOT": ("NULL", TokenType.NOT_NULL),
                 "DOUBLE": ("PRECISION", TokenType.T_DOUBLE_PRECISION),
             }

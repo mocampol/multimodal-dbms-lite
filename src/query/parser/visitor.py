@@ -12,6 +12,7 @@ from query.parser.ast_nodes import (
     BinaryOp,
     Stm,
     SelectStm,
+    ExplainStm,
     InsertStm,
     DeleteStm,
     OrderByClause,
@@ -23,7 +24,6 @@ from query.parser.ast_nodes import (
     UpdateStm,
     CreateTableStm,
     CreateIndexStm,
-    DropTableStm,
     IndexType,
     StorageKind,
 )
@@ -143,6 +143,12 @@ class SemanticVisitor(Visitor):
 
         return None
 
+    def visit_explain_stm(self, stm: ExplainStm):
+        # EXPLAIN no agrega reglas semánticas propias: el plan que se
+        # explica es el mismo que se ejecutaría, así que basta con que
+        # la sentencia interna sea válida.
+        return stm.inner.accept(self)
+
     def _validate_join(self, stm, left_schema, right_schema):
         left_table, left_column = stm.join.left.split(".", 1)
         right_table, right_column = stm.join.right.split(".", 1)
@@ -192,29 +198,28 @@ class SemanticVisitor(Visitor):
         schema = self.catalog.get_schema(stm.table)
         self._current_schema = schema
         try:
-            for row in stm.values:
-                if len(row) != len(schema.columns):
+            if len(stm.values) != len(schema.columns):
+                raise SemanticError(
+                    f"INSERT INTO {stm.table}: se esperaban {len(schema.columns)} "
+                    f"valores (uno por columna), pero se recibieron {len(stm.values)}"
+                )
+
+            for column, value_exp in zip(schema.columns, stm.values):
+                kind, payload = value_exp.accept(self)
+
+                if kind == "column":
                     raise SemanticError(
-                        f"INSERT INTO {stm.table}: se esperaban {len(schema.columns)} "
-                        f"valores (uno por columna), pero se recibieron {len(row)}"
+                        f"INSERT INTO {stm.table}: '{payload.name}' es una referencia a "
+                        f"columna, no un literal. INSERT VALUES solo acepta literales "
+                        f"(NUM o STRING), no nombres de columna."
                     )
 
-                for column, value_exp in zip(schema.columns, row):
-                    kind, payload = value_exp.accept(self)
-
-                    if kind == "column":
-                        raise SemanticError(
-                            f"INSERT INTO {stm.table}: '{payload.name}' es una referencia a "
-                            f"columna, no un literal. INSERT VALUES solo acepta literales "
-                            f"(NUM o STRING), no nombres de columna."
-                        )
-
-                    value = Value(column.data_type, payload)
-                    if not column.validate(value):
-                        raise SemanticError(
-                            f"INSERT INTO {stm.table}: el valor {payload!r} no es válido para "
-                            f"la columna '{column.name}' ({column!r})"
-                        )
+                value = Value(column.data_type, payload)
+                if not column.validate(value):
+                    raise SemanticError(
+                        f"INSERT INTO {stm.table}: el valor {payload!r} no es válido para "
+                        f"la columna '{column.name}' ({column!r})"
+                    )
         finally:
             self._current_schema = None
 
@@ -295,12 +300,6 @@ class SemanticVisitor(Visitor):
         self._require_column(schema, stm.column)
 
         self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
-        return None
-
-    def visit_drop_table_stm(self, stm: DropTableStm):
-        if not self.catalog.table_exists(stm.table):
-            raise SemanticError(f"La tabla '{stm.table}' no existe")
-        self.catalog.drop_table(stm.table)
         return None
 
     def visit_order_by_clause(self, clause: OrderByClause):
