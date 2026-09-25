@@ -180,7 +180,7 @@ class BinaryExp(Exp):
 
 # Auxiliary clauses (<GroupOrOrder>)
 class OrderByClause:
-    """ORDER_BY ID { COMA ID }"""
+    """ORDER_BY QualifiedName { COMA QualifiedName }"""
 
     def __init__(self, columns: Optional[List[str]] = None):
         self.columns: List[str] = columns if columns is not None else []
@@ -193,7 +193,7 @@ class OrderByClause:
 
 
 class GroupByClause:
-    """GROUP_BY ID { COMA ID }"""
+    """GROUP_BY QualifiedName { COMA QualifiedName }"""
 
     def __init__(self, columns: Optional[List[str]] = None):
         self.columns: List[str] = columns if columns is not None else []
@@ -292,13 +292,15 @@ class SelectStm(Stm):
         return visitor.visit_select_stm(self)
 
     def __repr__(self):
-        parts = [f"SELECT {', '.join(self.columns)} FROM {self.table}"]
+        parts = [
+            f"SELECT {', '.join(column.name if isinstance(column, AggregateSpec) else column for column in self.columns)} FROM {self.table}"
+        ]
         if self.where_cond is not None:
             parts.append(f"WHERE {self.where_cond!r}")
-        if self.order_by is not None:
-            parts.append(repr(self.order_by))
         if self.group_by is not None:
             parts.append(repr(self.group_by))
+        if self.order_by is not None:
+            parts.append(repr(self.order_by))
         if self.join is not None:
             parts.insert(2, repr(self.join))
         return " ".join(parts)

@@ -131,13 +131,15 @@ class SemanticVisitor(Visitor):
                         self._require_select_column(stm, col)
 
             if stm.where_cond is not None:
-                stm.where_cond.accept(self)
+                self._validate_select_condition(stm, stm.where_cond)
 
             if stm.order_by is not None:
-                stm.order_by.accept(self)
+                for column in stm.order_by.columns:
+                    self._require_select_column(stm, column)
 
             if stm.group_by is not None:
-                stm.group_by.accept(self)
+                for column in stm.group_by.columns:
+                    self._require_select_column(stm, column)
         finally:
             self._current_schema = None
 
@@ -161,17 +163,47 @@ class SemanticVisitor(Visitor):
         if aggregate.column == "*":
             raise SemanticError(f"{aggregate.function}(*) no está soportado")
         self._require_select_column(stm, aggregate.column)
-        column_name = aggregate.column.split(".")[-1]
-        schema = self._current_schema
-        column = schema.get_column(column_name)
+        column = self._require_select_column(stm, aggregate.column)
         if aggregate.function in {"SUM", "AVG"} and column.data_type not in _NUMERIC_TYPES:
             raise SemanticError(f"{aggregate.function} requiere una columna numérica")
+
+    def _validate_select_condition(self, stm, condition):
+        left_column = self._require_select_column(stm, condition.left.value)
+        if isinstance(condition.right, IdExp):
+            right_column = self._require_select_column(stm, condition.right.value)
+            if left_column.data_type != right_column.data_type:
+                raise SemanticError(
+                    f"Tipos incompatibles en condición '{condition!r}': "
+                    f"'{left_column.name}' es {left_column.data_type.value} pero "
+                    f"'{right_column.name}' es {right_column.data_type.value}"
+                )
+            compare_type = left_column.data_type
+        else:
+            value = Value(left_column.data_type, condition.right.value)
+            if not left_column.validate(value):
+                raise SemanticError(
+                    f"Tipos incompatibles en condición '{condition!r}': el valor "
+                    f"{condition.right.value!r} no es válido para '{left_column.name}'"
+                )
+            compare_type = left_column.data_type
+
+        if condition.op in (BinaryOp.LE_OP, BinaryOp.LEQ_OP, BinaryOp.GT_OP, BinaryOp.GEQ_OP):
+            if compare_type not in ORDERABLE_TYPES:
+                raise SemanticError(
+                    f"El operador '{condition!r}' no aplica sobre columnas de tipo "
+                    f"{compare_type.value} (no son ordenables)"
+                )
+        if condition.op == BinaryOp.NEQ_OP:
+            if compare_type not in ORDERABLE_TYPES and compare_type not in _STRING_TYPES:
+                raise SemanticError(
+                    f"El operador '{condition!r}' no aplica sobre columnas de tipo "
+                    f"{compare_type.value} (no es comparable)"
+                )
 
     def _require_select_column(self, stm, name):
         if "." not in name:
             if stm.join is None:
-                self._require_column(self._current_schema, name)
-                return
+                return self._require_column(self._current_schema, name)
             matches = [
                 schema.get_column(name)
                 for schema in (self._current_schema, self.catalog.get_schema(stm.join.table))
@@ -179,12 +211,12 @@ class SemanticVisitor(Visitor):
             ]
             if len(matches) != 1:
                 raise SemanticError(f"La columna '{name}' es ambigua o no existe")
-            return
+            return matches[0]
         table, column = name.split(".", 1)
         if table == stm.table:
-            self._require_column(self._current_schema, column)
+            return self._require_column(self._current_schema, column)
         elif stm.join is not None and table == stm.join.table:
-            self._require_column(self.catalog.get_schema(stm.join.table), column)
+            return self._require_column(self.catalog.get_schema(stm.join.table), column)
         else:
             raise SemanticError(f"La tabla '{table}' no participa en la consulta")
 

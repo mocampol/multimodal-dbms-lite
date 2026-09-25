@@ -115,7 +115,7 @@ class HashAggregate(PlanNode):
 		for item in self.output_items:
 			if not isinstance(item, AggregateSpec) or item.function == "COUNT":
 				continue
-			index = self.schema.column_index(item.column)
+			index = self.schema.column_index(getattr(item, "resolved_column", item.column))
 			value = record[index].data
 			if value is None:
 				continue
@@ -138,7 +138,7 @@ class HashAggregate(PlanNode):
 				values.append(Value(DataType.INTEGER, state["count"]))
 				continue
 			aggregate = state["aggregates"].get(item.name)
-			index = self.schema.column_index(item.column)
+			index = self.schema.column_index(getattr(item, "resolved_column", item.column))
 			if aggregate is None:
 				value = None
 			elif item.function == "SUM":
@@ -178,7 +178,7 @@ class HashAggregate(PlanNode):
 	def _aggregate(self, item, records):
 		if item.function == "COUNT":
 			return Value(DataType.INTEGER, len(records))
-		index = self.schema.column_index(item.column)
+		index = self.schema.column_index(getattr(item, "resolved_column", item.column))
 		data = [record[index].data for record in records if record[index].data is not None]
 		if item.function == "SUM":
 			return Value(self.schema.columns[index].data_type, sum(data))

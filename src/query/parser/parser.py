@@ -194,10 +194,7 @@ class Parser:
         if self.check(TokenType.WHERE):
             where_cond = self.parse_where_clause()
 
-        order_by: Optional[OrderByClause] = None
-        group_by: Optional[GroupByClause] = None
-        if self.check(TokenType.ORDER_BY) or self.check(TokenType.GROUP_BY):
-            order_by, group_by = self.parse_group_or_order()
+        order_by, group_by = self.parse_group_or_order()
 
         return SelectStm(columns, table, where_cond, order_by, group_by, join)
 
@@ -239,9 +236,8 @@ class Parser:
         return self.parse_condition()
 
     def parse_condition(self) -> Exp:
-        """<Condition> ::= ID <Operator> <Value>"""
-        id_tok = self.expect(TokenType.ID)
-        left = IdExp(id_tok.text)
+        """<Condition> ::= QualifiedName <Operator> <Value>"""
+        left = IdExp(self.parse_qualified_name())
 
         op = self.parse_operator()
         right = self.parse_value()
@@ -264,27 +260,26 @@ class Parser:
             tok = self.expect(TokenType.STRING)
             return StringExp(tok.text)
         if self.check(TokenType.ID):
-            tok = self.expect(TokenType.ID)
-            return IdExp(tok.text)
+            return IdExp(self.parse_qualified_name())
         self.error("un valor (NUM, STRING o ID)")
 
     def parse_group_or_order(self):
-        """<GroupOrOrder> ::= ORDER_BY ID { COMA ID } | GROUP_BY ID { COMA ID }"""
+        """<GroupOrOrder> ::= [ GROUP_BY QualifiedNameList ] [ ORDER_BY QualifiedNameList ]"""
         order_by: Optional[OrderByClause] = None
         group_by: Optional[GroupByClause] = None
 
-        if self.match(TokenType.ORDER_BY):
-            columns = [self.expect(TokenType.ID).text]
-            while self.match(TokenType.COMA):
-                columns.append(self.expect(TokenType.ID).text)
-            order_by = OrderByClause(columns)
-        elif self.match(TokenType.GROUP_BY):
-            columns = [self.expect(TokenType.ID).text]
-            while self.match(TokenType.COMA):
-                columns.append(self.expect(TokenType.ID).text)
-            group_by = GroupByClause(columns)
-        else:
-            self.error("'ORDER BY' o 'GROUP BY'")
+        while self.check(TokenType.ORDER_BY) or self.check(TokenType.GROUP_BY):
+            if self.match(TokenType.ORDER_BY):
+                columns = [self.parse_qualified_name()]
+                while self.match(TokenType.COMA):
+                    columns.append(self.parse_qualified_name())
+                order_by = OrderByClause(columns)
+            else:
+                self.expect(TokenType.GROUP_BY)
+                columns = [self.parse_qualified_name()]
+                while self.match(TokenType.COMA):
+                    columns.append(self.parse_qualified_name())
+                group_by = GroupByClause(columns)
 
         return order_by, group_by
 

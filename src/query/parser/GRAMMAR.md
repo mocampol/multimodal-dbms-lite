@@ -3,10 +3,12 @@
 <SelectStmt>   ::= SELECT <SelectList> FROM ID [ <WhereClause> ] [ <GroupOrOrder> ]
 <SelectList>   ::= MUL | ID { COMA ID }
 <WhereClause>  ::= WHERE <Condition>
-<Condition>    ::= ID <Operator> <Value>
+<Condition>    ::= <QualifiedName> <Operator> <Value>
 <Operator>     ::= EQ | LE | LEQ | GT | GEQ
-<Value>        ::= NUM | STRING | ID
-<GroupOrOrder> ::= ORDER_BY ID { COMA ID } | GROUP_BY ID { COMA ID }
+<Value>        ::= NUM | STRING | <QualifiedName>
+<QualifiedName> ::= ID [ DOT ID ]
+<GroupOrOrder> ::= { GROUP_BY <QualifiedName> { COMA <QualifiedName> } }
+				   { ORDER_BY <QualifiedName> { COMA <QualifiedName> } }
 <InsertStmt>   ::= INSERT_INTO ID VALUES <ValueRow> { COMA <ValueRow> }
 <ValueRow>     ::= LPAREN <ValueList> RPAREN
 <ValueList>    ::= <Value> { COMA <Value> }
