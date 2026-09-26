@@ -42,8 +42,31 @@ h1, h2, h3 {
 }
 
 .app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border);
+}
+
+.csv-import-trigger {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.csv-import-trigger .error-text {
+  margin: 0;
+  max-width: 420px;
+  text-align: right;
+}
+
+.hint-text {
+  margin-right: auto;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
 .app-header h1 {
@@ -199,4 +222,120 @@ h1, h2, h3 {
 
 .run-button:hover {
   background: var(--accent-hover);
+}
+
+.run-button:disabled,
+.secondary-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secondary-button {
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: rgba(124, 58, 237, 0.08);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(46, 16, 101, 0.35);
+}
+
+.modal {
+  width: min(860px, 100%);
+  max-height: calc(100svh - 32px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(46, 16, 101, 0.2);
+}
+
+.modal h3 {
+  font-size: 17px;
+}
+
+.modal .meta-line {
+  margin: 0;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-actions .run-button {
+  margin-top: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.field input,
+.field select,
+.schema-editor input:not([type='checkbox']),
+.schema-editor select {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text);
+  background: var(--editor-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.field input,
+.field select {
+  max-width: 320px;
+}
+
+.schema-editor input:not([type='checkbox']) {
+  width: 100%;
+  min-width: 110px;
+}
+
+.schema-editor .size-input {
+  width: 80px;
+  min-width: 0;
+}
+
+.schema-editor input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+.skipped-list {
+  margin: 0;
+  padding-left: 20px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 13px;
+  color: var(--error);
 }

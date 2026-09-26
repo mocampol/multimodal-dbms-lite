@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ApiError, runQuery, type QueryResult } from './api'
+import CsvImport from './CsvImport'
 import ExecutionPlanPanel from './ExecutionPlanPanel'
 import FilesPanel from './FilesPanel'
 import QueryPanel from './QueryPanel'
@@ -28,6 +29,7 @@ function App() {
     <>
       <header className="app-header">
         <h1>Multimodal DBMS Lite</h1>
+        <CsvImport onImported={() => setRefreshKey((key) => key + 1)} />
       </header>
 
       <div className="app-layout">

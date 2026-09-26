@@ -6,18 +6,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import engine
-from routers import tables, query as query_router
+from routers import tables, imports, query as query_router
 
 from catalog.exceptions import (
     TableAlreadyExistsError,
     TableNotFoundError,
     ColumnNotFoundError,
     UniqueConstraintError,
+)
+from loader import (
+    DuplicateColumnNameError,
+    EmptyCSVError,
+    InconsistentRowError,
+    UnsupportedTypeError,
 )
 from query.query_engine import QueryError
 
@@ -41,6 +47,7 @@ app.add_middleware(
 
 app.include_router(tables.router)
 app.include_router(query_router.router)
+app.include_router(imports.router)
 
 
 @app.get("/health")
@@ -54,6 +61,10 @@ def _known_error(status: int):
     return handler
 
 
+def _http_error(_request: Request, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+
+
 def _unexpected_error(_request: Request, exc: Exception):
     logger.exception("Error no manejado")
     return JSONResponse(status_code=500, content={"error": "Error interno del servidor"})
@@ -65,4 +76,9 @@ app.add_exception_handler(ColumnNotFoundError, _known_error(404))
 app.add_exception_handler(TableAlreadyExistsError, _known_error(409))
 app.add_exception_handler(UniqueConstraintError, _known_error(409))
 app.add_exception_handler(ValueError, _known_error(400))
+app.add_exception_handler(EmptyCSVError, _known_error(400))
+app.add_exception_handler(InconsistentRowError, _known_error(400))
+app.add_exception_handler(UnsupportedTypeError, _known_error(400))
+app.add_exception_handler(DuplicateColumnNameError, _known_error(400))
+app.add_exception_handler(HTTPException, _http_error)
 app.add_exception_handler(Exception, _unexpected_error)

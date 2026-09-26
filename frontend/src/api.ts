@@ -146,3 +146,47 @@ export function runQuery(sql: string) {
     body: JSON.stringify({ sql }),
   })
 }
+
+export interface CsvColumn {
+  name: string
+  type: string
+  size: number | null
+  nullable: boolean
+  is_unique: boolean
+  is_primary_key: boolean
+}
+
+export interface CsvPreview {
+  upload_id: string
+  table_name: string
+  columns: CsvColumn[]
+  preview_rows: string[][]
+  data_types: string[]
+}
+
+export type CsvOnError = 'stop' | 'ignore'
+
+export interface CsvImportResult {
+  table_name: string
+  inserted: number
+  skipped: { row: number; reason: string }[]
+}
+
+export function previewCsv(file: File) {
+  return request<CsvPreview>(`/import/csv/preview?filename=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/csv' },
+    body: file,
+  })
+}
+
+export function confirmCsv(uploadId: string, tableName: string, columns: CsvColumn[], onError: CsvOnError) {
+  return request<CsvImportResult>('/import/csv/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ upload_id: uploadId, table_name: tableName, columns, on_error: onError }),
+  })
+}
+
+export function discardCsv(uploadId: string) {
+  return request<{ ok: boolean }>(`/import/csv/${encodeURIComponent(uploadId)}`, { method: 'DELETE' })
+}
