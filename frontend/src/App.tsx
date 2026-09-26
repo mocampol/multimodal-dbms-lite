@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ApiError, runQuery, type QueryResult } from './api'
+import CsvImport from './CsvImport'
 import ExecutionPlanPanel from './ExecutionPlanPanel'
 import FilesPanel from './FilesPanel'
 import QueryPanel from './QueryPanel'
@@ -34,6 +35,7 @@ function App() {
         <section className="panel" aria-label="Files">
           <h2>Files</h2>
           <FilesPanel refreshKey={refreshKey} />
+          <CsvImport onImported={() => setRefreshKey((key) => key + 1)} />
         </section>
 
         <div className="main-column">
