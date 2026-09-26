@@ -29,6 +29,47 @@ Physical layout of one main-chain page:
     ORDER encodes the sort order, so inserting in the middle only means
     shifting small 9-byte slot entries, never the record bytes themselves.
 
+Algorithms:
+
+    ORDERED INSERTION (_try_insert_sorted):
+        1. Find the correct insertion position by scanning the ItemId Array
+           left-to-right and comparing only VALID slots' keys. EMPTY slots
+           are skipped — they do not affect key order.
+        2. Shift all slot entries to the right of insert_at by one position
+           (only 9-byte metadata entries are moved, never record bytes).
+        3. Append the serialized record at the top of the Data Area
+           (free_space_offset grows downward) and write the new slot entry.
+        4. If there is not enough contiguous free space (slot header + payload),
+           return None → the caller routes the record to the Overflow File.
+        INVARIANT: After every insert, all VALID slots in the ItemId Array
+        are in non-decreasing key order.
+
+    LAZY DELETION (delete):
+        - By RID: locate the slot, flip status VALID → EMPTY. The record
+          bytes remain on disk; only the slot's status bit changes. Space
+          is reclaimed only during reorganize().
+        - By key: scan all slots on the target page for matching keys;
+          mark each as EMPTY. Also removes matching entries from the
+          in-memory overflow chain (actually deletes them from the HeapFile).
+        After deletion, maybe_reorganize() is called automatically: if the
+        wasted-space ratio has crossed the threshold it triggers a full
+        reorganization immediately.
+
+    REORGANIZATION (reorganize / maybe_reorganize):
+        Trigger condition: wasted_space_ratio() > reorganize_threshold (default 30%).
+        The wasted ratio is:
+            wasted = Σ(length + SLOT_SIZE for each EMPTY slot) +
+                     (overflow_file_pages × PAGE_SIZE)
+            total  = main_chain_pages × PAGE_SIZE + overflow_file_pages × PAGE_SIZE
+        Algorithm:
+            1. Collect all live records via scan() — already yields them in
+               ascending key order by merging main-chain + overflow per page.
+            2. Clear the overflow chain and reset the overflow HeapFile.
+            3. Re-distribute records across pages, leaving 20% free space
+               per page for future inserts before the next reorg is needed.
+            4. Reuse already-allocated pages before allocating new ones.
+               (Note: leftover pages are reset but not physically truncated.)
+
 Classes:
     SeqRID: Identifies a record's location, either in the main chain or
             in the overflow file (delete() needs this distinction).
@@ -236,6 +277,12 @@ class SequentialFile:
         if chain:
             self._overflow_chain[page_id] = remaining
 
+        # Automatically trigger reorganization if wasted space has grown
+        # beyond the configured threshold (default 30%). This enforces the
+        # acceptance criterion: "reorganize when the gap exceeds the threshold".
+        if deleted > 0:
+            self.maybe_reorganize()
+
         return deleted
 
     def update(self, rid: RID, new_record: Record) -> SeqRID:
@@ -423,8 +470,11 @@ class SequentialFile:
                 self.bm.unpin_page(page_id, is_dirty=False)
             page_id = next_page_id
 
-        overflow_count = sum(len(chain) for chain in self._overflow_chain.values())
-        overflow_bytes = overflow_count * 128  # rough estimate; refine if needed
+        # Use the actual number of pages allocated by the overflow HeapFile
+        # instead of a per-record estimate. This is exact and avoids under/over
+        # counting when record sizes vary significantly across the schema.
+        overflow_pages = self.overflow.bm.file_manager.page_count()
+        overflow_bytes = overflow_pages * PAGE_SIZE
         wasted += overflow_bytes
         total += overflow_bytes
 
@@ -529,13 +579,16 @@ class SequentialFile:
         for i in range(num_slots):
             status, a, b = self._read_slot(page, i)
             if status == STATUS_VALID:
+                # Only VALID slots carry a meaningful key for ordering.
+                # EMPTY slots are skipped: advancing insert_at past them
+                # would break the invariant that VALID slots stay sorted.
                 existing_key = decode_record(page.read_bytes(a, b), self.schema)[self._key_index].data
                 if existing_key <= key:
                     insert_at = i + 1
                 else:
                     break
-            else:
-                insert_at = i + 1
+            # EMPTY slots: do NOT advance insert_at; they are invisible
+            # to the ordering logic and will be reclaimed by reorganize().
 
         for i in range(num_slots, insert_at, -1):
             status, a, b = self._read_slot(page, i - 1)
