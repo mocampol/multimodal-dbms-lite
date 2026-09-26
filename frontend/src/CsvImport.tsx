@@ -84,24 +84,28 @@ function CsvImport({ onImported }: CsvImportProps) {
     setError(null)
   }
 
+  const hasPrimaryKey = columns.some((column) => column.is_primary_key)
+
   return (
     <>
-      <input
-        ref={fileInput}
-        type="file"
-        accept=".csv,text/csv"
-        hidden
-        onChange={(event) => handleFile(event.target.files?.[0])}
-      />
-      <button
-        type="button"
-        className="secondary-button"
-        onClick={() => fileInput.current?.click()}
-        disabled={busy}
-      >
-        {busy && !preview ? 'Analizando...' : 'Importar CSV'}
-      </button>
-      {error && !preview && <p className="error-text">Error: {error}</p>}
+      <div className="csv-import-trigger">
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".csv,text/csv"
+          hidden
+          onChange={(event) => handleFile(event.target.files?.[0])}
+        />
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => fileInput.current?.click()}
+          disabled={busy}
+        >
+          {busy && !preview ? 'Analizando...' : 'Importar CSV'}
+        </button>
+        {error && !preview && <p className="error-text">Error: {error}</p>}
+      </div>
 
       {preview && (
         <div className="modal-backdrop">
@@ -244,6 +248,9 @@ function CsvImport({ onImported }: CsvImportProps) {
                 {error && <p className="error-text">Error: {error}</p>}
 
                 <div className="modal-actions">
+                  {!hasPrimaryKey && (
+                    <span className="hint-text">Marca una columna como Primary Key para continuar</span>
+                  )}
                   <button type="button" className="secondary-button" onClick={handleClose} disabled={busy}>
                     Cancelar
                   </button>
@@ -251,7 +258,7 @@ function CsvImport({ onImported }: CsvImportProps) {
                     type="button"
                     className="run-button"
                     onClick={handleConfirm}
-                    disabled={busy || tableName.trim() === ''}
+                    disabled={busy || tableName.trim() === '' || !hasPrimaryKey}
                   >
                     {busy ? 'Importando...' : 'Importar'}
                   </button>

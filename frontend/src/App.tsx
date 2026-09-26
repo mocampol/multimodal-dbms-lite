@@ -29,13 +29,13 @@ function App() {
     <>
       <header className="app-header">
         <h1>Multimodal DBMS Lite</h1>
+        <CsvImport onImported={() => setRefreshKey((key) => key + 1)} />
       </header>
 
       <div className="app-layout">
         <section className="panel" aria-label="Files">
           <h2>Files</h2>
           <FilesPanel refreshKey={refreshKey} />
-          <CsvImport onImported={() => setRefreshKey((key) => key + 1)} />
         </section>
 
         <div className="main-column">
