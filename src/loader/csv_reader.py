@@ -2,6 +2,7 @@ import csv
 from pathlib import Path
 
 from common.schema import Schema, Column
+from common.value import DataType
 
 from .exceptions import EmptyCSVError, InconsistentRowError, DuplicateColumnNameError
 from .type_inference import narrow_type, narrow_varchar_size, resolve_varchar_size
@@ -10,14 +11,14 @@ from .type_inference import narrow_type, narrow_varchar_size, resolve_varchar_si
 def infer_schema(table_name: str, csv_path: Path) -> Schema:
     """
     Infers a full Schema for table_name from csv_path's header and
-    values, reading the file exactly once, row by row. table_name is
-    a placeholder at this stage if called from prepare_import() before
-    the user has chosen a final name — the caller may rename the
+    values, reading the file exactly once, row by row. table_name may
+    be a placeholder if called before the user has chosen a final
+    name (e.g. during a preview step) — the caller can rename the
     resulting Schema before passing it to load_csv().
     """
     csv_path = Path(csv_path)
 
-    with open(csv_path, newline="", encoding="utf-8") as f:
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
         try:
             header = next(reader)
@@ -51,7 +52,6 @@ def infer_schema(table_name: str, csv_path: Path) -> Schema:
     if not saw_any_row:
         raise EmptyCSVError(f"'{csv_path}' no tiene ninguna fila de datos, solo cabecera")
 
-    from common.value import DataType
     columns = []
     for i, name in enumerate(header):
         data_type = candidates[i] if candidates[i] is not None else DataType.VARCHAR
