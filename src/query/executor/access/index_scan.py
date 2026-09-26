@@ -49,3 +49,10 @@ class IndexScan(PlanNode):
 		self._records = []
 		self._cursor = 0
 
+	def describe_self(self) -> dict:
+		return {
+			"node": "IndexScan",
+			"access": "index_scan",
+			"index_type": type(self.index).__name__,
+			"key": self.key.data,
+		}

@@ -1,4 +1,4 @@
-import { isBatchQueryResult, type QueryResult, type SingleQueryResult } from './api'
+import { isBatchQueryResult, isExplainQueryResult, type QueryResult, type SingleQueryResult } from './api'
 
 interface ResultsPanelProps {
   result: QueryResult | null
@@ -31,6 +31,16 @@ function ResultsPanel({ result, error, running }: ResultsPanelProps) {
 }
 
 function ResultContent({ result }: { result: SingleQueryResult }) {
+
+  if (isExplainQueryResult(result)) {
+    return (
+      <p className="meta-line">
+        {result.type === 'explain_analyze'
+          ? `EXPLAIN ANALYZE · ${result.row_count} fila(s) · ${result.elapsed_ms?.toFixed(3)} ms (ejecución del plan) · ${result.execution_ms.toFixed(2)} ms (total) · ver panel de Execution Plan`
+          : `EXPLAIN · plan generado sin ejecutar · ver panel de Execution Plan`}
+      </p>
+    )
+  }
 
   if (!('row_count' in result)) {
     const affected = 'rows_affected' in result ? `${result.rows_affected} fila(s) afectada(s)` : 'OK'

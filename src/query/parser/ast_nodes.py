@@ -62,6 +62,10 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
+    def visit_explain_stm(self, stm: "ExplainStm"):
+        ...
+
+    @abstractmethod
     def visit_insert_stm(self, stm: "InsertStm"):
         ...
 
@@ -87,10 +91,6 @@ class Visitor(ABC):
 
     @abstractmethod
     def visit_create_index_stm(self, stm: "CreateIndexStm"):
-        ...
-
-    @abstractmethod
-    def visit_drop_table_stm(self, stm: "DropTableStm"):
         ...
 
     @abstractmethod
@@ -306,6 +306,34 @@ class SelectStm(Stm):
         return " ".join(parts)
 
 
+class ExplainStm(Stm):
+    """<Statement> ::= EXPLAIN [ ANALYZE ] <SelectStmt>
+
+    Envuelve una sentencia SELECT ya parseada sin modificarla. `analyze`
+    indica si además de mostrar el plan físico hay que ejecutarlo y
+    reportar estadísticas reales (EXPLAIN ANALYZE) o solo mostrar el
+    plan sin correrlo (EXPLAIN).
+
+    Restringido a SelectStm por ahora: INSERT/DELETE no tienen un plan
+    de acceso en el sentido que pide este comando.
+    """
+
+    def __init__(self, inner: "SelectStm", analyze: bool = False):
+        self.inner = inner
+        self.analyze = analyze
+
+    @property
+    def table(self) -> str:
+        return self.inner.table
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_explain_stm(self)
+
+    def __repr__(self):
+        prefix = "EXPLAIN ANALYZE" if self.analyze else "EXPLAIN"
+        return f"{prefix} {self.inner!r}"
+
+
 class InsertStm(Stm):
     """<InsertStmt> ::= INSERT_INTO ID [ LPAREN <ColumnNameList> RPAREN ] VALUES <ValueRow> { COMA <ValueRow> }"""
 
@@ -388,14 +416,3 @@ class CreateIndexStm(Stm):
             f"CREATE INDEX {self.index_name} ON {self.table} "
             f"({self.column}) USING {self.index_type.name}"
         )
-
-
-class DropTableStm(Stm):
-    def __init__(self, table: str):
-        self.table = table
-
-    def accept(self, visitor: Visitor):
-        return visitor.visit_drop_table_stm(self)
-
-    def __repr__(self):
-        return f"DROP TABLE {self.table}"

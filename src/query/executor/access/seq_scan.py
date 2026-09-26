@@ -45,3 +45,6 @@ class SeqScan(PlanNode):
     def close(self) -> None:
         # HeapFile.scan() already unpins each page as it iterates
         self._generator = None
+
+    def describe_self(self) -> dict:
+        return {"node": "SeqScan", "access": "sequential_scan", "table": self.table_name}
