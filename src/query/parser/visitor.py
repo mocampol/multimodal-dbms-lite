@@ -224,14 +224,37 @@ class SemanticVisitor(Visitor):
         schema = self.catalog.get_schema(stm.table)
         self._current_schema = schema
         try:
-            for row in stm.values:
-                if len(row) != len(schema.columns):
+            if stm.columns is not None:
+                seen = set()
+                target_columns = []
+                for name in stm.columns:
+                    if name in seen:
+                        raise SemanticError(
+                            f"INSERT INTO {stm.table}: columna duplicada '{name}' en la lista de columnas"
+                        )
+                    seen.add(name)
+                    target_columns.append(self._require_column(schema, name))
+
+                missing_required = [
+                    column.name for column in schema.columns
+                    if column.name not in seen and not column.nullable
+                ]
+                if missing_required:
                     raise SemanticError(
-                        f"INSERT INTO {stm.table}: se esperaban {len(schema.columns)} "
+                        f"INSERT INTO {stm.table}: falta especificar valor para la(s) columna(s) "
+                        f"NOT NULL {', '.join(missing_required)}"
+                    )
+            else:
+                target_columns = schema.columns
+            
+            for row in stm.values:
+                if len(row) != len(target_columns):
+                    raise SemanticError(
+                        f"INSERT INTO {stm.table}: se esperaban {len(target_columns)} "
                         f"valores (uno por columna), pero se recibieron {len(row)}"
                     )
 
-                for column, value_exp in zip(schema.columns, row):
+                for column, value_exp in zip(target_columns, row):
                     kind, payload = value_exp.accept(self)
 
                     if kind == "column":
