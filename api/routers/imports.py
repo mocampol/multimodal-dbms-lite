@@ -84,6 +84,8 @@ def confirm_csv(payload: CsvImportConfirm):
             is_unique=col.is_unique,
         ))
     schema = Schema(payload.table_name, columns)
+    if schema.primary_key() is None:
+        raise ValueError("Debes elegir una columna como Primary Key antes de importar")
 
     result = load_csv(catalog, str(path), schema, on_error=payload.on_error)
 
