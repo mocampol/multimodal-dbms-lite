@@ -72,6 +72,19 @@ class HashJoin(PlanNode):
 			self._temp_dir.cleanup()
 			self._temp_dir = None
 
+	def children(self) -> list:
+		return [self.left, self.right]
+
+	def replace_children(self, new_children: list) -> None:
+		self.left, self.right = new_children
+
+	def describe_self(self) -> dict:
+		return {
+			"node": "HashJoin",
+			"left_key": self.left_key,
+			"right_key": self.right_key,
+		}
+
 	def _partition(self, node: PlanNode, key_index: int, prefix: str, depth: int):
 		paths = [
 			os.path.join(self._temp_dir.name, f"{prefix}-{depth}-{index}.bin")
@@ -200,4 +213,3 @@ class _PartitionReader(PlanNode):
 		if self.handle is not None:
 			self.handle.close()
 			self.handle = None
-

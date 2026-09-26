@@ -27,3 +27,10 @@ class ClusteredScan(PlanNode):
     def close(self) -> None:
         self._records = []
         self._cursor = 0
+
+    def describe_self(self) -> dict:
+        return {
+            "node": "ClusteredScan",
+            "index": type(self.index).__name__,
+            "key": repr(self.key),
+        }

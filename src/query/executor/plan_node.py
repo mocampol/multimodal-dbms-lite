@@ -33,3 +33,27 @@ class PlanNode(ABC):
     def close(self) -> None:
         """Releases any resources held by this node and its children."""
         ...
+
+    def children(self) -> list["PlanNode"]:
+        """Direct child plan nodes, in a stable order (e.g. left/right for
+        joins). Default: no children — this is a leaf/access node."""
+        return []
+
+    def replace_children(self, new_children: list["PlanNode"]) -> None:
+        """Replaces this node's children in place, in the same order
+        children() returns them. Used by EXPLAIN ANALYZE to splice in
+        instrumented wrappers around each child without touching this
+        node's own execution logic. Default: no-op for a leaf node —
+        raises if called with a non-empty list, since that would mean
+        children() and replace_children() are out of sync."""
+        if new_children:
+            raise NotImplementedError(
+                f"{type(self).__name__} no declara children() pero se "
+                "le pidió replace_children() con hijos"
+            )
+
+    def describe_self(self) -> dict:
+        """One-line, node-specific description for EXPLAIN — this node's
+        own parameters (table, condition, columns...), without recursing
+        into children. Default: just the class name."""
+        return {"node": type(self).__name__}

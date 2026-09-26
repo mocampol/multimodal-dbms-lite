@@ -91,6 +91,15 @@ class Sort(PlanNode):
             for index in self._indices
         )
 
+    def children(self) -> list:
+        return [self.child]
+
+    def replace_children(self, new_children: list) -> None:
+        (self.child,) = new_children
+
+    def describe_self(self) -> dict:
+        return {"node": "Sort", "columns": self.columns}
+
     def _write_run(self, records: list[Record]):
         records.sort(key=self._sort_key)
         path = tempfile.NamedTemporaryFile(

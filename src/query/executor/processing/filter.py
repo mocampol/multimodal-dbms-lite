@@ -41,6 +41,15 @@ class Filter(PlanNode):
     def close(self) -> None:
         self.child.close()
 
+    def children(self) -> list:
+        return [self.child]
+
+    def replace_children(self, new_children: list) -> None:
+        (self.child,) = new_children
+
+    def describe_self(self) -> dict:
+        return {"node": "Filter", "condition": repr(self.condition)}
+
     def _matches(self, record: Record) -> bool:
         left_idx = self.schema.column_index(self.condition.left.value)
         left_value = record[left_idx].data

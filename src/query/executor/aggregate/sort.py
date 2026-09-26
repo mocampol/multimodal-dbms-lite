@@ -56,6 +56,19 @@ class SortAggregate(PlanNode):
 		self._pending = None
 		self._finished = True
 
+	def children(self) -> list:
+		return [self.child]
+
+	def replace_children(self, new_children: list) -> None:
+		(self.child,) = new_children
+
+	def describe_self(self) -> dict:
+		return {
+			"node": "SortAggregate",
+			"group_columns": self.group_columns,
+			"output_items": [str(item) for item in self.output_items],
+		}
+
 
 class _RowsNode(PlanNode):
 	def __init__(self, rows):
@@ -74,4 +87,3 @@ class _RowsNode(PlanNode):
 
 	def close(self) -> None:
 		self.cursor = 0
-

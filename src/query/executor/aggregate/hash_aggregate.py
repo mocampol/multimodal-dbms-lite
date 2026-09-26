@@ -211,3 +211,15 @@ class HashAggregate(PlanNode):
 			self._temp_dir.cleanup()
 			self._temp_dir = None
 
+	def children(self) -> list:
+		return [self.child]
+
+	def replace_children(self, new_children: list) -> None:
+		(self.child,) = new_children
+
+	def describe_self(self) -> dict:
+		return {
+			"node": "HashAggregate",
+			"group_columns": self.group_columns,
+			"output_items": [str(item) for item in self.output_items],
+		}

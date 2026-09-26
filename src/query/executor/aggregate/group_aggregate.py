@@ -17,6 +17,7 @@ class GroupAggregate(PlanNode):
 
 	def __init__(self, child: PlanNode, group_columns: list[str], schema):
 		self.child = child
+		self.group_columns = group_columns
 		self._indices = [schema.column_index(name) for name in group_columns]
 		self._pending = None
 		self._last_key = None
@@ -40,3 +41,11 @@ class GroupAggregate(PlanNode):
 		self.child.close()
 		self._pending = None
 
+	def children(self) -> list:
+		return [self.child]
+
+	def replace_children(self, new_children: list) -> None:
+		(self.child,) = new_children
+
+	def describe_self(self) -> dict:
+		return {"node": "GroupAggregate", "group_columns": self.group_columns}
