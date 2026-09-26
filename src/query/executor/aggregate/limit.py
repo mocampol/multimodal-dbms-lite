@@ -30,3 +30,11 @@ class Limit(PlanNode):
 		self.child.close()
 		self._seen = 0
 
+	def children(self) -> list:
+		return [self.child]
+
+	def replace_children(self, new_children: list) -> None:
+		(self.child,) = new_children
+
+	def describe_self(self) -> dict:
+		return {"node": "Limit", "limit": self.limit}

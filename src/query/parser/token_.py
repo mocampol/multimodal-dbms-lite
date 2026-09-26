@@ -2,6 +2,8 @@ from enum import Enum, auto
 
 
 class TokenType(Enum):
+    EXPLAIN = auto()
+    ANALYZE = auto()
     SELECT = auto()
     FROM = auto()
     JOIN = auto()
@@ -35,7 +37,6 @@ class TokenType(Enum):
 
     CREATE_TABLE = auto()
     CREATE_INDEX = auto()
-    DROP_TABLE = auto()
     ON = auto()
     USING = auto()
 
@@ -65,6 +66,8 @@ class TokenType(Enum):
 
 
 _TYPE_NAMES = {
+    TokenType.EXPLAIN: "'EXPLAIN'",
+    TokenType.ANALYZE: "'ANALYZE'",
     TokenType.SELECT: "'SELECT'",
     TokenType.FROM: "'FROM'",
     TokenType.JOIN: "'JOIN'",
@@ -98,7 +101,6 @@ _TYPE_NAMES = {
 
     TokenType.CREATE_TABLE: "'CREATE TABLE'",
     TokenType.CREATE_INDEX: "'CREATE INDEX'",
-    TokenType.DROP_TABLE: "'DROP TABLE'",
     TokenType.ON: "'ON'",
     TokenType.USING: "'USING'",
 

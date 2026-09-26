@@ -39,8 +39,18 @@ export interface PlanNode {
   columns?: string[]
   order_by?: string[]
   group_by?: string[]
+  strategy?: string
+  output_items?: string[]
+  limit?: number
   join_type?: string
+  left_key?: number
+  right_key?: number
   children?: PlanNode[]
+  // Solo presentes cuando el plan viene de EXPLAIN ANALYZE (plan
+  // ejecutado de verdad, no solo armado): filas que produjo este nodo
+  // puntual y tiempo propio (no acumulado de sus hijos) en next().
+  rows?: number
+  time_ms?: number
 }
 
 export interface SelectQueryResult {
@@ -67,17 +77,32 @@ export interface OtherQueryResult {
   transaction_id?: number
 }
 
+export interface ExplainQueryResult {
+  type: 'explain' | 'explain_analyze'
+  plan: PlanNode
+  columns: string[]
+  // Ambos null para EXPLAIN sin ANALYZE: el plan nunca se ejecutó, así
+  // que no hay nada real que reportar todavía (no es "0 filas en 0 ms").
+  row_count: number | null
+  elapsed_ms: number | null
+  execution_ms: number
+}
+
 export interface BatchQueryResult {
   type: 'BATCH'
   statements: QueryResult[]
   execution_ms: number
 }
 
-export type QueryResult = SelectQueryResult | MutationQueryResult | OtherQueryResult | BatchQueryResult
-export type SingleQueryResult = SelectQueryResult | MutationQueryResult | OtherQueryResult
+export type QueryResult = SelectQueryResult | MutationQueryResult | OtherQueryResult | ExplainQueryResult | BatchQueryResult
+export type SingleQueryResult = SelectQueryResult | MutationQueryResult | OtherQueryResult | ExplainQueryResult
 
 export function isBatchQueryResult(result: QueryResult): result is BatchQueryResult {
   return 'statements' in result
+}
+
+export function isExplainQueryResult(result: SingleQueryResult): result is ExplainQueryResult {
+  return result.type === 'explain' || result.type === 'explain_analyze'
 }
 
 export class ApiError extends Error {

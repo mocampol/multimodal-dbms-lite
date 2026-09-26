@@ -70,3 +70,17 @@ class SortMergeJoin(PlanNode):
 		self._rows = []
 		self._cursor = 0
 
+	def children(self) -> list:
+		return [self.left, self.right]
+
+	def replace_children(self, new_children: list) -> None:
+		self.left, self.right = new_children
+
+	def describe_self(self) -> dict:
+		return {
+			"node": "SortMergeJoin",
+			"join_type": "sort_merge",
+			"strategy": "sort_merge_external",
+			"left_key": self.left_key,
+			"right_key": self.right_key,
+		}
