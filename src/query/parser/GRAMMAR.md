@@ -9,7 +9,8 @@
 <QualifiedName> ::= ID [ DOT ID ]
 <GroupOrOrder> ::= { GROUP_BY <QualifiedName> { COMA <QualifiedName> } }
 				   { ORDER_BY <QualifiedName> { COMA <QualifiedName> } }
-<InsertStmt>   ::= INSERT_INTO ID VALUES <ValueRow> { COMA <ValueRow> }
+<InsertStmt>      ::= INSERT_INTO ID [ LPAREN <ColumnNameList> RPAREN ] VALUES <ValueRow> { COMA <ValueRow> }
+<ColumnNameList>  ::= ID { COMA ID }
 <ValueRow>     ::= LPAREN <ValueList> RPAREN
 <ValueList>    ::= <Value> { COMA <Value> }
 <DeleteStmt>   ::= DELETE FROM ID [ <WhereClause> ]

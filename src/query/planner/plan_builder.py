@@ -163,9 +163,26 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -
     schema = catalog.get_schema(stm.table)
     storage = catalog.get_storage(stm.table)
 
+    column_positions = (
+        {name: schema.column_index(name) for name in stm.columns}
+        if stm.columns is not None else None
+    )
+
     rids = []
     for values in stm.values:
-        record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, values)])
+        if column_positions is not None:
+            row_values = [None] * len(schema.columns)
+            for name, exp in zip(stm.columns, values):
+                idx = column_positions[name]
+                col = schema.columns[idx]
+                row_values[idx] = Value(col.data_type, exp.value)
+            for idx, col in enumerate(schema.columns):
+                if row_values[idx] is None:
+                    row_values[idx] = Value(col.data_type, None)
+            record = Record(row_values)
+        else:
+            record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, values)])
+
         violated = catalog.check_insert_uniques(stm.table, record)
         if violated:
             raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
