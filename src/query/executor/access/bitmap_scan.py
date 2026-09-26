@@ -38,6 +38,6 @@ class BitmapScan(PlanNode):
 	def describe_self(self) -> dict:
 		return {
 			"node": "BitmapScan",
-			"index": type(self.bitmap_index).__name__,
-			"key": repr(self.key) if self.key is not None else None,
+			"access": "bitmap_scan",
+			"key": self.key.data if self.key is not None else None,
 		}

@@ -3,11 +3,11 @@ import time
 from fastapi import APIRouter
 
 from engine import catalog
-from explain import describe_plan, output_columns
+from explain import describe_plan, output_columns, serialize_explain_result
 from schemas import QueryRequest
 from serialize import serialize_record
 
-from query.parser.ast_nodes import SelectStm, InsertStm, UpdateStm, DeleteStm, BeginTransactionStm
+from query.parser.ast_nodes import SelectStm, InsertStm, UpdateStm, DeleteStm, BeginTransactionStm, ExplainStm
 from query.rewriter.rewriter import rewrite
 from query.planner.plan_builder import build_select_plan
 from query.query_engine import execute_many
@@ -32,6 +32,15 @@ def run_query(payload: QueryRequest):
 
 
 def _response_for_statement(stm, result, execution_ms):
+    # Verificado contra el query_engine.py real: execute_many() llama a
+    # _execute_statement() por cada sentencia, y ese es el mismo punto
+    # donde despacha ExplainStm (construye/instrumenta el plan) — así
+    # que acá `result` sí es un ExplainResult cuando stm es ExplainStm.
+    if isinstance(stm, ExplainStm):
+        return {
+            **serialize_explain_result(result),
+            "execution_ms": execution_ms,
+        }
 
     if isinstance(stm, SelectStm):
         root = build_select_plan(rewrite(stm), catalog)

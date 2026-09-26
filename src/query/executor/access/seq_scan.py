@@ -47,4 +47,4 @@ class SeqScan(PlanNode):
         self._generator = None
 
     def describe_self(self) -> dict:
-        return {"node": "SeqScan", "table": self.table_name}
+        return {"node": "SeqScan", "access": "sequential_scan", "table": self.table_name}

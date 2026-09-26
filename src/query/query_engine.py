@@ -11,7 +11,7 @@ from query.parser.parser import Parser
 from query.parser.visitor import SemanticVisitor, SemanticError
 from query.parser.ast_nodes import (
     SelectStm, ExplainStm, InsertStm, DeleteStm, UpdateStm, CreateTableStm, CreateIndexStm,
-    BeginTransactionStm, EndTransactionStm,
+    DropTableStm, BeginTransactionStm, EndTransactionStm,
 )
 from transaction import TransactionManager, LockMode
 
@@ -83,6 +83,18 @@ def _instrument_tree(node: PlanNode) -> _InstrumentedNode:
     return _InstrumentedNode(node)
 
 
+def unwrap_instrumented(node: PlanNode) -> PlanNode:
+    """Given a node that may or may not be _instrument_tree()-wrapped,
+    returns the real underlying PlanNode. Public on purpose: consumers
+    outside this module (api/explain.py's output_columns(), for
+    instance) need to isinstance()-check the real node type — e.g. "is
+    this a Projection?" — and shouldn't have to reach into a private
+    class to do it."""
+    while isinstance(node, _InstrumentedNode):
+        node = node.wrapped
+    return node
+
+
 def describe_plan(node: PlanNode) -> dict:
     """Builds the nested plan description EXPLAIN / EXPLAIN ANALYZE show.
 
@@ -140,17 +152,33 @@ def execute(sql: str, catalog):
     Runs one SQL statement end to end.
 
     Returns a list[Record] for SELECT, an ExplainResult for EXPLAIN /
-    EXPLAIN ANALYZE, or None for INSERT/DELETE/UPDATE/CREATE (which
-    mutate storage directly rather than producing a result set).
+    EXPLAIN ANALYZE, or None for INSERT/DELETE/UPDATE/CREATE/DROP
+    (which mutate storage directly rather than producing a result set).
 
     Raises QueryError on any lexical, syntactic, or semantic failure.
     """
+    statements = _parse_statements(sql)
+    if len(statements) != 1:
+        raise QueryError("Se recibieron varias sentencias; usa execute_many para ejecutar un bloque")
+    return _execute_statement(statements[0], catalog)
+
+
+def execute_many(sql: str, catalog):
+    """Run every semicolon-terminated statement in a SQL block in order."""
+    return [
+        (stm, _execute_statement(stm, catalog))
+        for stm in _parse_statements(sql)
+    ]
+
+
+def _parse_statements(sql: str):
     try:
-        scanner = Scanner(sql)
-        parser = Parser(scanner)
-        stm = parser.parse_sql_statement()
+        return Parser(Scanner(sql)).parse_sql_statements()
     except RuntimeError as e:
         raise QueryError(str(e)) from e
+
+
+def _execute_statement(stm, catalog):
 
     try:
         SemanticVisitor(catalog).check(stm)
@@ -177,8 +205,8 @@ def execute(sql: str, catalog):
 
         # EXPLAIN ANALYZE: corre el plan de verdad, con la misma
         # semántica de transacción implícita y locking que un SELECT
-        # normal (ver el bloque de SelectStm de abajo), pero envuelto
-        # con _instrument_tree() para medir tiempo y filas por nodo.
+        # normal (ver el bloque de SelectStm de abajo), envuelto con
+        # _instrument_tree() para medir tiempo y filas por nodo.
         implicit = manager.current() is None
         if implicit:
             manager.begin()
@@ -228,7 +256,12 @@ def execute(sql: str, catalog):
             manager,
             stm.table,
             insert_operation,
-            lambda rid: manager.add_undo(lambda: _undo_insert(catalog, stm.table, storage, rid)),
+            lambda rids: [
+                manager.add_undo(
+                    lambda rid=rid: _undo_insert(catalog, stm.table, storage, rid)
+                )
+                for rid in rids
+            ],
         )
 
     if isinstance(stm, DeleteStm):
@@ -256,7 +289,7 @@ def execute(sql: str, catalog):
             )
         return _execute_write(manager, stm.table, lambda: execute_update(stm, catalog, lock_rid=lock_rid, on_update=on_update), None)
 
-    if isinstance(stm, (CreateTableStm, CreateIndexStm)):
+    if isinstance(stm, (CreateTableStm, CreateIndexStm, DropTableStm)):
         return None
 
     raise QueryError(f"Tipo de sentencia no soportado: {type(stm).__name__}")

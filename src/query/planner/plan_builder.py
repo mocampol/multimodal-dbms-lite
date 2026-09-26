@@ -7,14 +7,13 @@ Sequential Scan.
 """
 
 from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, UpdateStm, IdExp, BinaryExp, AggregateSpec
-from common.value import Value
+from common.value import DataType, Value
 from common.record import Record
 from common.schema import Schema, Column
 from transaction.lock_manager import LockMode
 
 from query.executor.access.seq_scan import SeqScan
 from query.executor.access.index_scan import IndexScan
-from query.executor.access.clustered_scan import ClusteredScan
 from query.executor.processing.filter import Filter
 from query.executor.processing.projection import Projection
 from query.executor.processing.sort import Sort
@@ -26,78 +25,135 @@ from query.executor.join.hash_join import HashJoin
 def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
     """
     Builds the physical plan for a SELECT statement:
-    (Sequential/Index Scan) -> [Filter] -> [Sort] -> Projection
+    source -> Filter -> Group/Aggregate -> Sort -> Projection.
     """
-    schema = catalog.get_schema(stm.table)
-
-    if stm.where_cond is not None and catalog.get_clustered_index(stm.table) is not None:
-        if isinstance(stm.where_cond, BinaryExp) and stm.where_cond.op.name == "EQ_OP":
-            clustered = catalog.get_clustered_index(stm.table)
-            key_column = schema.primary_key()
-            if stm.where_cond.left.value == key_column.name and not isinstance(stm.where_cond.right, IdExp):
-                key = Value(key_column.data_type, stm.where_cond.right.value)
-                return Projection(ClusteredScan(clustered, key), stm.columns, schema)
-
-    aggregate_items = [item for item in stm.columns if isinstance(item, AggregateSpec)]
-    if aggregate_items:
-        if stm.join is not None:
-            raise ValueError("Agregaciones sobre JOIN aún no están soportadas")
-        child = SeqScan(stm.table, catalog, lock_rid=lock_rid)
-        if stm.where_cond is not None:
-            child = Filter(child, stm.where_cond, schema)
-        aggregate = HashAggregate(child, stm.group_by.columns if stm.group_by else [], schema, stm.columns)
-        return aggregate
+    input_schema = catalog.get_schema(stm.table)
 
     if stm.join is not None:
         right_schema = catalog.get_schema(stm.join.table)
         left_join_table, left_join_column = stm.join.left.split(".", 1)
         right_join_table, right_join_column = stm.join.right.split(".", 1)
-        left_schema = schema if left_join_table == stm.table else right_schema
-        right_join_schema = schema if right_join_table == stm.table else right_schema
-        left_index = left_schema.column_index(left_join_column)
-        right_index = right_join_schema.column_index(right_join_column)
+        left_schema = input_schema if left_join_table == stm.table else right_schema
+        left_index = (
+            input_schema.column_index(left_join_column)
+            if left_join_table == stm.table
+            else right_schema.column_index(left_join_column)
+        )
+        right_index = (
+            right_schema.column_index(right_join_column)
+            if right_join_table == stm.join.table
+            else input_schema.column_index(right_join_column)
+        )
         node = HashJoin(
             SeqScan(stm.table, catalog, lock_rid=lock_rid),
             SeqScan(stm.join.table, catalog, lock_rid=lock_rid),
-            left_index if left_join_table == stm.table else right_index,
-            right_index if right_join_table == stm.join.table else left_index,
+            left_index,
+            right_index,
         )
-        combined_columns = [
-            Column(f"{stm.table}.{column.name}", column.data_type, column.size, nullable=column.nullable)
-            for column in schema.columns
-        ] + [
-            Column(f"{stm.join.table}.{column.name}", column.data_type, column.size, nullable=column.nullable)
-            for column in right_schema.columns
+        schema = _join_schema(stm.table, input_schema, stm.join.table, right_schema)
+    else:
+        schema = input_schema
+        node = SeqScan(stm.table, catalog, lock_rid=lock_rid)
+        indexed = _equality_index(catalog, stm.table, stm.where_cond)
+        if indexed is not None:
+            index, key = indexed
+            node = IndexScan(index, catalog.get_storage(stm.table), key, lock_rid=lock_rid)
+
+    physical_condition = _qualify_condition(stm.where_cond, schema)
+    if physical_condition is not None and (
+        stm.join is not None or _equality_index(catalog, stm.table, stm.where_cond) is None
+    ):
+        node = Filter(node, physical_condition, schema)
+
+    aggregate_items = [item for item in stm.columns if isinstance(item, AggregateSpec)]
+    if aggregate_items:
+        group_columns = [
+            _resolve_column_name(schema, name) for name in stm.group_by.columns
+        ] if stm.group_by is not None else []
+        physical_items = []
+        for item in stm.columns:
+            if isinstance(item, AggregateSpec):
+                physical_item = AggregateSpec(item.function, item.column)
+                physical_item.resolved_column = (
+                    None if item.column == "*" else _resolve_column_name(schema, item.column)
+                )
+                physical_items.append(physical_item)
+            else:
+                physical_items.append(_resolve_column_name(schema, item))
+        node = HashAggregate(node, group_columns, schema, physical_items)
+        schema = _aggregate_schema(schema, physical_items)
+        projection_columns = [
+            item.name if isinstance(item, AggregateSpec) else item
+            for item in physical_items
         ]
-        combined_schema = Schema(f"{stm.table}_join_{stm.join.table}", combined_columns)
-        selected = stm.columns
-        if selected != ["*"]:
-            selected = [
-                name if "." in name else f"{stm.table}.{name}"
-                for name in selected
-            ]
-        node = Projection(node, selected, combined_schema)
-        return node
-
-    # Equality predicates use a physical index when one is available.
-    node = SeqScan(stm.table, catalog, lock_rid=lock_rid)
-    indexed = _equality_index(catalog, stm.table, stm.where_cond)
-    if indexed is not None:
-        index, key = indexed
-        node = IndexScan(index, catalog.get_storage(stm.table), key, lock_rid=lock_rid)
-
-    if stm.where_cond is not None and indexed is None:
-        node = Filter(node, stm.where_cond, schema)
-
-    if stm.group_by is not None:
-        node = Sort(node, stm.group_by.columns, schema)
-        node = GroupAggregate(node, stm.group_by.columns, schema)
+    else:
+        projection_columns = [
+            _resolve_column_name(schema, name) for name in stm.columns
+        ] if stm.columns != ["*"] else ["*"]
+        if stm.group_by is not None:
+            group_columns = [_resolve_column_name(schema, name) for name in stm.group_by.columns]
+            node = Sort(node, group_columns, schema)
+            node = GroupAggregate(node, group_columns, schema)
 
     if stm.order_by is not None:
-        node = Sort(node, stm.order_by.columns, schema)
+        order_columns = [_resolve_column_name(schema, name) for name in stm.order_by.columns]
+        node = Sort(node, order_columns, schema)
 
-    node = Projection(node, stm.columns, schema)
-    return node
+    return Projection(node, projection_columns, schema)
+
+
+def _join_schema(left_name, left_schema, right_name, right_schema):
+    columns = [
+        Column(f"{left_name}.{column.name}", column.data_type, column.size, nullable=column.nullable)
+        for column in left_schema.columns
+    ] + [
+        Column(f"{right_name}.{column.name}", column.data_type, column.size, nullable=column.nullable)
+        for column in right_schema.columns
+    ]
+    return Schema(f"{left_name}_join_{right_name}", columns)
+
+
+def _resolve_column_name(schema, name):
+    if name == "*":
+        return name
+    if schema.get_column(name) is not None:
+        return name
+    if "." in name:
+        short_name = name.rsplit(".", 1)[1]
+        if schema.get_column(short_name) is not None:
+            return short_name
+    matches = [column.name for column in schema.columns if column.name.rsplit(".", 1)[-1] == name]
+    if len(matches) != 1:
+        raise ValueError(f"La columna '{name}' no se puede resolver en '{schema.table_name}'")
+    return matches[0]
+
+
+def _qualify_condition(condition, schema):
+    if condition is None:
+        return None
+    left = IdExp(_resolve_column_name(schema, condition.left.value))
+    right = condition.right
+    if isinstance(right, IdExp):
+        right = IdExp(_resolve_column_name(schema, right.value))
+    return BinaryExp(left, right, condition.op)
+
+
+def _aggregate_schema(input_schema, output_items):
+    columns = []
+    for item in output_items:
+        if not isinstance(item, AggregateSpec):
+            source = input_schema.get_column(item)
+            columns.append(Column(source.name, source.data_type, source.size, nullable=source.nullable))
+            continue
+        if item.function == "COUNT":
+            data_type = DataType.INTEGER
+            size = None
+        else:
+            source = input_schema.get_column(item.resolved_column)
+            data_type = DataType.DOUBLE_PRECISION if item.function == "AVG" else source.data_type
+            size = source.size
+        columns.append(Column(item.name, data_type, size, nullable=True))
+    return Schema(f"aggregate_{input_schema.table_name}", columns)
 
 
 def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -> None:
@@ -107,9 +163,26 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -
     schema = catalog.get_schema(stm.table)
     storage = catalog.get_storage(stm.table)
 
+    column_positions = (
+        {name: schema.column_index(name) for name in stm.columns}
+        if stm.columns is not None else None
+    )
+
     rids = []
     for values in stm.values:
-        record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, values)])
+        if column_positions is not None:
+            row_values = [None] * len(schema.columns)
+            for name, exp in zip(stm.columns, values):
+                idx = column_positions[name]
+                col = schema.columns[idx]
+                row_values[idx] = Value(col.data_type, exp.value)
+            for idx, col in enumerate(schema.columns):
+                if row_values[idx] is None:
+                    row_values[idx] = Value(col.data_type, None)
+            record = Record(row_values)
+        else:
+            record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, values)])
+
         violated = catalog.check_insert_uniques(stm.table, record)
         if violated:
             raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")

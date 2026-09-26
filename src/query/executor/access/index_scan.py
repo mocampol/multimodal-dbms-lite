@@ -52,6 +52,7 @@ class IndexScan(PlanNode):
 	def describe_self(self) -> dict:
 		return {
 			"node": "IndexScan",
-			"index": type(self.index).__name__,
-			"key": repr(self.key),
+			"access": "index_scan",
+			"index_type": type(self.index).__name__,
+			"key": self.key.data,
 		}

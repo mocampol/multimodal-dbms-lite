@@ -79,6 +79,8 @@ class SortMergeJoin(PlanNode):
 	def describe_self(self) -> dict:
 		return {
 			"node": "SortMergeJoin",
+			"join_type": "sort_merge",
+			"strategy": "sort_merge_external",
 			"left_key": self.left_key,
 			"right_key": self.right_key,
 		}

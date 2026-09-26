@@ -98,7 +98,7 @@ class Sort(PlanNode):
         (self.child,) = new_children
 
     def describe_self(self) -> dict:
-        return {"node": "Sort", "columns": self.columns}
+        return {"node": "Sort", "order_by": self.columns, "strategy": "external_sort_k_way_merge"}
 
     def _write_run(self, records: list[Record]):
         records.sort(key=self._sort_key)

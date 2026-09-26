@@ -31,6 +31,6 @@ class ClusteredScan(PlanNode):
     def describe_self(self) -> dict:
         return {
             "node": "ClusteredScan",
-            "index": type(self.index).__name__,
-            "key": repr(self.key),
+            "access": "clustered_index_scan",
+            "key": self.key.data,
         }

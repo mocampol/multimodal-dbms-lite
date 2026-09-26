@@ -81,6 +81,8 @@ class HashJoin(PlanNode):
 	def describe_self(self) -> dict:
 		return {
 			"node": "HashJoin",
+			"join_type": "hash",
+			"strategy": "grace_hash_external",
 			"left_key": self.left_key,
 			"right_key": self.right_key,
 		}

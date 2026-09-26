@@ -220,6 +220,7 @@ class HashAggregate(PlanNode):
 	def describe_self(self) -> dict:
 		return {
 			"node": "HashAggregate",
-			"group_columns": self.group_columns,
+			"group_by": self.group_columns,
+			"strategy": "external_hash_partitioning",
 			"output_items": [str(item) for item in self.output_items],
 		}

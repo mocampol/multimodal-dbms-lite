@@ -56,6 +56,8 @@ class NestedLoopJoin(PlanNode):
 	def describe_self(self) -> dict:
 		return {
 			"node": "NestedLoopJoin",
+			"join_type": "nested_loop",
+			"strategy": "nested_loop",
 			"left_key": self.left_key,
 			"right_key": self.right_key,
 		}

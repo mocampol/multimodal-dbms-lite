@@ -65,7 +65,8 @@ class SortAggregate(PlanNode):
 	def describe_self(self) -> dict:
 		return {
 			"node": "SortAggregate",
-			"group_columns": self.group_columns,
+			"group_by": self.group_columns,
+			"strategy": "sort_then_stream_aggregate",
 			"output_items": [str(item) for item in self.output_items],
 		}
 

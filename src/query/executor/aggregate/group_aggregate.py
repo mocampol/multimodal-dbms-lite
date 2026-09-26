@@ -48,4 +48,4 @@ class GroupAggregate(PlanNode):
 		(self.child,) = new_children
 
 	def describe_self(self) -> dict:
-		return {"node": "GroupAggregate", "group_columns": self.group_columns}
+		return {"node": "GroupAggregate", "group_by": self.group_columns, "strategy": "external_sort_then_stream"}
