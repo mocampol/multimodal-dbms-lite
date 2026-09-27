@@ -27,10 +27,14 @@ El parser acepta literales `POINT` en `INSERT`, `UPDATE` y expresiones
 espaciales. Estas reglas agregan sintaxis y AST; la evaluación de consultas
 espaciales todavía no está implementada.
 
+La validación semántica requiere un índice RTREE en la columna POINT usada por
+un predicado espacial en `WHERE`. `ORDER BY distancia(...)` valida sus tipos y
+métrica, pero no exige índice porque puede ordenar un recorrido completo.
+
 ```text
 <SpatialType> ::= POINT | RECTANGLE | POLYGON
 <Point>       ::= POINT LPAREN NUM COMA NUM RPAREN
-<DistanceExp> ::= DISTANCIA LPAREN <QualifiedName> COMA <Point> RPAREN
+<DistanceExp> ::= DISTANCIA LPAREN <QualifiedName> COMA <Value> [ COMA <Metric> ] RPAREN
 <WithinExp>   ::= DENTRO_DE LPAREN <QualifiedName> COMA <Polygon> RPAREN
 <Rectangle>   ::= RECTANGLE LPAREN <Point> COMA <Point> RPAREN
 <PointList>   ::= <Point> { COMA <Point> }
@@ -74,11 +78,15 @@ SELECT ubicacion FROM sitios
 WHERE WITHIN_DISTANCE(ubicacion, POINT(-122.4, 47.6), 5000, HAVERSINE);
 ```
 
-La sintaxis SQL de consultas espaciales admitida por el parser es:
+La sintaxis SQL de consultas espaciales admitida por el parser es. La métrica
+es opcional y por defecto es `HAVERSINE`.
 
 ```sql
 SELECT * FROM tiendas
 WHERE distancia(ubicacion, POINT(-12.0464, -77.0428)) < 5000;
+
+SELECT * FROM tiendas
+WHERE distancia(ubicacion, POINT(-12.0464, -77.0428), EUCLIDEAN) < 0.1;
 
 SELECT * FROM restaurantes
 ORDER BY distancia(ubicacion, POINT(-12.05, -77.04)) LIMIT 10;

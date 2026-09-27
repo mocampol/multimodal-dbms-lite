@@ -210,17 +210,18 @@ class PolygonLiteral(Exp):
 
 
 class DistanceExp(Exp):
-    """DISTANCIA(<GeometryArg>, <Point>)"""
+    """DISTANCIA(<GeometryArg>, <Value>, [<Metric>])"""
 
-    def __init__(self, geometry: "IdExp", point: PointLiteral):
+    def __init__(self, geometry: "IdExp", point: Exp, metric: str = "HAVERSINE"):
         self.geometry = geometry
         self.point = point
+        self.metric = metric
 
     def accept(self, visitor: Visitor):
         return visitor.visit_distance_exp(self)
 
     def __repr__(self):
-        return f"distancia({self.geometry!r}, {self.point!r})"
+        return f"distancia({self.geometry!r}, {self.point!r}, {self.metric})"
 
 
 class SpatialPredicate(Exp):

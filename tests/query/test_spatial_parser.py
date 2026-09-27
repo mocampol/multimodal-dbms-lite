@@ -74,7 +74,7 @@ def test_parse_within_polygon_predicate():
         ),
         (
             "SELECT * FROM restaurantes ORDER BY ubicacion LIMIT 1.5;",
-            "LIMIT requiere un entero no negativo",
+            "LIMIT requiere un entero",
         ),
     ],
 )

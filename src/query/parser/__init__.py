@@ -2,6 +2,7 @@
 
 from .token_ import Token, TokenType
 from .scanner import Scanner
+from .exceptions import SemanticError
 from .ast_nodes import (
     BinaryExp,
     BinaryOp,
@@ -40,6 +41,7 @@ __all__ = [
     "Token",
     "TokenType",
     "Scanner",
+    "SemanticError",
     "Parser",
     "BinaryExp",
     "BinaryOp",

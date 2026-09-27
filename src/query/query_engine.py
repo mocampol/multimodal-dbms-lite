@@ -8,7 +8,8 @@ import time
 from query.parser.token_ import TokenType
 from query.parser.scanner import Scanner
 from query.parser.parser import Parser
-from query.parser.visitor import SemanticVisitor, SemanticError
+from query.parser.visitor import SemanticVisitor
+from query.parser.exceptions import SemanticError
 from query.parser.ast_nodes import (
     SelectStm, ExplainStm, InsertStm, DeleteStm, UpdateStm, CreateTableStm, CreateIndexStm,
     BeginTransactionStm, EndTransactionStm,

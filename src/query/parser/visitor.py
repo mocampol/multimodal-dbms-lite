@@ -2,6 +2,7 @@ from typing import Optional, Protocol, Tuple, Union
 
 from catalog.table_metadata import StorageType
 from common import DataType, Point, Value, Column, Schema
+from query.parser.exceptions import SemanticError
 
 from query.parser.ast_nodes import (
     Visitor,
@@ -13,6 +14,7 @@ from query.parser.ast_nodes import (
     PolygonLiteral,
     DistanceExp,
     SpatialPredicate,
+    WithinExp,
     BinaryExp,
     BinaryOp,
     Stm,
@@ -32,12 +34,6 @@ from query.parser.ast_nodes import (
     IndexType,
     StorageKind,
 )
-
-
-class SemanticError(Exception):
-    """Error de análisis semántico: tabla/columna inexistente, tipos
-    incompatibles, aridad incorrecta en INSERT, valor que excede el
-    tamaño de una columna, etc."""
 
 
 _NUMERIC_TYPES = {
@@ -61,6 +57,7 @@ class CatalogProtocol(Protocol):
     def get_schema(self, table_name: str) -> Schema: ...
     def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> None: ...
     def create_index(self, table_name: str, column_name: str, index_type: str) -> None: ...
+    def get_indexes(self, table_name: str) -> list[dict]: ...
 
 
 class InMemoryCatalog:
@@ -99,6 +96,9 @@ class InMemoryCatalog:
             "index_type": index_type,
         })
 
+    def get_indexes(self, table_name: str) -> list[dict]:
+        return self._indexes.get(table_name, [])
+
 
 _STORAGE_KIND_TO_TYPE = {
     StorageKind.HEAP: StorageType.HEAP,
@@ -124,6 +124,11 @@ class SemanticVisitor(Visitor):
         schema = self.catalog.get_schema(stm.table)
         self._current_schema = schema
         try:
+            if stm.limit is not None and (
+                type(stm.limit.value) is not int or stm.limit.value <= 0
+            ):
+                raise SemanticError("LIMIT debe ser un entero positivo")
+
             if stm.join is not None:
                 if not self.catalog.table_exists(stm.join.table):
                     raise SemanticError(f"La tabla '{stm.join.table}' no existe")
@@ -136,22 +141,17 @@ class SemanticVisitor(Visitor):
                         self._require_select_column(stm, col)
 
             if stm.where_cond is not None:
-                if isinstance(stm.where_cond, SpatialPredicate) or (
-                    isinstance(stm.where_cond, BinaryExp)
-                    and isinstance(stm.where_cond.left, DistanceExp)
-                ):
-                    raise SemanticError(
-                        "La sintaxis espacial se parsea, pero su ejecución aún no está soportada"
-                    )
-                self._validate_select_condition(stm, stm.where_cond)
+                if isinstance(stm.where_cond, SpatialPredicate):
+                    self._validate_spatial_predicate(stm, stm.where_cond)
+                else:
+                    self._validate_select_condition(stm, stm.where_cond)
 
             if stm.order_by is not None:
                 for column in stm.order_by.columns:
                     if isinstance(column, DistanceExp):
-                        raise SemanticError(
-                            "La sintaxis espacial se parsea, pero su ejecución aún no está soportada"
-                        )
-                    self._require_select_column(stm, column)
+                        self._validate_distance(stm, column, require_index=False)
+                    else:
+                        self._require_select_column(stm, column)
 
             if stm.group_by is not None:
                 for column in stm.group_by.columns:
@@ -222,23 +222,109 @@ class SemanticVisitor(Visitor):
                     f"{compare_type.value} (no es comparable)"
                 )
 
+    def _validate_spatial_predicate(self, stm, predicate: SpatialPredicate):
+        if isinstance(predicate, WithinExp):
+            table_name, column = self._require_point_column(
+                stm, predicate.geometry, function_name="dentro_de"
+            )
+            if len(predicate.polygon.points) < 3:
+                raise SemanticError("POLYGON requiere al menos tres puntos")
+            for point in predicate.polygon.points:
+                self._validate_point_literal(point)
+            self._require_rtree_index(table_name, column.name)
+            return
+
+        if not isinstance(predicate.left, DistanceExp):
+            raise SemanticError("El predicado espacial debe comparar una expresión DISTANCIA")
+        self._validate_distance(stm, predicate.left, require_index=True)
+
+        if isinstance(predicate.right, NumExp):
+            if isinstance(predicate.right.value, bool) or not isinstance(
+                predicate.right.value, (int, float)
+            ):
+                raise SemanticError("La distancia debe compararse con un valor numérico")
+            return
+        if isinstance(predicate.right, IdExp):
+            _table_name, column = self._resolve_select_column(stm, predicate.right.value)
+            if column.data_type not in _NUMERIC_TYPES:
+                raise SemanticError("La distancia debe compararse con un valor numérico")
+            return
+        raise SemanticError("La distancia debe compararse con un valor numérico")
+
+    def _validate_distance(self, stm, distance: DistanceExp, require_index: bool):
+        if not isinstance(distance.metric, str) or distance.metric.upper() not in {
+            "EUCLIDEAN", "HAVERSINE"
+        }:
+            raise SemanticError("La métrica debe ser EUCLIDEAN o HAVERSINE")
+
+        table_name, column = self._require_point_column(stm, distance.geometry)
+        if require_index:
+            self._require_rtree_index(table_name, column.name)
+
+        if isinstance(distance.point, PointExp):
+            self._validate_point_literal(distance.point)
+        elif isinstance(distance.point, IdExp):
+            _point_table, point_column = self._resolve_select_column(stm, distance.point.value)
+            if point_column.data_type != DataType.POINT:
+                raise SemanticError("El segundo argumento de distancia debe ser POINT")
+        else:
+            raise SemanticError("El segundo argumento de distancia debe ser POINT")
+
+    def _require_point_column(self, stm, expression, function_name="distancia"):
+        if not isinstance(expression, IdExp):
+            raise SemanticError(
+                f"El primer argumento de {function_name} debe ser una columna POINT"
+            )
+        table_name, column = self._resolve_select_column(stm, expression.value)
+        if column.data_type != DataType.POINT:
+            raise SemanticError(
+                f"La columna '{column.name}' usada en {function_name} debe ser de tipo POINT"
+            )
+        return table_name, column
+
+    def _validate_point_literal(self, point):
+        if not isinstance(point, PointExp):
+            raise SemanticError("Se esperaba un literal POINT")
+        try:
+            point.to_point()
+        except ValueError as error:
+            raise SemanticError(f"Coordenadas POINT inválidas: {error}") from error
+
+    def _require_rtree_index(self, table_name: str, column_name: str):
+        indexes = self.catalog.get_indexes(table_name)
+        if not any(
+            entry.get("column_name") == column_name
+            and str(entry.get("index_type", "")).lower() == "rtree"
+            for entry in indexes
+        ):
+            raise SemanticError(
+                f"La columna '{table_name}.{column_name}' requiere un índice RTREE"
+            )
+
     def _require_select_column(self, stm, name):
+        return self._resolve_select_column(stm, name)[1]
+
+    def _resolve_select_column(self, stm, name):
         if "." not in name:
             if stm.join is None:
-                return self._require_column(self._current_schema, name)
+                return stm.table, self._require_column(self._current_schema, name)
+            candidates = (
+                (stm.table, self._current_schema),
+                (stm.join.table, self.catalog.get_schema(stm.join.table)),
+            )
             matches = [
-                schema.get_column(name)
-                for schema in (self._current_schema, self.catalog.get_schema(stm.join.table))
-                if schema.get_column(name) is not None
+                (table_name, column)
+                for table_name, schema in candidates
+                if (column := schema.get_column(name)) is not None
             ]
             if len(matches) != 1:
                 raise SemanticError(f"La columna '{name}' es ambigua o no existe")
             return matches[0]
         table, column = name.split(".", 1)
         if table == stm.table:
-            return self._require_column(self._current_schema, column)
+            return table, self._require_column(self._current_schema, column)
         elif stm.join is not None and table == stm.join.table:
-            return self._require_column(self.catalog.get_schema(stm.join.table), column)
+            return table, self._require_column(self.catalog.get_schema(stm.join.table), column)
         else:
             raise SemanticError(f"La tabla '{table}' no participa en la consulta")
 
@@ -405,13 +491,13 @@ class SemanticVisitor(Visitor):
         raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
 
     def visit_distance_exp(self, exp: DistanceExp):
-        raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
+        raise SemanticError("DISTANCIA solo se valida dentro de SELECT")
 
     def visit_spatial_predicate(self, exp: SpatialPredicate):
-        raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
+        raise SemanticError("El predicado espacial solo se valida dentro de SELECT")
 
     def visit_within_exp(self, exp):
-        raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
+        raise SemanticError("DENTRO_DE solo se valida dentro de SELECT")
 
     def visit_id_exp(self, exp: IdExp) -> _ExpResult:
         column = self._require_column(self._current_schema, exp.value)

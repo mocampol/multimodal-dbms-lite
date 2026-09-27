@@ -279,7 +279,7 @@ class Parser:
         self.error("un operador ('=', '!=', '<>', '<', '<=', '>' o '>=')")
 
     def parse_value(self) -> Exp:
-        """<Value> ::= NUM | STRING | ID | NULL | <Point>"""
+        """<Value> ::= NUM | STRING | ID | NULL | <Point> | <Polygon>"""
         if self.check(TokenType.NUM):
             return NumExp(self.parse_number())
         if self.check(TokenType.STRING):
@@ -287,11 +287,13 @@ class Parser:
             return StringExp(tok.text)
         if self.check(TokenType.T_POINT):
             return self.parse_point()
+        if self.check(TokenType.POLYGON):
+            return self.parse_polygon()
         if self.match(TokenType.NULL):
             return NullExp()
         if self.check(TokenType.ID):
             return IdExp(self.parse_qualified_name())
-        self.error("un valor (NUM, STRING, ID, NULL o POINT)")
+        self.error("un valor (NUM, STRING, ID, NULL, POINT o POLYGON)")
 
     def parse_number(self) -> int | float:
         token = self.expect(TokenType.NUM)
@@ -311,9 +313,12 @@ class Parser:
         self.expect(TokenType.LPAREN)
         geometry = IdExp(self.parse_qualified_name())
         self.expect(TokenType.COMA)
-        point = self.parse_point()
+        point = self.parse_value()
+        metric = "HAVERSINE"
+        if self.match(TokenType.COMA):
+            metric = self.expect(TokenType.ID).text.upper()
         self.expect(TokenType.RPAREN)
-        return DistanceExp(geometry, point)
+        return DistanceExp(geometry, point, metric)
 
     def parse_polygon(self) -> PolygonLiteral:
         self.expect(TokenType.POLYGON)
@@ -339,9 +344,7 @@ class Parser:
         try:
             value = int(token.text)
         except ValueError:
-            raise RuntimeError("Error sintáctico: LIMIT requiere un entero no negativo") from None
-        if value < 0:
-            raise RuntimeError("Error sintáctico: LIMIT requiere un entero no negativo")
+            raise RuntimeError("Error sintáctico: LIMIT requiere un entero") from None
         return LimitClause(value)
 
     def parse_group_or_order(self):
