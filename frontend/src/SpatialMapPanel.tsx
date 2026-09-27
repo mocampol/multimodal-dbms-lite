@@ -197,7 +197,7 @@ function SpatialMapPanel({ result, running, searchCenter, onRunQuery }: SpatialM
                 )
               })}
               <input
-                aria-label={metric === 'HAVERSINE' ? 'Radio personalizado en metros' : 'Radio personalizado en grados'}
+                aria-label={metric === 'HAVERSINE' ? 'Radio personalizado en kilómetros' : 'Radio personalizado en grados'}
                 type="number"
                 min={metric === 'HAVERSINE' ? '0.001' : '0.001'}
                 step={metric === 'HAVERSINE' ? '0.1' : '0.001'}
