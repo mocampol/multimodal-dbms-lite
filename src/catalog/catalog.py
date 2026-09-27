@@ -8,6 +8,7 @@ are small and are consulted on every query.
 """
 
 import os
+import threading
 
 from common.value import DataType, Value
 from common.schema import Schema, Column
@@ -95,6 +96,12 @@ class Catalog:
         self._next_table_id = 1
         self._next_index_id = 1
 
+        # DDL latch guards the id counters and sys_* tables; it is always
+        # taken before a table latch, never after
+        self._ddl_latch = threading.RLock()
+        self._table_latches: dict[str, threading.RLock] = {}
+        self._table_latches_mutex = threading.Lock()
+
         self._load()
 
 
@@ -159,7 +166,22 @@ class Catalog:
         raise TableNotFoundError(f"No existe una tabla con table_id={table_id}")
 
 
+    def table_latch(self, table_name: str) -> threading.RLock:
+        """
+        Physical latch over table_name's pages, buffer pool and indexes.
+        See storage/latch.py for how it relates to row locks.
+        """
+        with self._table_latches_mutex:
+            latch = self._table_latches.get(table_name)
+            if latch is None:
+                latch = self._table_latches[table_name] = threading.RLock()
+            return latch
+
     def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> TableMetadata:
+        with self._ddl_latch:
+            return self._create_table(schema, storage_type)
+
+    def _create_table(self, schema: Schema, storage_type: StorageType) -> TableMetadata:
         """
         Registers a new table: persists its metadata into sys_tables/
         sys_columns AND creates its physical data storage, then corrects
@@ -228,6 +250,10 @@ class Catalog:
         return tm
 
     def drop_table(self, table_name: str):
+        with self._ddl_latch, self.table_latch(table_name):
+            self._drop_table(table_name)
+
+    def _drop_table(self, table_name: str):
         if table_name not in self.tables:
             raise TableNotFoundError(f"La tabla '{table_name}' no existe")
 
@@ -299,6 +325,10 @@ class Catalog:
         return self._clustered_indexes.get(table_name)
 
     def create_index(self, table_name: str, column_name: str, index_type: str) -> dict:
+        with self._ddl_latch, self.table_latch(table_name):
+            return self._register_index(table_name, column_name, index_type)
+
+    def _register_index(self, table_name: str, column_name: str, index_type: str) -> dict:
         """
         Registers an index over a column. Does not build the physical
         index structure, that's the index subsystem's job. This only

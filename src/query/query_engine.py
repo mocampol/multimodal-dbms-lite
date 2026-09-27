@@ -13,7 +13,8 @@ from query.parser.ast_nodes import (
     SelectStm, ExplainStm, InsertStm, DeleteStm, UpdateStm, CreateTableStm, CreateIndexStm,
     BeginTransactionStm, EndTransactionStm,
 )
-from transaction import TransactionManager, LockMode
+from transaction import TransactionManager, rid_resource
+from storage.latch import table_latch
 
 from query.rewriter.rewriter import rewrite
 from query.planner.plan_builder import (
@@ -187,7 +188,10 @@ def _execute_statement(stm, catalog):
 
     stm = rewrite(stm)
     manager = _transaction_manager(catalog)
-    lock_rid = lambda table, rid, mode: manager.lock(_rid_resource(table, rid), mode)
+    def lock_rid(table, rid, mode, timeout=None):
+        if timeout is None:
+            return manager.lock(rid_resource(table, rid), mode)
+        return manager.lock(rid_resource(table, rid), mode, timeout=timeout)
 
     if isinstance(stm, BeginTransactionStm):
         return manager.begin()
@@ -262,8 +266,6 @@ def _execute_statement(stm, catalog):
     if isinstance(stm, UpdateStm):
         storage = catalog.get_storage(stm.table)
         def on_update(old_rid, new_rid, old_record, new_record):
-            if new_rid != old_rid:
-                manager.lock(_rid_resource(stm.table, new_rid), LockMode.EXCLUSIVE)
             manager.log_data_change("UPDATE", stm.table, _rid_data(old_rid), _record_data(old_record), _record_data(new_record))
             manager.add_undo(
                 lambda old_rid=old_rid, new_rid=new_rid, old_record=old_record, new_record=new_record:
@@ -297,12 +299,6 @@ def _run_in_transaction(manager, operation):
         raise
 
 
-def _rid_resource(table_name, rid):
-    # page_id/slot rather than repr(): SeqRID and a plain RID for the same
-    # row must map to the same lock
-    return f"rid:{table_name}:{rid.page_id}:{rid.slot}"
-
-
 def _record_data(record):
     return [{"type": value.data_type.value, "data": value.data} for value in record.values]
 
@@ -312,18 +308,21 @@ def _rid_data(rid):
 
 
 def _undo_insert(catalog, table_name, storage, rid):
-    record = storage.get(rid)
-    if record is not None:
-        catalog.unregister_delete(table_name, record, rid)
-        storage.delete(rid)
+    with table_latch(catalog, table_name):
+        record = storage.get(rid)
+        if record is not None:
+            catalog.unregister_delete(table_name, record, rid)
+            storage.delete(rid)
 
 
 def _undo_delete(catalog, table_name, storage, record):
-    rid = storage.insert(record)
-    catalog.register_insert(table_name, record, rid)
-    catalog.register_insert_uniques(table_name, record)
+    with table_latch(catalog, table_name):
+        rid = storage.insert(record)
+        catalog.register_insert(table_name, record, rid)
+        catalog.register_insert_uniques(table_name, record)
 
 
 def _undo_update(catalog, table_name, storage, old_rid, new_rid, current, previous):
-    restored_rid = storage.update(new_rid, previous)
-    catalog.register_update(table_name, new_rid, restored_rid, current, previous)
+    with table_latch(catalog, table_name):
+        restored_rid = storage.update(new_rid, previous)
+        catalog.register_update(table_name, new_rid, restored_rid, current, previous)

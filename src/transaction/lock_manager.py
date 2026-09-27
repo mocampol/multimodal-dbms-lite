@@ -19,6 +19,12 @@ class LockTimeoutError(TimeoutError):
     pass
 
 
+def rid_resource(table_name: str, rid) -> str:
+    """Lock name for a row. Uses page_id/slot rather than repr() so a SeqRID
+    and a plain RID pointing at the same row share one lock."""
+    return f"rid:{table_name}:{rid.page_id}:{rid.slot}"
+
+
 class LockManager:
     def __init__(self):
         self._condition = threading.Condition(threading.RLock())

@@ -9,20 +9,23 @@ from typing import Optional
 
 from common.record import Record
 from query.executor.plan_node import PlanNode
+from storage.latch import NO_LATCH
 
 
 class IndexScan(PlanNode):
-	def __init__(self, index, storage, key, lock_rid=None):
+	def __init__(self, index, storage, key, lock_rid=None, latch=NO_LATCH):
 		self.index = index
 		self.storage = storage
 		self.key = key
 		self.lock_rid = lock_rid
+		self.latch = latch
 		self._records = []
 		self._cursor = 0
 
 	def open(self) -> None:
 		search_all = getattr(self.index, "search_all", None)
-		rids = search_all(self.key) if search_all is not None else self.index.search(self.key)
+		with self.latch:
+			rids = search_all(self.key) if search_all is not None else self.index.search(self.key)
 		if rids is None:
 			rids = []
 		if not isinstance(rids, list):
@@ -33,7 +36,8 @@ class IndexScan(PlanNode):
 			if self.lock_rid is not None:
 				from transaction.lock_manager import LockMode
 				self.lock_rid(rid, LockMode.SHARED)
-			record = self.storage.get(rid)
+			with self.latch:
+				record = self.storage.get(rid)
 			if record is not None:
 				self._records.append(record)
 		self._cursor = 0
