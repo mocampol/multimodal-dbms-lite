@@ -212,23 +212,14 @@ def _execute_statement(stm, catalog):
         # semántica de transacción implícita y locking que un SELECT
         # normal (ver el bloque de SelectStm de abajo), envuelto con
         # _instrument_tree() para medir tiempo y filas por nodo.
-        implicit = manager.current() is None
-        if implicit:
-            manager.begin()
-        try:
-            lock_rid = lambda rid, mode: manager.lock(f"rid:{inner.table}:{rid}", mode)
+        def explain_analyze():
             plan = build_select_plan(inner, catalog, lock_rid=lock_rid)
             instrumented_plan = _instrument_tree(plan)
             start = time.perf_counter()
             rows = list(run_plan(instrumented_plan))
             elapsed_ms = (time.perf_counter() - start) * 1000
-            if implicit:
-                manager.commit()
             return ExplainResult(instrumented_plan, analyze=True, row_count=len(rows), elapsed_ms=elapsed_ms)
-        except Exception:
-            if implicit and manager.current() is not None:
-                manager.abort()
-            raise
+        return _run_in_transaction(manager, explain_analyze)
 
     if isinstance(stm, SelectStm):
         return _run_in_transaction(
