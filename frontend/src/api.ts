@@ -12,14 +12,26 @@ export interface ColumnInfo {
 export interface IndexInfo {
   index_id: number
   column_name: string
-  index_type: 'btree' | 'hash' | string
+  index_type: 'btree' | 'hash' | 'rtree'
   root_page_id?: number
+  is_spatial: boolean
+}
+
+export interface PointCoordinates {
+  longitude: number
+  latitude: number
+}
+
+export interface DistanceValue {
+  value: number
+  unit: 'meters' | 'coordinate_units'
 }
 
 export interface TableSummary {
   name: string
   storage_type: string
   columns: Pick<ColumnInfo, 'name' | 'type' | 'is_primary_key'>[]
+  indexes: IndexInfo[]
 }
 
 export interface TableDetail {
@@ -46,6 +58,11 @@ export interface PlanNode {
   left_key?: number
   right_key?: number
   children?: PlanNode[]
+  index_id?: number
+  column_name?: string
+  candidate_boxes?: [number, number, number, number][]
+  predicate?: string
+  metric?: 'EUCLIDEAN' | 'HAVERSINE' | null
   // Solo presentes cuando el plan viene de EXPLAIN ANALYZE (plan
   // ejecutado de verdad, no solo armado): filas que produjo este nodo
   // puntual y tiempo propio (no acumulado de sus hijos) en next().
@@ -56,11 +73,13 @@ export interface PlanNode {
 export interface SelectQueryResult {
   type: 'SELECT'
   columns: string[]
-  rows: unknown[][]
+  rows: QueryValue[][]
   row_count: number
   execution_ms: number
   plan: PlanNode
 }
+
+export type QueryValue = string | number | boolean | null | PointCoordinates | DistanceValue
 
 export interface MutationQueryResult {
   type: 'INSERT' | 'UPDATE' | 'DELETE'

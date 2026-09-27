@@ -109,6 +109,8 @@ class SpatialIndexScan(PlanNode):
         latch=NO_LATCH,
         lock_rid=None,
         include_nulls_column: int | None = None,
+        index_id: int | None = None,
+        column_name: str | None = None,
     ):
         self.index = index
         self.storage = storage
@@ -117,6 +119,8 @@ class SpatialIndexScan(PlanNode):
         self.latch = latch
         self.lock_rid = lock_rid
         self.include_nulls_column = include_nulls_column
+        self.index_id = index_id
+        self.column_name = column_name
         self._records = []
         self._cursor = 0
 
@@ -172,6 +176,9 @@ class SpatialIndexScan(PlanNode):
         return {
             "node": "SpatialIndexScan",
             "access": "rtree_candidates",
+            "index_type": "rtree",
+            "index_id": self.index_id,
+            "column_name": self.column_name,
             "table": self.table_name,
             "candidate_boxes": [
                 [box.min_x, box.min_y, box.max_x, box.max_y]
@@ -223,6 +230,10 @@ class KNNScan(PlanNode):
         return {
             "node": "KNNScan",
             "order_by": [repr(item) for item in self.order_items],
+            "metric": next(
+                (item.metric.upper() for item in self.order_items if isinstance(item, DistanceExp)),
+                None,
+            ),
             "strategy": "exact_distance_sort",
         }
 

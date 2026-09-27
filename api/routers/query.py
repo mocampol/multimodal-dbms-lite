@@ -1,6 +1,6 @@
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from engine import catalog
 from explain import describe_plan, output_columns, serialize_explain_result
@@ -10,7 +10,7 @@ from serialize import serialize_record
 from query.parser.ast_nodes import SelectStm, InsertStm, UpdateStm, DeleteStm, BeginTransactionStm, ExplainStm
 from query.rewriter.rewriter import rewrite
 from query.planner.plan_builder import build_select_plan
-from query.query_engine import execute_many
+from query.query_engine import QueryError, execute_many
 
 router = APIRouter()
 
@@ -18,7 +18,10 @@ router = APIRouter()
 @router.post("/query")
 def run_query(payload: QueryRequest):
     t0 = time.perf_counter()
-    executed = execute_many(payload.sql, catalog)
+    try:
+        executed = execute_many(payload.sql, catalog)
+    except QueryError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     execution_ms = (time.perf_counter() - t0) * 1000
 
     responses = [_response_for_statement(stm, result, execution_ms / len(executed)) for stm, result in executed]

@@ -1,4 +1,12 @@
-import { isBatchQueryResult, isExplainQueryResult, type QueryResult, type SingleQueryResult } from './api'
+import {
+  isBatchQueryResult,
+  isExplainQueryResult,
+  type DistanceValue,
+  type PointCoordinates,
+  type QueryResult,
+  type QueryValue,
+  type SingleQueryResult,
+} from './api'
 
 interface ResultsPanelProps {
   result: QueryResult | null
@@ -72,7 +80,7 @@ function ResultContent({ result }: { result: SingleQueryResult }) {
               {result.rows.map((row, rowIndex) => (
                 <tr key={rowIndex}>
                   {row.map((value, cellIndex) => (
-                    <td key={cellIndex}>{value === null ? 'NULL' : String(value)}</td>
+                    <td key={cellIndex}>{formatCellValue(value)}</td>
                   ))}
                 </tr>
               ))}
@@ -82,6 +90,23 @@ function ResultContent({ result }: { result: SingleQueryResult }) {
       )}
     </>
   )
+}
+
+function formatCellValue(value: QueryValue): string {
+  if (value === null) return 'NULL'
+  if (isPointCoordinates(value)) {
+    return `lat: ${value.latitude}, lon: ${value.longitude}`
+  }
+  if (isDistanceValue(value)) return `${value.value} ${value.unit}`
+  return String(value)
+}
+
+function isPointCoordinates(value: QueryValue): value is PointCoordinates {
+  return typeof value === 'object' && value !== null && 'longitude' in value && 'latitude' in value
+}
+
+function isDistanceValue(value: QueryValue): value is DistanceValue {
+  return typeof value === 'object' && value !== null && 'value' in value && 'unit' in value
 }
 
 export default ResultsPanel

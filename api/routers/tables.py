@@ -1,11 +1,12 @@
 from fastapi import APIRouter
 
 from engine import catalog
+from schemas import TableDetail, TableSummary
 
 router = APIRouter()
 
 
-@router.get("/tables")
+@router.get("/tables", response_model=list[TableSummary])
 def list_tables():
     return [
         {
@@ -15,13 +16,13 @@ def list_tables():
                 {"name": c.name, "type": c.data_type.value, "is_primary_key": c.is_primary_key}
                 for c in tm.schema.columns
             ],
-            "indexes": catalog.get_indexes(name),
+            "indexes": _index_metadata(name),
         }
         for name, tm in catalog.tables.items()
     ]
 
 
-@router.get("/tables/{table_name}")
+@router.get("/tables/{table_name}", response_model=TableDetail)
 def get_table(table_name: str):
     schema = catalog.get_schema(table_name)
     return {
@@ -38,5 +39,15 @@ def get_table(table_name: str):
             }
             for c in schema.columns
         ],
-        "indexes": catalog.get_indexes(table_name),
+        "indexes": _index_metadata(table_name),
     }
+
+
+def _index_metadata(table_name: str) -> list[dict]:
+    return [
+        {
+            **entry,
+            "is_spatial": entry["index_type"] == "rtree",
+        }
+        for entry in catalog.get_indexes(table_name)
+    ]

@@ -82,6 +82,7 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             column_name = _resolve_column_name(schema, geometry.value)
             index = catalog.get_physical_index(stm.table, column_name)
             if index is not None and hasattr(index, "range_query"):
+                index_info = _spatial_index_info(catalog, stm.table, column_name)
                 node = SpatialIndexScan(
                     index,
                     catalog.get_storage(stm.table),
@@ -89,6 +90,8 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
                     candidate_boxes_for_predicate(stm.where_cond, schema),
                     latch=table_latch(catalog, stm.table),
                     lock_rid=table_lock_rid,
+                    index_id=index_info.get("index_id"),
+                    column_name=column_name,
                 )
             else:
                 node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
@@ -97,6 +100,7 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             column_name = _resolve_column_name(schema, distance_order.geometry.value)
             index = catalog.get_physical_index(stm.table, column_name)
             if index is not None and hasattr(index, "range_query"):
+                index_info = _spatial_index_info(catalog, stm.table, column_name)
                 column_position = schema.column_index(column_name)
                 node = SpatialIndexScan(
                     index,
@@ -106,6 +110,8 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
                     latch=table_latch(catalog, stm.table),
                     lock_rid=table_lock_rid,
                     include_nulls_column=column_position,
+                    index_id=index_info.get("index_id"),
+                    column_name=column_name,
                 )
             else:
                 node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
@@ -170,6 +176,16 @@ def _spatial_geometry(predicate):
     if isinstance(predicate, WithinExp):
         return predicate.geometry
     return predicate.left.geometry
+
+
+def _spatial_index_info(catalog, table_name, column_name):
+    return next(
+        (
+            entry for entry in catalog.get_indexes(table_name)
+            if entry["column_name"] == column_name and entry["index_type"] == "rtree"
+        ),
+        {},
+    )
 
 
 def _join_schema(left_name, left_schema, right_name, right_schema):

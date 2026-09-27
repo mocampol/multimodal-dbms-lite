@@ -22,6 +22,12 @@ function describeNodeShape(node: PlanNode): string {
       return `Clustered Index Scan (clave = ${JSON.stringify(node.key)})`
     case 'IndexScan':
       return `Index Scan usando ${node.index_type ?? 'índice'} (clave = ${JSON.stringify(node.key)})`
+    case 'SpatialIndexScan':
+      return `Spatial Index Scan (${node.index_type ?? 'rtree'} · ${node.table}.${node.column_name ?? ''})`
+    case 'SpatialFilter':
+      return `Spatial Filter ${node.predicate ?? ''}`
+    case 'KNNScan':
+      return `K-NN por distancia${node.metric ? ` (${node.metric})` : ''}`
     case 'BitmapScan':
       return `Bitmap Scan (clave = ${JSON.stringify(node.key)})`
     case 'Filter':

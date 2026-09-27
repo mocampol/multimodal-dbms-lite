@@ -2,7 +2,8 @@ import base64
 from datetime import date, datetime, time
 from decimal import Decimal
 
-from common.value import Point
+from common.value import Distance, Point
+from spatial.geometry import Point2D
 
 
 def serialize_value(value) -> object:
@@ -13,6 +14,10 @@ def serialize_value(value) -> object:
         return float(data)
     if isinstance(data, Point):
         return {"longitude": data.longitude, "latitude": data.latitude}
+    if isinstance(data, Point2D):
+        return {"longitude": data.x, "latitude": data.y}
+    if isinstance(data, Distance):
+        return {"value": data.value, "unit": data.unit.value}
     if isinstance(data, (datetime, date, time)):
         return data.isoformat()
     if isinstance(data, (bytes, bytearray)):
