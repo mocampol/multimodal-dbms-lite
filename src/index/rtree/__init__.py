@@ -6,8 +6,9 @@ from .exceptions import (
     RTreeNodeSplitError,
     RTreePageCorruptionError,
 )
-from .node import RTree, RTreeNode
+from .node import RTreeNode
 from .page import InternalEntry, LeafEntry, NodeType, RTreePage
+from .rtree import RTree
 
 __all__ = [
     "InternalEntry",

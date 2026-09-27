@@ -1,6 +1,7 @@
-"""R-Tree node operations and root-page lifecycle."""
+"""Persistent R-Tree node operations."""
 
-from storage.buffer_manager import BufferManager
+import math
+
 from storage.heap.rid import RID
 from storage.page import Page
 from spatial.geometry import BoundingBox
@@ -94,23 +95,7 @@ class RTreeNode:
                 "las entradas no caben en dos páginas del mismo tamaño"
             )
 
-        centers_x = [(entry.mbr.min_x + entry.mbr.max_x) / 2 for entry in all_entries]
-        centers_y = [(entry.mbr.min_y + entry.mbr.max_y) / 2 for entry in all_entries]
-        spread_x = max(centers_x) - min(centers_x)
-        spread_y = max(centers_y) - min(centers_y)
-        center_axis = 0 if spread_x >= spread_y else 1
-        ordered = sorted(
-            all_entries,
-            key=lambda entry: (
-                (entry.mbr.min_x + entry.mbr.max_x) / 2
-                if center_axis == 0
-                else (entry.mbr.min_y + entry.mbr.max_y) / 2,
-                entry.mbr.min_x,
-                entry.mbr.min_y,
-            ),
-        )
-        split_at = len(ordered) // 2
-        left_entries, right_entries = ordered[:split_at], ordered[split_at:]
+        left_entries, right_entries = self._linear_split(all_entries)
         if not left_entries or not right_entries:
             raise RTreeNodeSplitError("el split produjo un nodo vacío")
 
@@ -123,111 +108,118 @@ class RTreeNode:
         right_node._replace_entries(right_entries)
         return right_node
 
+    def replace_entries(self, entries: list[LeafEntry | InternalEntry]) -> None:
+        """Replace all entries while enforcing the node kind and page capacity."""
+        expected_type = LeafEntry if self.is_leaf else InternalEntry
+        if any(not isinstance(entry, expected_type) for entry in entries):
+            raise TypeError("las entradas no coinciden con el tipo del nodo")
+        self._replace_entries(entries)
+
+    def _linear_split(
+        self,
+        entries: list[LeafEntry | InternalEntry],
+    ) -> tuple[list[LeafEntry | InternalEntry], list[LeafEntry | InternalEntry]]:
+        seeds = self._linear_split_seeds(entries)
+        left_entries = [entries[seeds[0]]]
+        right_entries = [entries[seeds[1]]]
+        remaining = [
+            entry for index, entry in enumerate(entries) if index not in seeds
+        ]
+        minimum_fill = max(1, math.ceil(self.capacity * 0.4))
+
+        while remaining:
+            if len(left_entries) + len(remaining) == minimum_fill:
+                left_entries.extend(remaining)
+                break
+            if len(right_entries) + len(remaining) == minimum_fill:
+                right_entries.extend(remaining)
+                break
+
+            left_mbr = self._entries_mbr(left_entries)
+            right_mbr = self._entries_mbr(right_entries)
+            next_index = max(
+                range(len(remaining)),
+                key=lambda index: abs(
+                    self._enlargement(left_mbr, remaining[index].mbr)
+                    - self._enlargement(right_mbr, remaining[index].mbr)
+                ),
+            )
+            entry = remaining.pop(next_index)
+            left_enlargement = self._enlargement(left_mbr, entry.mbr)
+            right_enlargement = self._enlargement(right_mbr, entry.mbr)
+            if left_enlargement < right_enlargement:
+                left_entries.append(entry)
+            elif right_enlargement < left_enlargement:
+                right_entries.append(entry)
+            elif left_mbr.area < right_mbr.area:
+                left_entries.append(entry)
+            elif right_mbr.area < left_mbr.area:
+                right_entries.append(entry)
+            elif len(left_entries) <= len(right_entries):
+                left_entries.append(entry)
+            else:
+                right_entries.append(entry)
+
+        return left_entries, right_entries
+
+    @staticmethod
+    def _linear_split_seeds(entries: list[LeafEntry | InternalEntry]) -> tuple[int, int]:
+        best_pair = None
+        best_separation = float("-inf")
+        for minimum, maximum in (
+            ("min_x", "max_x"),
+            ("min_y", "max_y"),
+        ):
+            highest_low_index = max(
+                range(len(entries)), key=lambda index: getattr(entries[index].mbr, minimum)
+            )
+            lowest_high_index = min(
+                range(len(entries)), key=lambda index: getattr(entries[index].mbr, maximum)
+            )
+            lowest_low = min(getattr(entry.mbr, minimum) for entry in entries)
+            highest_high = max(getattr(entry.mbr, maximum) for entry in entries)
+            width = highest_high - lowest_low
+            separation = (
+                (
+                    getattr(entries[highest_low_index].mbr, minimum)
+                    - getattr(entries[lowest_high_index].mbr, maximum)
+                )
+                / width
+                if width
+                else 0
+            )
+            if separation > best_separation:
+                best_pair = highest_low_index, lowest_high_index
+                best_separation = separation
+
+        if best_pair[0] != best_pair[1]:
+            return best_pair
+
+        centers = [
+            ((entry.mbr.min_x + entry.mbr.max_x) / 2,
+             (entry.mbr.min_y + entry.mbr.max_y) / 2)
+            for entry in entries
+        ]
+        return max(
+            (
+                (first_index, second_index)
+                for first_index in range(len(entries))
+                for second_index in range(first_index + 1, len(entries))
+            ),
+            key=lambda pair: math.dist(centers[pair[0]], centers[pair[1]]),
+        )
+
+    @staticmethod
+    def _entries_mbr(entries: list[LeafEntry | InternalEntry]) -> BoundingBox:
+        result = entries[0].mbr
+        for entry in entries[1:]:
+            result = result.union(entry.mbr)
+        return result
+
+    @staticmethod
+    def _enlargement(current: BoundingBox, added: BoundingBox) -> float:
+        return current.union(added).area - current.area
+
     def _replace_entries(self, entries: list[LeafEntry | InternalEntry]) -> None:
         RTreePage.serialize(self.page, self.node_type, entries)
         self._entries = list(entries)
-
-
-class RTree:
-    """Owns the root page ID and allocates node pages through a BufferManager.
-
-    As with BTree, callers persist root_page_id in catalog metadata and pass it
-    when reopening an existing index. Node pages themselves live in the file.
-    """
-
-    def __init__(self, buffer_manager: BufferManager, root_page_id: int | None = None):
-        self.bm = buffer_manager
-        if root_page_id is not None:
-            self._root_page_id = root_page_id
-            page = self.bm.fetch_page(root_page_id)
-            try:
-                RTreeNode(page)
-            finally:
-                self.bm.unpin_page(root_page_id, is_dirty=False)
-        elif self.bm.file_manager.page_count() == 0:
-            self._root_page_id = self.create_node(NodeType.LEAF)
-        else:
-            raise ValueError(
-                "El archivo R-Tree ya existe pero no se indicó root_page_id"
-            )
-
-    @property
-    def root_page_id(self) -> int:
-        return self._root_page_id
-
-    def create_node(self, node_type: NodeType) -> int:
-        page_id = self.bm.allocate_page()
-        page = self.bm.fetch_page(page_id)
-        try:
-            if node_type == NodeType.LEAF:
-                RTreeNode.init_leaf(page)
-            elif node_type == NodeType.INTERNAL:
-                RTreeNode.init_internal(page)
-            else:
-                raise ValueError(f"Tipo de nodo desconocido: {node_type!r}")
-        except Exception:
-            self.bm.unpin_page(page_id, is_dirty=False)
-            raise
-        self.bm.unpin_page(page_id, is_dirty=True)
-        return page_id
-
-    def fetch_node(self, page_id: int) -> RTreeNode:
-        """Fetch and pin a node; caller must unpin its page when finished."""
-        page = self.bm.fetch_page(page_id)
-        try:
-            return RTreeNode(page)
-        except Exception:
-            self.bm.unpin_page(page_id, is_dirty=False)
-            raise
-
-    def split_node(
-        self,
-        page_id: int,
-        pending_entry: LeafEntry | InternalEntry | None = None,
-    ) -> int:
-        """Split a node and return its sibling page ID.
-
-        Splitting the root also creates and publishes a new internal root. A
-        non-root caller is responsible for adding the sibling to its parent.
-        """
-        page = self.bm.fetch_page(page_id)
-        right_page_id = None
-        right_page_pinned = False
-        left_dirty = False
-        try:
-            node = RTreeNode(page)
-            if page_id == self._root_page_id and RTreePage.max_entries(
-                page.size, NodeType.INTERNAL
-            ) < 2:
-                raise RTreeNodeCapacityError(
-                    "el tamaño de página no permite crear un root interno con dos hijos"
-                )
-            right_page_id = self.bm.allocate_page()
-            right_page = self.bm.fetch_page(right_page_id)
-            right_page_pinned = True
-            right_node = node.split(right_page, pending_entry)
-            left_mbr = node.bounding_box
-            right_mbr = right_node.bounding_box
-            self.bm.unpin_page(right_page_id, is_dirty=True)
-            right_page_pinned = False
-            left_dirty = True
-        finally:
-            if right_page_pinned:
-                self.bm.unpin_page(right_page_id, is_dirty=False)
-            self.bm.unpin_page(page_id, is_dirty=left_dirty)
-
-        if page_id == self._root_page_id:
-            new_root_page_id = self.create_node(NodeType.INTERNAL)
-            root_page = self.bm.fetch_page(new_root_page_id)
-            try:
-                root = RTreeNode(root_page)
-                if not root.insert_internal_entry(left_mbr, page_id):
-                    raise RTreeNodeCapacityError("el root interno no tiene capacidad")
-                if not root.insert_internal_entry(right_mbr, right_page_id):
-                    raise RTreeNodeCapacityError("el root interno no tiene capacidad")
-            except Exception:
-                self.bm.unpin_page(new_root_page_id, is_dirty=False)
-                raise
-            self.bm.unpin_page(new_root_page_id, is_dirty=True)
-            self._root_page_id = new_root_page_id
-        return right_page_id
