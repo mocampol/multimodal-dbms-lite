@@ -12,8 +12,9 @@ import pytest
 from catalog.catalog import Catalog
 from catalog.exceptions import TableAlreadyExistsError
 from catalog.table_metadata import StorageType
+from common.record import Record
 from common.schema import Column, Schema
-from common.value import DataType
+from common.value import DataType, Value
 from loader import (
     DuplicateColumnNameError,
     EmptyCSVError,
@@ -23,8 +24,11 @@ from loader import (
     load_csv,
     prepare_import,
 )
+from loader.csv_loader import _run_batch, _transaction_manager
+from loader.type_inference import convert_value
 from main import make_heap_factory, make_index_buffer_factory, make_sequential_factory
 from query.query_engine import execute
+from transaction import TransactionManager
 
 
 DATA = Path(__file__).parent / "data"
@@ -36,7 +40,7 @@ def csv(name: str) -> str:
 
 def make_catalog(base_dir):
     heap_factory = make_heap_factory(str(base_dir))
-    return Catalog(
+    catalog = Catalog(
         heap_factory=heap_factory,
         storage_factories={
             StorageType.HEAP: heap_factory,
@@ -44,6 +48,9 @@ def make_catalog(base_dir):
         },
         index_buffer_factory=make_index_buffer_factory(str(base_dir)),
     )
+    # WAL aislado por test: sin esto se usaría data/transactions.wal del repo.
+    catalog._transaction_manager = TransactionManager(log_path=str(base_dir / "test.wal"))
+    return catalog
 
 
 def types_of(schema: Schema) -> dict:
@@ -180,9 +187,9 @@ def test_load_csv_end_to_end(tmp_path):
     catalog = make_catalog(tmp_path)
     schema = prepare_import(csv("alumnos.csv"), "alumnos")
 
-    count = load_csv(catalog, csv("alumnos.csv"), schema)
+    result = load_csv(catalog, csv("alumnos.csv"), schema)
 
-    assert count == 4
+    assert result == {"inserted": 4, "skipped": []}
     assert catalog.table_exists("alumnos")
     assert rows_of(catalog, "alumnos") == [
         [1, "Daniela", 21, 17.5, True],
@@ -237,9 +244,11 @@ def test_load_csv_renamed_table(tmp_path):
 
 def test_load_csv_large_file(tmp_path):
     catalog = make_catalog(tmp_path)
-    count = load_csv(catalog, csv("grande.csv"), prepare_import(csv("grande.csv"), "g"))
+    result = load_csv(
+        catalog, csv("grande.csv"), prepare_import(csv("grande.csv"), "g"), batch_size=700
+    )
 
-    assert count == 5000
+    assert result["inserted"] == 5000
     rows = rows_of(catalog, "g")
     assert len(rows) == 5000
     assert rows[-1][0] == 4999 and rows[-1][3] == "item_4999"
@@ -314,7 +323,7 @@ def test_override_primary_key_rejects_duplicates(tmp_path):
         id=Column("id", DataType.INTEGER, is_primary_key=True),
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="duplicado.*'id'"):
         load_csv(catalog, csv("pk_duplicada.csv"), schema)
 
 
@@ -351,5 +360,226 @@ def test_override_varchar_size_too_small_is_rejected(tmp_path):
         nombre=Column("nombre", DataType.VARCHAR, size=3),
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(UnsupportedTypeError, match="Fila 2"):
         load_csv(catalog, csv("alumnos.csv"), schema)
+
+
+# ---------------------------------------------------------------------------
+# inferencia: columna 100% vacía
+# ---------------------------------------------------------------------------
+
+def test_all_empty_column_defaults_to_varchar_and_loads_nulls(tmp_path):
+    schema = infer_schema("t", DATA / "columna_vacia.csv")
+    assert types_of(schema)["vacia"] == DataType.VARCHAR
+    assert schema.get_column("vacia").size == 32
+
+    catalog = make_catalog(tmp_path)
+    load_csv(catalog, csv("columna_vacia.csv"), schema)
+    assert rows_of(catalog, "t") == [[1, None, "Ana"], [2, None, "Luis"]]
+
+
+# ---------------------------------------------------------------------------
+# overrides: rangos enteros, REAL, BOOLEAN desde 1/0
+# ---------------------------------------------------------------------------
+
+def test_override_integer_ranges_at_limits(tmp_path):
+    catalog = make_catalog(tmp_path)
+    schema = override(
+        prepare_import(csv("enteros_rango.csv"), "t"),
+        chico=Column("chico", DataType.SMALLINT),
+        grande=Column("grande", DataType.BIGINT),
+    )
+
+    load_csv(catalog, csv("enteros_rango.csv"), schema)
+
+    assert rows_of(catalog, "t") == [
+        [1, 32767, 9223372036854775807],
+        [2, -32768, -9223372036854775808],
+    ]
+
+
+def test_override_smallint_overflow_reports_row(tmp_path):
+    catalog = make_catalog(tmp_path)
+    schema = override(
+        prepare_import(csv("smallint_overflow.csv"), "t"),
+        chico=Column("chico", DataType.SMALLINT),
+    )
+
+    with pytest.raises(UnsupportedTypeError, match="Fila 3.*40000 está fuera de rango para smallint"):
+        load_csv(catalog, csv("smallint_overflow.csv"), schema)
+
+
+def test_override_real_rejects_precision_loss(tmp_path):
+    catalog = make_catalog(tmp_path)
+    schema = override(
+        prepare_import(csv("reales.csv"), "t"),
+        r=Column("r", DataType.REAL),
+    )
+
+    # 0.5 es exacto en float32; 0.1 no
+    with pytest.raises(UnsupportedTypeError, match="Fila 3.*pierde precisión"):
+        load_csv(catalog, csv("reales.csv"), schema)
+
+
+@pytest.mark.parametrize(
+    "raw, data_type, message",
+    [
+        ("40000", DataType.SMALLINT, "fuera de rango"),
+        ("9223372036854775808", DataType.BIGINT, "fuera de rango"),
+        ("0.1", DataType.REAL, "pierde precisión"),
+        ("1e40", DataType.REAL, "fuera de rango para REAL"),
+        ("quizas", DataType.BOOLEAN, "no es un booleano reconocido"),
+        ("abc", DataType.INTEGER, "no es válido para el tipo integer"),
+        ("2024-13-01", DataType.DATE, "no es válido para el tipo date"),
+        ("zz", DataType.BYTEA, "no es válido para el tipo bytea"),
+        ("1,5", DataType.NUMERIC, "no es válido para el tipo numeric"),
+    ],
+)
+def test_convert_value_error_messages(raw, data_type, message):
+    with pytest.raises(UnsupportedTypeError, match=message):
+        convert_value(raw, data_type)
+
+
+def test_override_boolean_accepts_1_0_and_words(tmp_path):
+    catalog = make_catalog(tmp_path)
+    schema = prepare_import(csv("booleanos_override.csv"), "t")
+    assert types_of(schema)["flag"] == DataType.VARCHAR  # 1/0/yes mezclados
+
+    schema = override(schema, flag=Column("flag", DataType.BOOLEAN))
+    load_csv(catalog, csv("booleanos_override.csv"), schema)
+
+    assert [r[1] for r in rows_of(catalog, "t")] == [True, False, True, False]
+
+
+# ---------------------------------------------------------------------------
+# on_error / batch_size / transacciones
+# ---------------------------------------------------------------------------
+
+def errores_mixtos_schema(table="t"):
+    # No se puede usar prepare_import: la fila 5 tiene columnas de menos e
+    # infer_schema la rechaza. Se arma el schema como lo haría el frontend.
+    return Schema(table, [
+        Column("id", DataType.INTEGER, is_primary_key=True),
+        Column("nombre", DataType.VARCHAR, size=16),
+        Column("fecha", DataType.DATE),
+    ])
+
+
+def test_on_error_ignore_skips_bad_rows_and_reports_them(tmp_path):
+    catalog = make_catalog(tmp_path)
+
+    result = load_csv(catalog, csv("errores_mixtos.csv"), errores_mixtos_schema(), on_error="ignore")
+
+    assert result["inserted"] == 3
+    assert [s["row"] for s in result["skipped"]] == [3, 5, 6, 7]
+    reasons = {s["row"]: s["reason"] for s in result["skipped"]}
+    assert "no-es-fecha" in reasons[3]   # conversión
+    assert "2 columnas" in reasons[5]    # fila inconsistente
+    assert "duplicado" in reasons[6]     # PK repetida
+    assert "VARCHAR" in reasons[7]       # tamaño excedido
+    assert [r[0] for r in rows_of(catalog, "t")] == [1, 3, 6]
+
+
+def test_on_error_ignore_with_batch_size_1(tmp_path):
+    catalog = make_catalog(tmp_path)
+
+    result = load_csv(
+        catalog, csv("errores_mixtos.csv"), errores_mixtos_schema(),
+        on_error="ignore", batch_size=1,
+    )
+
+    assert result["inserted"] == 3
+    assert [r[0] for r in rows_of(catalog, "t")] == [1, 3, 6]
+
+
+@pytest.mark.parametrize("batch_size", [1000, 1])
+def test_on_error_stop_drops_the_table(tmp_path, batch_size):
+    catalog = make_catalog(tmp_path)
+
+    with pytest.raises(UnsupportedTypeError, match="Fila 3"):
+        load_csv(
+            catalog, csv("errores_mixtos.csv"), errores_mixtos_schema(), batch_size=batch_size
+        )
+
+    # Todo-o-nada: aunque con batch_size=1 la fila 2 ya se había
+    # commiteado en su propio lote, la tabla desaparece entera.
+    assert not catalog.table_exists("t")
+
+
+def test_failed_import_allows_reimport_with_same_name(tmp_path):
+    catalog = make_catalog(tmp_path)
+    with pytest.raises(UnsupportedTypeError):
+        load_csv(catalog, csv("errores_mixtos.csv"), errores_mixtos_schema("alumnos"))
+
+    result = load_csv(catalog, csv("alumnos.csv"), prepare_import(csv("alumnos.csv"), "alumnos"))
+
+    assert result["inserted"] == 4
+    assert len(rows_of(catalog, "alumnos")) == 4
+
+
+def test_existing_table_is_not_dropped_on_name_clash(tmp_path):
+    catalog = make_catalog(tmp_path)
+    schema = prepare_import(csv("alumnos.csv"), "alumnos")
+    load_csv(catalog, csv("alumnos.csv"), schema)
+
+    with pytest.raises(TableAlreadyExistsError):
+        load_csv(catalog, csv("alumnos.csv"), schema)
+
+    assert len(rows_of(catalog, "alumnos")) == 4
+
+
+def test_failed_batch_is_undone_by_abort(tmp_path):
+    # Prueba el undo del lote directamente, sin el drop_table de load_csv
+    # que lo taparía.
+    catalog = make_catalog(tmp_path)
+    schema = errores_mixtos_schema()
+    catalog.create_table(schema)
+    manager = _transaction_manager(catalog)
+    batch = [
+        (2, ["1", "Ana", "2024-01-01"]),
+        (3, ["2", "Luis", "2024-02-02"]),
+        (4, ["3", "Eva", "no-es-fecha"]),
+    ]
+
+    with pytest.raises(UnsupportedTypeError, match="Fila 4"):
+        _run_batch(catalog, manager, "t", schema, batch, "stop", [])
+
+    assert rows_of(catalog, "t") == []
+    assert manager.current() is None
+    record = Record([
+        Value(DataType.INTEGER, 1),
+        Value(DataType.VARCHAR, "Ana"),
+        Value(DataType.DATE, date(2024, 1, 1)),
+    ])
+    assert catalog.check_insert_uniques("t", record) is None
+
+
+def test_imported_uniques_are_enforced_on_later_sql_insert(tmp_path):
+    catalog = make_catalog(tmp_path)
+    schema = override(
+        prepare_import(csv("alumnos.csv"), "alumnos"),
+        id=Column("id", DataType.INTEGER, is_primary_key=True),
+    )
+    load_csv(catalog, csv("alumnos.csv"), schema)
+
+    with pytest.raises(Exception):
+        execute("INSERT INTO alumnos VALUES (2, 'Otro', 30, 10.0, true);", catalog)
+
+
+def test_load_csv_leaves_no_active_transaction(tmp_path):
+    catalog = make_catalog(tmp_path)
+    with pytest.raises(UnsupportedTypeError):
+        load_csv(catalog, csv("errores_mixtos.csv"), errores_mixtos_schema())
+
+    assert catalog._transaction_manager.current() is None
+
+
+@pytest.mark.parametrize("kwargs", [{"on_error": "skip"}, {"batch_size": 0}, {"batch_size": -5}])
+def test_load_csv_invalid_arguments(tmp_path, kwargs):
+    catalog = make_catalog(tmp_path)
+    schema = prepare_import(csv("alumnos.csv"), "alumnos")
+
+    with pytest.raises(ValueError):
+        load_csv(catalog, csv("alumnos.csv"), schema, **kwargs)
+
+    assert not catalog.table_exists("alumnos")
