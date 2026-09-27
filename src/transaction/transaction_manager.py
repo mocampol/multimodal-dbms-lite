@@ -1,4 +1,10 @@
-"""Transaction coordinator: WAL, Strict 2PL and per-thread context."""
+"""Transaction coordinator: WAL, Strict 2PL and per-thread context.
+
+Durability follows undo logging with FORCE: every DATA record reaches the
+WAL before its page can reach disk, and every page a transaction dirtied is
+flushed before its COMMIT/ABORT record is written. Crash recovery then only
+has to undo transactions that have neither record (see recovery.py).
+"""
 
 import itertools
 import threading
@@ -55,6 +61,7 @@ class TransactionManager:
             self._states[txn_id] = TransactionState.ACTIVE
         self._local.txn_id = txn_id
         self._local.undo = []
+        self._local.flushes = {}
         self.log_manager.begin(txn_id)
         return txn_id
 
@@ -67,25 +74,42 @@ class TransactionManager:
             raise RuntimeError("no active transaction on this thread")
         return txn_id
 
-    def lock(self, resource: str, mode=LockMode.EXCLUSIVE):
+    def lock(self, resource: str, mode=LockMode.EXCLUSIVE, timeout=None):
         txn_id = self.require()
-        self.lock_manager.acquire(txn_id, resource, mode)
+        self.lock_manager.acquire(txn_id, resource, mode, timeout=timeout)
 
     def log_update(self, resource, old_value, new_value):
         txn_id = self.require()
         return self.log_manager.update(txn_id, resource, old_value, new_value)
 
-    def log_data_change(self, operation, table, rid, before, after):
-        return self.log_manager.data_change(self.require(), operation, table, rid, before, after)
+    def log_data_change(self, operation, table, rid, before, after, new_rid=None):
+        return self.log_manager.data_change(
+            self.require(), operation, table, rid, before, after, new_rid=new_rid,
+        )
 
     def add_undo(self, callback):
         self.require()
         self._local.undo.append(callback)
 
+    def add_flush(self, key, callback):
+        """Registers (once per key) how to flush pages this transaction dirtied."""
+        self.require()
+        self._local.flushes.setdefault(key, callback)
+
+    def _flush_dirty_pages(self):
+        for callback in getattr(self._local, "flushes", {}).values():
+            callback()
+
     def commit(self):
         txn_id = self.require()
-        self.log_manager.commit(txn_id)
-        self.log_manager.flush()
+        try:
+            self._flush_dirty_pages()
+            self.log_manager.commit(txn_id)
+            self.log_manager.flush()
+        except Exception:
+            
+            self.abort()
+            raise
         with self._mutex:
             self._states[txn_id] = TransactionState.COMMITTED
         self.lock_manager.release_all(txn_id)
@@ -93,14 +117,18 @@ class TransactionManager:
 
     def abort(self):
         txn_id = self.require()
-        for callback in reversed(getattr(self._local, "undo", [])):
-            callback()
-        self.log_manager.abort(txn_id)
-        with self._mutex:
-            self._states[txn_id] = TransactionState.ABORTED
-        self.lock_manager.release_all(txn_id)
-        self._clear()
+        try:
+            for callback in reversed(getattr(self._local, "undo", [])):
+                callback()
+            self._flush_dirty_pages()
+            self.log_manager.abort(txn_id)
+        finally:
+            with self._mutex:
+                self._states[txn_id] = TransactionState.ABORTED
+            self.lock_manager.release_all(txn_id)
+            self._clear()
 
     def _clear(self):
         self._local.txn_id = None
         self._local.undo = []
+        self._local.flushes = {}

@@ -10,7 +10,8 @@ from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, UpdateStm, I
 from common.value import DataType, Value
 from common.record import Record
 from common.schema import Schema, Column
-from transaction.lock_manager import LockMode
+from transaction.lock_manager import LockMode, LockTimeoutError
+from storage.latch import latched_scan, table_latch
 
 from query.executor.access.seq_scan import SeqScan
 from query.executor.access.index_scan import IndexScan
@@ -45,19 +46,23 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             else input_schema.column_index(right_join_column)
         )
         node = HashJoin(
-            SeqScan(stm.table, catalog, lock_rid=lock_rid),
-            SeqScan(stm.join.table, catalog, lock_rid=lock_rid),
+            SeqScan(stm.table, catalog, lock_rid=_for_table(lock_rid, stm.table)),
+            SeqScan(stm.join.table, catalog, lock_rid=_for_table(lock_rid, stm.join.table)),
             left_index,
             right_index,
         )
         schema = _join_schema(stm.table, input_schema, stm.join.table, right_schema)
     else:
         schema = input_schema
-        node = SeqScan(stm.table, catalog, lock_rid=lock_rid)
+        table_lock_rid = _for_table(lock_rid, stm.table)
+        node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
         indexed = _equality_index(catalog, stm.table, stm.where_cond)
         if indexed is not None:
             index, key = indexed
-            node = IndexScan(index, catalog.get_storage(stm.table), key, lock_rid=lock_rid)
+            node = IndexScan(
+                index, catalog.get_storage(stm.table), key,
+                lock_rid=table_lock_rid, latch=table_latch(catalog, stm.table),
+            )
 
     physical_condition = _qualify_condition(stm.where_cond, schema)
     if physical_condition is not None and (
@@ -156,12 +161,13 @@ def _aggregate_schema(input_schema, output_items):
     return Schema(f"aggregate_{input_schema.table_name}", columns)
 
 
-def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -> None:
+def execute_insert(stm: InsertStm, catalog, lock_rid=None, after_insert=None) -> None:
     """
     INSERT has no plan tree: it writes each literal row directly to storage.
     """
     schema = catalog.get_schema(stm.table)
     storage = catalog.get_storage(stm.table)
+    latch = table_latch(catalog, stm.table)
 
     column_positions = (
         {name: schema.column_index(name) for name in stm.columns}
@@ -183,17 +189,21 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -
         else:
             record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, values)])
 
-        violated = catalog.check_insert_uniques(stm.table, record)
-        if violated:
-            raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
+        # the UNIQUE check and the registration must be atomic, and the new
+        # row must be X-locked before any other scan can see it
+        with latch:
+            violated = catalog.check_insert_uniques(stm.table, record)
+            if violated:
+                raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
 
-        if before_insert is not None:
-            before_insert(record)
-        rid = storage.insert(record)
-        if lock_rid is not None:
-            lock_rid(rid, LockMode.EXCLUSIVE)
-        catalog.register_insert(stm.table, record, rid)
-        catalog.register_insert_uniques(stm.table, record)
+            rid = storage.insert(record)
+            catalog.register_insert(stm.table, record, rid)
+            catalog.register_insert_uniques(stm.table, record)
+            if after_insert is not None:
+                after_insert(rid, record)
+            locked = _try_lock_new_rid(lock_rid, stm.table, rid)
+        if not locked:
+            lock_rid(stm.table, rid, LockMode.EXCLUSIVE)
         rids.append(rid)
     return rids
 
@@ -205,35 +215,23 @@ def execute_delete(stm: DeleteStm, catalog, lock_rid=None, before_delete=None) -
     a WHERE) purely as a convenient way to iterate matching records, but
     calls storage.delete() as a side effect rather than yielding rows.
 
-    HeapFile exposes stable RIDs for this operation. Sequential storage
-    supports the same operation only for its current equality-by-key API.
+    Both HeapFile and SequentialFile expose RIDs through scan_with_rid(),
+    which lets every deleted row be X-locked, logged and undone.
     """
     schema = catalog.get_schema(stm.table)
     storage = catalog.get_storage(stm.table)
 
-    if hasattr(storage, "scan_with_rid"):
-        matches = []
-        for rid, record in storage.scan_with_rid():
-            if stm.where_cond is None or _condition_matches(stm.where_cond, record, schema):
-                if lock_rid is not None:
-                    lock_rid(rid, LockMode.EXCLUSIVE)
-                matches.append((rid, record))
-        for rid, record in matches:
+    if not hasattr(storage, "scan_with_rid"):
+        raise ValueError("DELETE requiere un storage con RIDs")
+    latch = table_latch(catalog, stm.table)
+    matches = _locked_matches(stm.table, storage, stm.where_cond, schema, lock_rid, latch)
+    for rid, record in matches:
+        with latch:
             if before_delete is not None:
                 before_delete(rid, record)
             catalog.unregister_delete(stm.table, record, rid)
             storage.delete(rid)
-        return len(matches)
-
-    if stm.where_cond is not None and isinstance(stm.where_cond, BinaryExp):
-        if isinstance(stm.where_cond.right, IdExp):
-            raise ValueError("DELETE sobre SequentialFile requiere un literal como clave")
-        if stm.where_cond.op.name != "EQ_OP":
-            raise ValueError("DELETE sobre SequentialFile solo soporta igualdad")
-        deleted = storage.delete(stm.where_cond.right.value)
-        return deleted
-
-    raise ValueError("DELETE sin filtro sobre SequentialFile no está soportado")
+    return len(matches)
 
 
 def execute_update(stm: UpdateStm, catalog, lock_rid=None, on_update=None) -> int:
@@ -243,20 +241,67 @@ def execute_update(stm: UpdateStm, catalog, lock_rid=None, on_update=None) -> in
         raise ValueError("UPDATE requiere HeapFile con RIDs")
     column_index = schema.column_index(stm.column)
     new_value = Value(schema.columns[column_index].data_type, stm.value.value)
+    latch = table_latch(catalog, stm.table)
     matches = []
-    for rid, record in storage.scan_with_rid():
-        if _condition_matches(stm.where_cond, record, schema):
-            if lock_rid is not None:
-                lock_rid(rid, LockMode.EXCLUSIVE)
-            values = list(record.values)
-            values[column_index] = new_value
-            matches.append((rid, record, Record(values)))
+    for rid, record in _locked_matches(stm.table, storage, stm.where_cond, schema, lock_rid, latch):
+        values = list(record.values)
+        values[column_index] = new_value
+        matches.append((rid, record, Record(values)))
     for rid, old_record, new_record in matches:
-        new_rid = storage.update(rid, new_record)
-        if on_update is not None:
-            on_update(rid, new_rid, old_record, new_record)
-        catalog.register_update(stm.table, rid, new_rid, old_record, new_record)
+        with latch:
+            new_rid = storage.update(rid, new_record)
+            if on_update is not None:
+                on_update(rid, new_rid, old_record, new_record)
+            catalog.register_update(stm.table, rid, new_rid, old_record, new_record)
+            # a relocated row gets a fresh RID that needs its own X lock
+            locked = new_rid == rid or _try_lock_new_rid(lock_rid, stm.table, new_rid)
+        if not locked:
+            lock_rid(stm.table, new_rid, LockMode.EXCLUSIVE)
     return len(matches)
+
+
+def _for_table(lock_rid, table_name):
+    if lock_rid is None:
+        return None
+    return lambda rid, mode: lock_rid(table_name, rid, mode)
+
+
+def _try_lock_new_rid(lock_rid, table_name, rid):
+    """
+    X-locks a freshly created RID without blocking, for use while holding
+    the table latch. A fresh RID is normally free; it is only busy when its
+    slot was freed by a still-uncommitted DELETE. Returns False in that
+    case so the caller can wait for the lock after releasing the latch.
+    """
+    if lock_rid is None:
+        return True
+    try:
+        lock_rid(table_name, rid, LockMode.EXCLUSIVE, timeout=0)
+        return True
+    except LockTimeoutError:
+        return False
+
+
+def _locked_matches(table_name, storage, condition, schema, lock_rid, latch):
+    """
+    Collects (rid, record) pairs matching `condition`, taking an X lock on
+    each one. The record is re-read after the lock is granted, since a
+    concurrent writer may have changed or deleted it while we waited.
+    """
+    matches = []
+    for rid, record in latched_scan(storage.scan_with_rid(), latch):
+        if condition is not None and not _condition_matches(condition, record, schema):
+            continue
+        if lock_rid is not None:
+            lock_rid(table_name, rid, LockMode.EXCLUSIVE)
+            with latch:
+                record = storage.get(rid)
+            if record is None:
+                continue
+            if condition is not None and not _condition_matches(condition, record, schema):
+                continue
+        matches.append((rid, record))
+    return matches
 
 
 def _equality_index(catalog, table_name, condition):

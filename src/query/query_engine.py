@@ -13,7 +13,8 @@ from query.parser.ast_nodes import (
     SelectStm, ExplainStm, InsertStm, DeleteStm, UpdateStm, CreateTableStm, CreateIndexStm,
     BeginTransactionStm, EndTransactionStm,
 )
-from transaction import TransactionManager, LockMode
+from transaction import TransactionManager, rid_resource
+from transaction.row_undo import undo_delete, undo_insert, undo_update
 
 from query.rewriter.rewriter import rewrite
 from query.planner.plan_builder import (
@@ -187,6 +188,10 @@ def _execute_statement(stm, catalog):
 
     stm = rewrite(stm)
     manager = _transaction_manager(catalog)
+    def lock_rid(table, rid, mode, timeout=None):
+        if timeout is None:
+            return manager.lock(rid_resource(table, rid), mode)
+        return manager.lock(rid_resource(table, rid), mode, timeout=timeout)
 
     if isinstance(stm, BeginTransactionStm):
         return manager.begin()
@@ -207,87 +212,58 @@ def _execute_statement(stm, catalog):
         # semántica de transacción implícita y locking que un SELECT
         # normal (ver el bloque de SelectStm de abajo), envuelto con
         # _instrument_tree() para medir tiempo y filas por nodo.
-        implicit = manager.current() is None
-        if implicit:
-            manager.begin()
-        try:
-            lock_rid = lambda rid, mode: manager.lock(f"rid:{inner.table}:{rid}", mode)
+        def explain_analyze():
             plan = build_select_plan(inner, catalog, lock_rid=lock_rid)
             instrumented_plan = _instrument_tree(plan)
             start = time.perf_counter()
             rows = list(run_plan(instrumented_plan))
             elapsed_ms = (time.perf_counter() - start) * 1000
-            if implicit:
-                manager.commit()
             return ExplainResult(instrumented_plan, analyze=True, row_count=len(rows), elapsed_ms=elapsed_ms)
-        except Exception:
-            if implicit and manager.current() is not None:
-                manager.abort()
-            raise
+        return _run_in_transaction(manager, explain_analyze)
 
     if isinstance(stm, SelectStm):
-        implicit = manager.current() is None
-        if implicit:
-            manager.begin()
-        try:
-            lock_rid = lambda rid, mode: manager.lock(f"rid:{stm.table}:{rid}", mode)
-            plan = build_select_plan(stm, catalog, lock_rid=lock_rid)
-            result = list(run_plan(plan))
-            if implicit:
-                manager.commit()
-            return result
-        except Exception:
-            if implicit and manager.current() is not None:
-                manager.abort()
-            raise
+        return _run_in_transaction(
+            manager,
+            lambda: list(run_plan(build_select_plan(stm, catalog, lock_rid=lock_rid))),
+        )
 
+    # the hooks below run inside the table latch, so each WAL record is
+    # durable before its page can be flushed
     if isinstance(stm, InsertStm):
         storage = catalog.get_storage(stm.table)
-        lock_rid = lambda rid, mode: manager.lock(f"rid:{stm.table}:{rid}", mode)
-        def insert_operation():
-            return execute_insert(
-                stm, catalog,
-                lock_rid=lock_rid,
-                before_insert=lambda record: manager.log_data_change(
-                    "INSERT", stm.table, None, None, _record_data(record)
-                ),
-            )
-        return _execute_write(
+        def after_insert(rid, record):
+            manager.log_data_change("INSERT", stm.table, rid, None, record)
+            # registered per row so a failure mid-batch still undoes earlier rows
+            manager.add_undo(lambda: undo_insert(manager, catalog, stm.table, storage, rid))
+        return _run_in_transaction(
             manager,
-            stm.table,
-            insert_operation,
-            lambda rids: [
-                manager.add_undo(
-                    lambda rid=rid: _undo_insert(catalog, stm.table, storage, rid)
-                )
-                for rid in rids
-            ],
+            lambda: execute_insert(stm, catalog, lock_rid=lock_rid, after_insert=after_insert),
+            catalog, stm.table,
         )
 
     if isinstance(stm, DeleteStm):
         storage = catalog.get_storage(stm.table)
-        lock_rid = lambda rid, mode: manager.lock(f"rid:{stm.table}:{rid}", mode)
         def before_delete(rid, record):
-            manager.log_data_change("DELETE", stm.table, _rid_data(rid), _record_data(record), None)
-            manager.add_undo(
-                lambda rid=rid, record=record: _undo_delete(
-                    catalog, stm.table, storage, record
-                )
-            )
-        return _execute_write(manager, stm.table, lambda: execute_delete(stm, catalog, lock_rid=lock_rid, before_delete=before_delete), None)
+            manager.log_data_change("DELETE", stm.table, rid, record, None)
+            manager.add_undo(lambda: undo_delete(manager, catalog, stm.table, storage, record))
+        return _run_in_transaction(
+            manager,
+            lambda: execute_delete(stm, catalog, lock_rid=lock_rid, before_delete=before_delete),
+            catalog, stm.table,
+        )
 
     if isinstance(stm, UpdateStm):
         storage = catalog.get_storage(stm.table)
-        lock_rid = lambda rid, mode: manager.lock(f"rid:{stm.table}:{rid}", mode)
         def on_update(old_rid, new_rid, old_record, new_record):
-            if new_rid != old_rid:
-                manager.lock(f"rid:{stm.table}:{new_rid}", LockMode.EXCLUSIVE)
-            manager.log_data_change("UPDATE", stm.table, _rid_data(old_rid), _record_data(old_record), _record_data(new_record))
+            manager.log_data_change("UPDATE", stm.table, old_rid, old_record, new_record, new_rid=new_rid)
             manager.add_undo(
-                lambda old_rid=old_rid, new_rid=new_rid, old_record=old_record, new_record=new_record:
-                _undo_update(catalog, stm.table, storage, old_rid, new_rid, new_record, old_record)
+                lambda: undo_update(manager, catalog, stm.table, storage, new_rid, new_record, old_record)
             )
-        return _execute_write(manager, stm.table, lambda: execute_update(stm, catalog, lock_rid=lock_rid, on_update=on_update), None)
+        return _run_in_transaction(
+            manager,
+            lambda: execute_update(stm, catalog, lock_rid=lock_rid, on_update=on_update),
+            catalog, stm.table,
+        )
 
     if isinstance(stm, (CreateTableStm, CreateIndexStm)):
         return None
@@ -295,14 +271,22 @@ def _execute_statement(stm, catalog):
     raise QueryError(f"Tipo de sentencia no soportado: {type(stm).__name__}")
 
 
-def _execute_write(manager, table_name, operation, after):
+def _run_in_transaction(manager, operation, catalog=None, written_table=None):
+    """
+    Runs `operation` inside the thread's transaction, opening an implicit
+    one if none is active. Any failure (including a DeadlockError) aborts
+    the transaction so its locks are released and its changes undone.
+    `written_table`'s pages are flushed before the transaction ends (FORCE).
+    """
     implicit = manager.current() is None
     if implicit:
         manager.begin()
+    if written_table is not None:
+        manager.add_flush(
+            ("table", written_table), lambda: catalog.flush_table(written_table)
+        )
     try:
         result = operation()
-        if after is not None:
-            after(result)
         if implicit:
             manager.commit()
         return result
@@ -311,28 +295,3 @@ def _execute_write(manager, table_name, operation, after):
             manager.abort()
         raise
 
-
-def _record_data(record):
-    return [{"type": value.data_type.value, "data": value.data} for value in record.values]
-
-
-def _rid_data(rid):
-    return {"page_id": rid.page_id, "slot": rid.slot}
-
-
-def _undo_insert(catalog, table_name, storage, rid):
-    record = storage.get(rid)
-    if record is not None:
-        catalog.unregister_delete(table_name, record, rid)
-        storage.delete(rid)
-
-
-def _undo_delete(catalog, table_name, storage, record):
-    rid = storage.insert(record)
-    catalog.register_insert(table_name, record, rid)
-    catalog.register_insert_uniques(table_name, record)
-
-
-def _undo_update(catalog, table_name, storage, old_rid, new_rid, current, previous):
-    restored_rid = storage.update(new_rid, previous)
-    catalog.register_update(table_name, new_rid, restored_rid, current, previous)

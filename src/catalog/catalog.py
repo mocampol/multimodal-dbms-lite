@@ -8,6 +8,7 @@ are small and are consulted on every query.
 """
 
 import os
+import threading
 
 from common.value import DataType, Value
 from common.schema import Schema, Column
@@ -95,6 +96,14 @@ class Catalog:
         self._next_table_id = 1
         self._next_index_id = 1
 
+        # latch order is always DDL -> table -> sys; DML never takes the DDL latch.
+        # The sys latch guards the sys_* heap files, which DML also writes
+        # when an index root moves.
+        self._ddl_latch = threading.RLock()
+        self._sys_latch = threading.RLock()
+        self._table_latches: dict[str, threading.RLock] = {}
+        self._table_latches_mutex = threading.Lock()
+
         self._load()
 
 
@@ -159,7 +168,86 @@ class Catalog:
         raise TableNotFoundError(f"No existe una tabla con table_id={table_id}")
 
 
+    def table_latch(self, table_name: str) -> threading.RLock:
+        """
+        Physical latch over table_name's pages, buffer pool and indexes.
+        See storage/latch.py for how it relates to row locks.
+        """
+        with self._table_latches_mutex:
+            latch = self._table_latches.get(table_name)
+            if latch is None:
+                latch = self._table_latches[table_name] = threading.RLock()
+            return latch
+
+    def flush_table(self, table_name: str):
+        """Writes every dirty page of table_name (data, overflow and indexes) to disk."""
+        with self.table_latch(table_name):
+            storage = self._table_storage.get(table_name)
+            if storage is None:
+                return
+            for buffer_manager in self._table_buffer_managers(table_name, storage):
+                buffer_manager.flush_all()
+        with self._sys_latch:
+            self._sys_indexes.bm.flush_all()
+
+    def _table_buffer_managers(self, table_name, storage):
+        managers = [storage.bm]
+        if hasattr(storage, "overflow"):
+            managers.append(storage.overflow.bm)
+        clustered = self._clustered_indexes.get(table_name)
+        if clustered is not None:
+            managers.append(clustered.bm)
+        for entry in self.indexes.get(table_name, []):
+            index = self._physical_indexes.get(entry["index_id"])
+            manager = getattr(index, "bm", None) or getattr(index, "buffer_manager", None)
+            if manager is not None:
+                managers.append(manager)
+        return managers
+
+    def rebuild_derived(self, table_name: str):
+        """
+        Rebuilds UNIQUE value sets and every index of table_name from its
+        data. Crash recovery restores rows physically, which can leave the
+        persisted indexes out of sync with the table.
+        """
+        with self._ddl_latch, self.table_latch(table_name), self._sys_latch:
+            tm = self.get_table(table_name)
+            storage = self._table_storage[table_name]
+            for column_name in tm.schema.unique_columns():
+                position = tm.schema.column_index(column_name)
+                self._unique_values[(table_name, column_name)] = {
+                    record[position].data for record in storage.scan()
+                }
+            clustered = self._clustered_indexes.get(table_name)
+            if clustered is not None:
+                clustered.sync()
+            for entry in self.indexes.get(table_name, []):
+                column = tm.schema.get_column(entry["column_name"])
+                position = tm.schema.column_index(entry["column_name"])
+                index_type = IndexType(entry["index_type"])
+                index = self._create_index(
+                    index_type, table_name, entry["column_name"],
+                    entry["index_id"], column.data_type,
+                )
+                for rid, record in self._scan_with_rids(storage):
+                    key = record[position]
+                    if index_type == IndexType.RTREE:
+                        key = self._rtree_key(key)
+                        if key is None:
+                            continue
+                    index.insert(key, rid)
+                self._physical_indexes[entry["index_id"]] = index
+                self._persist_index_root(entry, index)
+
     def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> TableMetadata:
+        with self._ddl_latch:
+            with self._sys_latch:
+                tm = self._create_table(schema, storage_type)
+            self.flush_table(schema.table_name)
+            self._flush_sys_tables()
+            return tm
+
+    def _create_table(self, schema: Schema, storage_type: StorageType) -> TableMetadata:
         """
         Registers a new table: persists its metadata into sys_tables/
         sys_columns AND creates its physical data storage, then corrects
@@ -228,6 +316,10 @@ class Catalog:
         return tm
 
     def drop_table(self, table_name: str):
+        with self._ddl_latch, self.table_latch(table_name), self._sys_latch:
+            self._drop_table(table_name)
+
+    def _drop_table(self, table_name: str):
         if table_name not in self.tables:
             raise TableNotFoundError(f"La tabla '{table_name}' no existe")
 
@@ -299,6 +391,19 @@ class Catalog:
         return self._clustered_indexes.get(table_name)
 
     def create_index(self, table_name: str, column_name: str, index_type: str) -> dict:
+        with self._ddl_latch, self.table_latch(table_name), self._sys_latch:
+            entry = self._register_index(table_name, column_name, index_type)
+            self.flush_table(table_name)
+            self._flush_sys_tables()
+            return entry
+
+    def _flush_sys_tables(self):
+        with self._sys_latch:
+            self._sys_tables.bm.flush_all()
+            self._sys_columns.bm.flush_all()
+            self._sys_indexes.bm.flush_all()
+
+    def _register_index(self, table_name: str, column_name: str, index_type: str) -> dict:
         """
         Registers an index over a column. Does not build the physical
         index structure, that's the index subsystem's job. This only
@@ -473,22 +578,23 @@ class Catalog:
                 self._unique_values[(table_name, column_name)].add(new_value)
 
     def _persist_index_root(self, entry, index):
-        if entry["index_type"] not in {IndexType.BTREE.value, IndexType.RTREE.value}:
-            return
-        root_page_id = index.root_page_id
+        root_page_id = (
+            index.directory_page_id if entry["index_type"] == IndexType.HASH.value else index.root_page_id
+        )
         if root_page_id == entry["root_page_id"]:
             return
         entry["root_page_id"] = root_page_id
         catalog_rid = self._index_catalog_rids.get(entry["index_id"])
         if catalog_rid is None:
             return
-        self._sys_indexes.update(catalog_rid, Record([
-            Value(DataType.INTEGER, entry["index_id"]),
-            Value(DataType.INTEGER, self.get_table_by_index_entry(entry)[0]),
-            Value(DataType.VARCHAR, entry["column_name"]),
-            Value(DataType.VARCHAR, entry["index_type"]),
-            Value(DataType.INTEGER, root_page_id),
-        ]))
+        with self._sys_latch:
+            self._sys_indexes.update(catalog_rid, Record([
+                Value(DataType.INTEGER, entry["index_id"]),
+                Value(DataType.INTEGER, self.get_table_by_index_entry(entry)[0]),
+                Value(DataType.VARCHAR, entry["column_name"]),
+                Value(DataType.VARCHAR, entry["index_type"]),
+                Value(DataType.INTEGER, root_page_id),
+            ]))
 
     def get_table_by_index_entry(self, entry):
         for table_name, entries in self.indexes.items():

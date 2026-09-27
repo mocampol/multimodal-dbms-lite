@@ -4,7 +4,9 @@ from pathlib import Path
 from common.record import Record
 from common.schema import Schema
 
-from transaction import TransactionManager, LockMode
+from storage.latch import table_latch
+from transaction import TransactionManager, LockMode, rid_resource
+from transaction.row_undo import undo_insert
 
 from .csv_reader import infer_schema as _infer_schema
 from .type_inference import convert_value
@@ -59,6 +61,7 @@ def load_csv(
 
 def _run_batch(catalog, manager, table_name, schema, batch, on_error, skipped) -> int:
     manager.begin()
+    manager.add_flush(("table", table_name), lambda: catalog.flush_table(table_name))
     count = 0
     try:
         for line_number, row in batch:
@@ -98,29 +101,19 @@ def _row_to_record(row: list, schema: Schema, line_number: int, table_name: str)
 
 
 def _insert_one_record(catalog, manager, table_name: str, record: Record) -> None:
-    violated = catalog.check_insert_uniques(table_name, record)
-    if violated:
-        raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{table_name}'")
-
     storage = catalog.get_storage(table_name)
-    manager.log_data_change("INSERT", table_name, None, None, _record_data(record))
-    rid = storage.insert(record)
-    manager.add_undo(lambda: _undo_insert(catalog, table_name, storage, rid))
-    manager.lock(f"rid:{table_name}:{rid}", LockMode.EXCLUSIVE)
-    catalog.register_insert(table_name, record, rid)
-    catalog.register_insert_uniques(table_name, record)
+    with table_latch(catalog, table_name):
+        violated = catalog.check_insert_uniques(table_name, record)
+        if violated:
+            raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{table_name}'")
 
-
-def _record_data(record: Record) -> list:
-    return [{"type": value.data_type.value, "data": value.data} for value in record.values]
-
-
-def _undo_insert(catalog, table_name: str, storage, rid) -> None:
-    """Mismo undo que query_engine._undo_insert: borra la fila y la des-registra."""
-    record = storage.get(rid)
-    if record is not None:
-        catalog.unregister_delete(table_name, record, rid)
-        storage.delete(rid)
+        rid = storage.insert(record)
+        catalog.register_insert(table_name, record, rid)
+        catalog.register_insert_uniques(table_name, record)
+        manager.log_data_change("INSERT", table_name, rid, None, record)
+        manager.add_undo(lambda: undo_insert(manager, catalog, table_name, storage, rid))
+    # the table was just created by this import, so nobody else can hold this lock
+    manager.lock(rid_resource(table_name, rid), LockMode.EXCLUSIVE)
 
 
 def _transaction_manager(catalog) -> TransactionManager:

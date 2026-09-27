@@ -1,6 +1,7 @@
 """Append-only write-ahead log."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+from decimal import Decimal
 import json
 import os
 import threading
@@ -16,11 +17,13 @@ class LogManager:
         self._lock = threading.Lock()
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         open(path, "a", encoding="utf-8").close()
+        self._last_lsn = self._read_last_lsn()
 
     def append(self, txn_id: int, kind: str, **payload) -> dict:
         with self._lock:
+            self._last_lsn += 1
             record = {
-                "lsn": self._next_lsn_unlocked(),
+                "lsn": self._last_lsn,
                 "txn_id": txn_id,
                 "kind": kind,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -49,10 +52,10 @@ class LogManager:
     def update(self, txn_id: int, resource: str, old_value, new_value):
         return self.append(txn_id, "UPDATE", resource=resource, old=old_value, new=new_value)
 
-    def data_change(self, txn_id, operation, table, rid, before, after):
+    def data_change(self, txn_id, operation, table, rid, before, after, new_rid=None):
         return self.append(
             txn_id, "DATA", operation=operation, table=table,
-            rid=rid, before=before, after=after,
+            rid=rid, new_rid=new_rid, before=before, after=after,
         )
 
     def commit(self, txn_id: int):
@@ -71,10 +74,13 @@ class LogManager:
                 for line in stream if line.strip()
             ]
 
-    def _next_lsn_unlocked(self):
+    def _read_last_lsn(self):
+        last = 0
         with open(self.path, encoding="utf-8") as stream:
-            records = [json.loads(line) for line in stream if line.strip()]
-        return records[-1]["lsn"] + 1 if records else 1
+            for line in stream:
+                if line.strip():
+                    last = json.loads(line)["lsn"]
+        return last
 
 
 def _json_default(value):
@@ -92,13 +98,20 @@ def _json_default(value):
     if isinstance(value, bytes):
         return {"__bytes__": value.hex()}
 
-    if hasattr(value, "isoformat"):
+    # datetime before date: datetime is a subclass of date
+    if isinstance(value, datetime):
         return {"__datetime__": value.isoformat()}
 
-    if hasattr(value, "as_tuple"):
+    if isinstance(value, date):
+        return {"__date__": value.isoformat()}
+
+    if isinstance(value, time):
+        return {"__time__": value.isoformat()}
+
+    if isinstance(value, Decimal):
         return {"__decimal__": str(value)}
 
-    return repr(value)
+    raise TypeError(f"El WAL no sabe serializar {type(value).__name__}")
 
 
 def _encode_value_data(value: Value):
@@ -123,8 +136,13 @@ def _json_object_hook(obj: dict):
     if "__datetime__" in obj:
         return datetime.fromisoformat(obj["__datetime__"])
 
+    if "__date__" in obj:
+        return date.fromisoformat(obj["__date__"])
+
+    if "__time__" in obj:
+        return time.fromisoformat(obj["__time__"])
+
     if "__decimal__" in obj:
-        from decimal import Decimal
         return Decimal(obj["__decimal__"])
 
     return obj
