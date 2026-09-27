@@ -21,7 +21,7 @@ import struct
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from common.value import DataType, Value, FIXED_SIZE
+from common.value import DataType, Point, Value, FIXED_SIZE
 from common.schema import Schema
 from common.record import Record
 
@@ -98,6 +98,9 @@ def encode_scalar(value: Value) -> bytes:
     """
     dt = value.data_type
 
+    if dt == DataType.POINT:
+        return struct.pack(">dd", value.data.longitude, value.data.latitude)
+
     if dt in _FIXED_CODECS:
         fmt, encode_fn, _ = _FIXED_CODECS[dt]
         return struct.pack(fmt, value.data) if fmt else encode_fn(value.data)
@@ -119,6 +122,9 @@ def decode_scalar(data_type: DataType, buf: bytes):
     Decodes raw payload bytes (already stripped of any length prefix)
     back into the Python value for data_type.
     """
+    if data_type == DataType.POINT:
+        return Point(*struct.unpack(">dd", buf))
+
     if data_type in _FIXED_CODECS:
         fmt, _, decode_fn = _FIXED_CODECS[data_type]
         return struct.unpack(fmt, buf)[0] if fmt else decode_fn(buf)

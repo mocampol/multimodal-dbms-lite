@@ -32,6 +32,7 @@ def binop_to_char(op: BinaryOp) -> str:
 class IndexType(Enum):
     BTREE = auto()
     HASH = auto()
+    RTREE = auto()
 
 class StorageKind(Enum):
     HEAP = auto()

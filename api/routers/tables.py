@@ -15,6 +15,7 @@ def list_tables():
                 {"name": c.name, "type": c.data_type.value, "is_primary_key": c.is_primary_key}
                 for c in tm.schema.columns
             ],
+            "indexes": catalog.get_indexes(name),
         }
         for name, tm in catalog.tables.items()
     ]

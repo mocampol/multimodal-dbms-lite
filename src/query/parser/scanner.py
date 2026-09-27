@@ -43,7 +43,9 @@ class Scanner:
                 "REAL": TokenType.T_REAL, "CHAR": TokenType.T_CHAR, "VARCHAR": TokenType.T_VARCHAR,
                 "TEXT": TokenType.T_TEXT, "BOOLEAN": TokenType.T_BOOLEAN, "DATE": TokenType.T_DATE,
                 "TIME": TokenType.T_TIME, "TIMESTAMP": TokenType.T_TIMESTAMP, "BYTEA": TokenType.T_BYTEA,
-                "BTREE": TokenType.BTREE, "HASH": TokenType.HASH, "HEAP": TokenType.HEAP,
+                "POINT": TokenType.T_POINT,
+                "BTREE": TokenType.BTREE, "HASH": TokenType.HASH, "RTREE": TokenType.RTREE,
+                "HEAP": TokenType.HEAP,
                 "SEQUENTIAL": TokenType.SEQUENTIAL,
             }
             if upper in words:

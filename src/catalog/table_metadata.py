@@ -11,6 +11,12 @@ class StorageType(Enum):
     SEQUENTIAL = "sequential"
 
 
+class IndexType(Enum):
+    BTREE = "btree"
+    HASH = "hash"
+    RTREE = "rtree"
+
+
 class TableMetadata:
     """
     In-memory representation of one row of sys_tables, enriched with

@@ -57,11 +57,13 @@ _TYPE_MAP = {
     TokenType.T_TIME: DataType.TIME,
     TokenType.T_TIMESTAMP: DataType.TIMESTAMP,
     TokenType.T_BYTEA: DataType.BYTEA,
+    TokenType.T_POINT: DataType.POINT,
 }
 
 _INDEX_TYPE_MAP = {
     TokenType.BTREE: IndexType.BTREE,
     TokenType.HASH: IndexType.HASH,
+    TokenType.RTREE: IndexType.RTREE,
 }
 
 _STORAGE_TYPE_MAP = {
@@ -410,13 +412,13 @@ class Parser:
 
     def parse_type_name(self) -> DataType:
         """<TypeName> ::= SMALLINT | INTEGER | BIGINT | NUMERIC | REAL | DOUBLE_PRECISION
-                         | CHAR | VARCHAR | TEXT | BOOLEAN | DATE | TIME | TIMESTAMP | BYTEA"""
+                         | CHAR | VARCHAR | TEXT | BOOLEAN | DATE | TIME | TIMESTAMP | BYTEA | POINT"""
         for ttype, data_type in _TYPE_MAP.items():
             if self.match(ttype):
                 return data_type
         self.error("un nombre de tipo (SMALLINT, INTEGER, BIGINT, NUMERIC, REAL, "
                     "DOUBLE PRECISION, CHAR, VARCHAR, TEXT, BOOLEAN, DATE, TIME, "
-                    "TIMESTAMP o BYTEA)")
+                    "TIMESTAMP, BYTEA o POINT)")
 
     # =========================================================================
     # CREATE INDEX
@@ -437,8 +439,8 @@ class Parser:
         return CreateIndexStm(index_name_tok.text, table_tok.text, column_tok.text, index_type)
 
     def parse_index_type(self) -> IndexType:
-        """<IndexType> ::= BTREE | HASH"""
+        """<IndexType> ::= BTREE | HASH | RTREE"""
         for ttype, index_type in _INDEX_TYPE_MAP.items():
             if self.match(ttype):
                 return index_type
-        self.error("'BTREE' o 'HASH'")
+        self.error("'BTREE', 'HASH' o 'RTREE'")

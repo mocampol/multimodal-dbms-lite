@@ -15,8 +15,10 @@ from common.record import Record
 from index.btree.btree import BTree
 from index.extendible_hash.extendible_hash_index import ExtendibleHashIndex
 from index.btree.clustered_index import ClusteredIndex
+from index.rtree import RTree
+from spatial.geometry import Point2D
 
-from .table_metadata import TableMetadata, StorageType
+from .table_metadata import TableMetadata, StorageType, IndexType
 from .column import ColumnMetadata
 from .exceptions import (
     TableAlreadyExistsError,
@@ -306,34 +308,54 @@ class Catalog:
         if not tm.schema.get_column(column_name):
             raise ColumnNotFoundError(f"'{column_name}' no existe en '{table_name}'")
 
+        column = tm.schema.get_column(column_name)
+        try:
+            index_type = (
+                index_type
+                if isinstance(index_type, IndexType)
+                else IndexType(index_type.lower())
+            )
+        except (AttributeError, ValueError):
+            raise ValueError(f"Tipo de índice no soportado: {index_type}") from None
+        if index_type == IndexType.RTREE and column.data_type != DataType.POINT:
+            raise ValueError("RTREE requiere una columna de tipo POINT")
+        if column.data_type == DataType.POINT and index_type != IndexType.RTREE:
+            raise ValueError("Las columnas POINT requieren un índice RTREE")
+        if index_type == IndexType.RTREE and any(
+            entry["column_name"] == column_name and entry["index_type"] == index_type.value
+            for entry in self.indexes.get(table_name, [])
+        ):
+            raise ValueError(f"Ya existe un índice RTREE para '{table_name}.{column_name}'")
+
         index_id = self._next_index_id
         self._next_index_id += 1
 
-        column = tm.schema.get_column(column_name)
-        if index_type not in {"btree", "hash"}:
-            raise ValueError(f"Tipo de índice no soportado: {index_type}")
         if self._index_buffer_factory is None:
             raise ValueError("No hay fábrica de BufferManager para índices")
 
         index = self._create_index(index_type, table_name, column_name, index_id, column.data_type)
         for rid, record in self._scan_with_rids(self._table_storage[table_name]):
-            index.insert(record[tm.schema.column_index(column_name)], rid)
+            key = record[tm.schema.column_index(column_name)]
+            if index_type == IndexType.RTREE:
+                key = self._rtree_key(key)
+                if key is None:
+                    continue
+            index.insert(key, rid)
 
-        root_page_id = (
-            index.root_page_id if index_type == "btree" else index.directory_page_id
-        )
+        root_page_id = index.root_page_id if index_type != IndexType.HASH else index.directory_page_id
+        index_type_value = index_type.value
         index_rid = self._sys_indexes.insert(Record([
             Value(DataType.INTEGER, index_id),
             Value(DataType.INTEGER, tm.table_id),
             Value(DataType.VARCHAR, column_name),
-            Value(DataType.VARCHAR, index_type),
+            Value(DataType.VARCHAR, index_type_value),
             Value(DataType.INTEGER, root_page_id),
         ]))
 
         entry = {
             "index_id": index_id,
             "column_name": column_name,
-            "index_type": index_type,
+            "index_type": index_type_value,
             "root_page_id": root_page_id,
         }
         self.indexes.setdefault(table_name, []).append(entry)
@@ -345,16 +367,31 @@ class Catalog:
         manager = self._index_buffer_factory(table_name, column_name, index_id)
         if manager.file_manager.page_count() > 0:
             manager.reset()
-        if index_type == "btree":
+        if index_type == IndexType.BTREE:
             return BTree(key_type, manager)
-        return ExtendibleHashIndex.create(manager, key_type)
+        if index_type == IndexType.HASH:
+            return ExtendibleHashIndex.create(manager, key_type)
+        if index_type == IndexType.RTREE:
+            return RTree(manager)
+        raise ValueError(f"Tipo de índice no soportado: {index_type}")
 
     def _open_index(self, table_name, column_name, index_type, root_page_id, index_id):
         manager = self._index_buffer_factory(table_name, column_name, index_id)
         key_type = self.get_schema(table_name).get_column(column_name).data_type
-        if index_type == "btree":
+        if index_type == IndexType.BTREE.value:
             return BTree(key_type, manager, root_page_id=root_page_id)
-        return ExtendibleHashIndex(manager, root_page_id, key_type)
+        if index_type == IndexType.HASH.value:
+            return ExtendibleHashIndex(manager, root_page_id, key_type)
+        if index_type == IndexType.RTREE.value:
+            return RTree(manager, root_page_id=root_page_id)
+        raise ValueError(f"Tipo de índice no soportado: {index_type}")
+
+    @staticmethod
+    def _rtree_key(value):
+        if value.data is None:
+            return None
+        point = value.data
+        return Point2D(point.longitude, point.latitude)
 
     @staticmethod
     def _scan_with_rids(storage):
@@ -376,7 +413,12 @@ class Catalog:
             index = self._physical_indexes.get(entry["index_id"])
             if index is not None:
                 column_index = self.get_schema(table_name).column_index(entry["column_name"])
-                index.insert(record[column_index], rid)
+                key = record[column_index]
+                if entry["index_type"] == IndexType.RTREE.value:
+                    key = self._rtree_key(key)
+                    if key is None:
+                        continue
+                index.insert(key, rid)
                 self._persist_index_root(entry, index)
 
     def unregister_delete(self, table_name: str, record: Record, rid):
@@ -388,10 +430,13 @@ class Catalog:
             if index is not None:
                 column_index = self.get_schema(table_name).column_index(entry["column_name"])
                 key = record[column_index]
-                if hasattr(index, "remove"):
-                    index.remove(key, rid)
-                else:
-                    index.delete(key, rid)
+                if entry["index_type"] == IndexType.RTREE.value:
+                    key = self._rtree_key(key)
+                if key is not None:
+                    if hasattr(index, "remove"):
+                        index.remove(key, rid)
+                    else:
+                        index.delete(key, rid)
                 self._persist_index_root(entry, index)
         schema = self.get_schema(table_name)
         for column_name in schema.unique_columns():
@@ -408,11 +453,16 @@ class Catalog:
             old_key = old_record[column_index]
             new_key = new_record[column_index]
             if old_key.data != new_key.data or old_rid != new_rid:
-                if hasattr(index, "remove"):
-                    index.remove(old_key, old_rid)
-                else:
-                    index.delete(old_key, old_rid)
-                index.insert(new_key, new_rid)
+                if entry["index_type"] == IndexType.RTREE.value:
+                    old_key = self._rtree_key(old_key)
+                    new_key = self._rtree_key(new_key)
+                if old_key is not None:
+                    if hasattr(index, "remove"):
+                        index.remove(old_key, old_rid)
+                    else:
+                        index.delete(old_key, old_rid)
+                if new_key is not None:
+                    index.insert(new_key, new_rid)
                 self._persist_index_root(entry, index)
         for column_name in schema.unique_columns():
             column_index = schema.column_index(column_name)
@@ -423,7 +473,7 @@ class Catalog:
                 self._unique_values[(table_name, column_name)].add(new_value)
 
     def _persist_index_root(self, entry, index):
-        if entry["index_type"] != "btree":
+        if entry["index_type"] not in {IndexType.BTREE.value, IndexType.RTREE.value}:
             return
         root_page_id = index.root_page_id
         if root_page_id == entry["root_page_id"]:

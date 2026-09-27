@@ -353,7 +353,9 @@ class SemanticVisitor(Visitor):
 
     def visit_create_index_stm(self, stm: CreateIndexStm):
         schema = self.catalog.get_schema(stm.table)
-        self._require_column(schema, stm.column)
+        column = self._require_column(schema, stm.column)
+        if stm.index_type == IndexType.RTREE and column.data_type != DataType.POINT:
+            raise SemanticError("RTREE requiere una columna de tipo POINT")
 
         self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
         return None

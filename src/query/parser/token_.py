@@ -58,9 +58,11 @@ class TokenType(Enum):
     T_TIME = auto()
     T_TIMESTAMP = auto()
     T_BYTEA = auto()
+    T_POINT = auto()
 
     BTREE = auto()
     HASH = auto()
+    RTREE = auto()
     HEAP = auto()
     SEQUENTIAL = auto()
 
@@ -122,9 +124,11 @@ _TYPE_NAMES = {
     TokenType.T_TIME: "'TIME'",
     TokenType.T_TIMESTAMP: "'TIMESTAMP'",
     TokenType.T_BYTEA: "'BYTEA'",
+    TokenType.T_POINT: "'POINT'",
 
     TokenType.BTREE: "'BTREE'",
     TokenType.HASH: "'HASH'",
+    TokenType.RTREE: "'RTREE'",
     TokenType.HEAP: "'HEAP'",
     TokenType.SEQUENTIAL: "'SEQUENTIAL'",
 }

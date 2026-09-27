@@ -155,6 +155,9 @@ class DataType(Enum):
     # Binary type
     BYTEA = "bytea"
 
+    # Spatial type
+    POINT = "point"
+
 
 FIXED_SIZE = {
     DataType.SMALLINT: 2,
@@ -166,6 +169,7 @@ FIXED_SIZE = {
     DataType.DATE: 4,
     DataType.TIME: 8,
     DataType.TIMESTAMP: 8,
+    DataType.POINT: 16,
 }
 
 VARIABLE_SIZE_TYPES = {
@@ -228,6 +232,9 @@ class Value:
 
         if self.data_type == DataType.TIME:
             return isinstance(self.data, time)
+
+        if self.data_type == DataType.POINT:
+            return isinstance(self.data, Point)
 
         return False
 
