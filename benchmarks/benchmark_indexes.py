@@ -8,7 +8,7 @@ index build time, query time, additional space required, and performance
 with frequent inserts/deletions. Include comparative charts"
 
 Metodología (siguiendo la Sección VI del enunciado del proyecto, la misma
-que ya usa tests/perf_heap_vs_sequential.py):
+que ya usa benchmarks/perf_heap_vs_sequential.py):
     - N = 1,000 / 10,000 / 100,000 registros.
     - Semilla fija (reproducible).
     - Cada medición se repite 3 veces; se reporta el promedio.
@@ -16,7 +16,7 @@ que ya usa tests/perf_heap_vs_sequential.py):
       explícitamente en vez de fallar).
 
 Separación de responsabilidades (a propósito, para no mezclar con
-perf_heap_vs_sequential.py):
+benchmarks/perf_heap_vs_sequential.py):
     - Ese benchmark ya mide el costo de HeapFile/SequentialFile como
       almacenamiento base.
     - Este benchmark aísla el costo de la ESTRUCTURA DE ÍNDICE en sí:
@@ -55,7 +55,7 @@ N_VALUES = [1_000, 10_000, 100_000]
 SEED = 42
 REPETITIONS = 3
 RANGE_WIDTH = 100          # ancho de la ventana para búsquedas por rango
-QUERY_SAMPLE_BUDGET = 250_000  # mismo espíritu que perf_heap_vs_sequential.py
+QUERY_SAMPLE_BUDGET = 250_000  # mismo espíritu que benchmarks/perf_heap_vs_sequential.py
 MUTATION_SAMPLE_SIZE = 50      # cuántos inserts/deletes individuales medir tras construir
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -115,7 +115,7 @@ def run_clustered_experiment(n: int, ids: list[int], schema: Schema, rng: random
         seq = SequentialFile(schema, "id", main_bm, overflow_bm)
 
         # Poblar el storage base (NO se cronometra: es responsabilidad de
-        # perf_heap_vs_sequential.py, no de este benchmark de índices).
+        # benchmarks/perf_heap_vs_sequential.py, no de este benchmark de índices).
         for key in ids:
             seq.insert(make_record(key, rng))
 

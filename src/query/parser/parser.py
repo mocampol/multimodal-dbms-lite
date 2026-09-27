@@ -130,6 +130,13 @@ class Parser:
     # Grammar rules
     # =========================================================================
 
+    def parse_sql_statements(self) -> list[Stm]:
+        """Parse all semicolon-terminated statements until end of input."""
+        statements = []
+        while not self.is_at_end():
+            statements.append(self.parse_sql_statement())
+        return statements
+
     def parse_sql_statement(self) -> Stm:
         """<Statement> ::= [ EXPLAIN [ ANALYZE ] ] ( <SelectStmt> | <InsertStmt>
                             | <DeleteStmt> | <CreateTableStmt> | <CreateIndexStmt> ) SEMICOL
@@ -306,7 +313,7 @@ class Parser:
         self.expect(TokenType.LPAREN)
         values = self.parse_value_list()
         self.expect(TokenType.RPAREN)
-        return InsertStm(table_tok.text, values)
+        return values
 
     def parse_value_list(self) -> List[Exp]:
         """<ValueList> ::= <Value> { COMA <Value> }"""

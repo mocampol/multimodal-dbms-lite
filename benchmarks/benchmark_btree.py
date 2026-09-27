@@ -2,7 +2,7 @@
 benchmark_btree.py — Performance benchmarks for the B+ Tree index.
 
 Run with:
-    uv run pytest tests/benchmark_btree.py
+    uv run pytest benchmarks/benchmark_btree.py
 """
 
 import tempfile
