@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from enum import Enum, auto
 from typing import List, Optional
 
-from common import DataType
+from common import DataType, Point
 
 
 class BinaryOp(Enum):
@@ -52,6 +52,14 @@ class Visitor(ABC):
 
     @abstractmethod
     def visit_string_exp(self, exp: "StringExp"):
+        ...
+
+    @abstractmethod
+    def visit_point_exp(self, exp: "PointExp"):
+        ...
+
+    @abstractmethod
+    def visit_null_exp(self, exp: "NullExp"):
         ...
 
     @abstractmethod
@@ -149,6 +157,35 @@ class StringExp(Exp):
 
     def __repr__(self):
         return f"'{self.value}'"
+
+
+class PointExp(Exp):
+    """<Point> ::= POINT LPAREN NUM COMA NUM RPAREN"""
+
+    def __init__(self, longitude: int | float, latitude: int | float):
+        self.longitude = longitude
+        self.latitude = latitude
+
+    def to_point(self) -> Point:
+        return Point(self.longitude, self.latitude)
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_point_exp(self)
+
+    def __repr__(self):
+        return f"POINT({self.longitude}, {self.latitude})"
+
+
+class NullExp(Exp):
+    """<Value> ::= NULL"""
+
+    value = None
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_null_exp(self)
+
+    def __repr__(self):
+        return "NULL"
 
 
 class AggregateSpec:

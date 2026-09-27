@@ -8,6 +8,8 @@ from query.parser.ast_nodes import (
     NumExp,
     IdExp,
     StringExp,
+    PointExp,
+    NullExp,
     BinaryExp,
     BinaryOp,
     Stm,
@@ -261,16 +263,32 @@ class Parser:
         self.error("un operador ('=', '!=', '<>', '<', '<=', '>' o '>=')")
 
     def parse_value(self) -> Exp:
-        """<Value> ::= NUM | STRING | ID"""
+        """<Value> ::= NUM | STRING | ID | NULL | <Point>"""
         if self.check(TokenType.NUM):
-            tok = self.expect(TokenType.NUM)
-            return NumExp(int(tok.text))
+            return NumExp(self.parse_number())
         if self.check(TokenType.STRING):
             tok = self.expect(TokenType.STRING)
             return StringExp(tok.text)
+        if self.check(TokenType.T_POINT):
+            return self.parse_point()
+        if self.match(TokenType.NULL):
+            return NullExp()
         if self.check(TokenType.ID):
             return IdExp(self.parse_qualified_name())
-        self.error("un valor (NUM, STRING o ID)")
+        self.error("un valor (NUM, STRING, ID, NULL o POINT)")
+
+    def parse_number(self) -> int | float:
+        token = self.expect(TokenType.NUM)
+        return float(token.text) if "." in token.text else int(token.text)
+
+    def parse_point(self) -> PointExp:
+        self.expect(TokenType.T_POINT)
+        self.expect(TokenType.LPAREN)
+        longitude = self.parse_number()
+        self.expect(TokenType.COMA)
+        latitude = self.parse_number()
+        self.expect(TokenType.RPAREN)
+        return PointExp(longitude, latitude)
 
     def parse_group_or_order(self):
         """<GroupOrOrder> ::= [ GROUP_BY QualifiedNameList ] [ ORDER_BY QualifiedNameList ]"""

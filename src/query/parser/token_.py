@@ -22,6 +22,7 @@ class TokenType(Enum):
     ID = auto()
     NUM = auto()
     STRING = auto()
+    NULL = auto()
     MUL = auto()
     LPAREN = auto()
     RPAREN = auto()
@@ -88,6 +89,7 @@ _TYPE_NAMES = {
     TokenType.ID: "'ID'",
     TokenType.NUM: "'NUM'",
     TokenType.STRING: "'STRING'",
+    TokenType.NULL: "'NULL'",
     TokenType.MUL: "'*'",
     TokenType.LPAREN: "'('",
     TokenType.RPAREN: "')'",

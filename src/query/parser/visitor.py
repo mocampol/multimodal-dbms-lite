@@ -1,13 +1,15 @@
 from typing import Optional, Protocol, Tuple, Union
 
 from catalog.table_metadata import StorageType
-from common import DataType, Value, Column, Schema
+from common import DataType, Point, Value, Column, Schema
 
 from query.parser.ast_nodes import (
     Visitor,
     NumExp,
     IdExp,
     StringExp,
+    PointExp,
+    NullExp,
     BinaryExp,
     BinaryOp,
     Stm,
@@ -100,7 +102,7 @@ _STORAGE_KIND_TO_TYPE = {
     StorageKind.SEQUENTIAL: StorageType.SEQUENTIAL,
 }
 
-_ExpResult = Tuple[str, Union[Column, int, str]]
+_ExpResult = Tuple[str, Union[Column, int, float, str, Point, None]]
 
 
 class SemanticVisitor(Visitor):
@@ -375,6 +377,15 @@ class SemanticVisitor(Visitor):
 
     def visit_string_exp(self, exp: StringExp) -> _ExpResult:
         return ("literal", exp.value)
+
+    def visit_point_exp(self, exp: PointExp) -> _ExpResult:
+        try:
+            return ("literal", exp.to_point())
+        except ValueError as error:
+            raise SemanticError(f"POINT inválido: {error}") from error
+
+    def visit_null_exp(self, exp: NullExp) -> _ExpResult:
+        return ("literal", None)
 
     def visit_id_exp(self, exp: IdExp) -> _ExpResult:
         column = self._require_column(self._current_schema, exp.value)

@@ -2,6 +2,8 @@ import base64
 from datetime import date, datetime, time
 from decimal import Decimal
 
+from common.value import Point
+
 
 def serialize_value(value) -> object:
     data = value.data
@@ -9,6 +11,8 @@ def serialize_value(value) -> object:
         return None
     if isinstance(data, Decimal):
         return float(data)
+    if isinstance(data, Point):
+        return {"longitude": data.longitude, "latitude": data.latitude}
     if isinstance(data, (datetime, date, time)):
         return data.isoformat()
     if isinstance(data, (bytes, bytearray)):

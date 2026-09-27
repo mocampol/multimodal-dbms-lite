@@ -20,10 +20,30 @@ class Scanner:
 
         c = self.input[self.current]
         self.first = self.current
-        if c.isdigit():
-            self.current += 1
+        number_start = (
+            c.isdigit()
+            or c == "." and self.current + 1 < len(self.input) and self.input[self.current + 1].isdigit()
+            or c in "+-" and self.current + 1 < len(self.input) and (
+                self.input[self.current + 1].isdigit()
+                or self.input[self.current + 1] == "."
+                and self.current + 2 < len(self.input)
+                and self.input[self.current + 2].isdigit()
+            )
+        )
+        if number_start:
+            if c in "+-":
+                self.current += 1
             while self.current < len(self.input) and self.input[self.current].isdigit():
                 self.current += 1
+            if (
+                self.current < len(self.input)
+                and self.input[self.current] == "."
+                and self.current + 1 < len(self.input)
+                and self.input[self.current + 1].isdigit()
+            ):
+                self.current += 1
+                while self.current < len(self.input) and self.input[self.current].isdigit():
+                    self.current += 1
             return Token(TokenType.NUM, self.input[self.first:self.current])
 
         if c.isalpha() or c == "_":
@@ -43,7 +63,7 @@ class Scanner:
                 "REAL": TokenType.T_REAL, "CHAR": TokenType.T_CHAR, "VARCHAR": TokenType.T_VARCHAR,
                 "TEXT": TokenType.T_TEXT, "BOOLEAN": TokenType.T_BOOLEAN, "DATE": TokenType.T_DATE,
                 "TIME": TokenType.T_TIME, "TIMESTAMP": TokenType.T_TIMESTAMP, "BYTEA": TokenType.T_BYTEA,
-                "POINT": TokenType.T_POINT,
+                "POINT": TokenType.T_POINT, "NULL": TokenType.NULL,
                 "BTREE": TokenType.BTREE, "HASH": TokenType.HASH, "RTREE": TokenType.RTREE,
                 "HEAP": TokenType.HEAP,
                 "SEQUENTIAL": TokenType.SEQUENTIAL,

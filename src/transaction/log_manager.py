@@ -6,7 +6,7 @@ import json
 import os
 import threading
 
-from common.value import DataType, Value
+from common.value import DataType, Point, Value
 from common.record import Record
 from storage.heap.rid import RID
 
@@ -98,6 +98,9 @@ def _json_default(value):
     if isinstance(value, bytes):
         return {"__bytes__": value.hex()}
 
+    if isinstance(value, Point):
+        return {"__point__": [value.longitude, value.latitude]}
+
     # datetime before date: datetime is a subclass of date
     if isinstance(value, datetime):
         return {"__datetime__": value.isoformat()}
@@ -132,6 +135,9 @@ def _json_object_hook(obj: dict):
 
     if "__bytes__" in obj:
         return bytes.fromhex(obj["__bytes__"])
+
+    if "__point__" in obj:
+        return Point(*obj["__point__"])
 
     if "__datetime__" in obj:
         return datetime.fromisoformat(obj["__datetime__"])

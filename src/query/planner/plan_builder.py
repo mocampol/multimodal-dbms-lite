@@ -6,7 +6,10 @@ catalog reports one over the WHERE column, otherwise fall back to a
 Sequential Scan.
 """
 
-from query.parser.ast_nodes import SelectStm, InsertStm, DeleteStm, UpdateStm, IdExp, BinaryExp, AggregateSpec
+from query.parser.ast_nodes import (
+    SelectStm, InsertStm, DeleteStm, UpdateStm, IdExp, BinaryExp,
+    AggregateSpec, PointExp, NullExp,
+)
 from common.value import DataType, Value
 from common.record import Record
 from common.schema import Schema, Column
@@ -181,13 +184,16 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, after_insert=None) ->
             for name, exp in zip(stm.columns, values):
                 idx = column_positions[name]
                 col = schema.columns[idx]
-                row_values[idx] = Value(col.data_type, exp.value)
+                row_values[idx] = Value(col.data_type, _literal_value(exp))
             for idx, col in enumerate(schema.columns):
                 if row_values[idx] is None:
                     row_values[idx] = Value(col.data_type, None)
             record = Record(row_values)
         else:
-            record = Record([Value(col.data_type, exp.value) for col, exp in zip(schema.columns, values)])
+            record = Record([
+                Value(col.data_type, _literal_value(exp))
+                for col, exp in zip(schema.columns, values)
+            ])
 
         # the UNIQUE check and the registration must be atomic, and the new
         # row must be X-locked before any other scan can see it
@@ -206,6 +212,14 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, after_insert=None) ->
             lock_rid(stm.table, rid, LockMode.EXCLUSIVE)
         rids.append(rid)
     return rids
+
+
+def _literal_value(exp):
+    if isinstance(exp, PointExp):
+        return exp.to_point()
+    if isinstance(exp, NullExp):
+        return None
+    return exp.value
 
 
 def execute_delete(stm: DeleteStm, catalog, lock_rid=None, before_delete=None) -> int:
@@ -240,7 +254,7 @@ def execute_update(stm: UpdateStm, catalog, lock_rid=None, on_update=None) -> in
     if not hasattr(storage, "scan_with_rid"):
         raise ValueError("UPDATE requiere HeapFile con RIDs")
     column_index = schema.column_index(stm.column)
-    new_value = Value(schema.columns[column_index].data_type, stm.value.value)
+    new_value = Value(schema.columns[column_index].data_type, _literal_value(stm.value))
     latch = table_latch(catalog, stm.table)
     matches = []
     for rid, record in _locked_matches(stm.table, storage, stm.where_cond, schema, lock_rid, latch):

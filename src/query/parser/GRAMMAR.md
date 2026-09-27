@@ -5,7 +5,7 @@
 <WhereClause>  ::= WHERE <Condition>
 <Condition>    ::= <QualifiedName> <Operator> <Value>
 <Operator>     ::= EQ | LE | LEQ | GT | GEQ
-<Value>        ::= NUM | STRING | <QualifiedName>
+<Value>        ::= NUM | STRING | <QualifiedName> | NULL | <Point>
 <QualifiedName> ::= ID [ DOT ID ]
 <GroupOrOrder> ::= { GROUP_BY <QualifiedName> { COMA <QualifiedName> } }
 				   { ORDER_BY <QualifiedName> { COMA <QualifiedName> } }
@@ -17,11 +17,10 @@
 <CreateTableStmt> ::= CREATE_TABLE ID LPAREN <ColumnDefList> RPAREN [ USING <StorageType> ]
 <StorageType>     ::= HEAP | SEQUENTIAL
 
-## Contrato espacial para futuras extensiones
+## Valores espaciales
 
-Esta sección fija la sintaxis y semántica que deberán implementar futuras
-versiones del parser y del motor; no implica que el parser actual acepte estas
-producciones.
+El parser acepta `POINT` como valor literal en `INSERT` y `UPDATE`. Las demás
+producciones espaciales de esta sección describen extensiones futuras.
 
 ```text
 <SpatialType> ::= POINT | RECTANGLE | POLYGON
