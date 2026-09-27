@@ -5,6 +5,7 @@ import ExecutionPlanPanel from './ExecutionPlanPanel'
 import FilesPanel from './FilesPanel'
 import QueryPanel from './QueryPanel'
 import ResultsPanel from './ResultsPanel'
+import SpatialMapPanel from './SpatialMapPanel'
 
 function App() {
   const [sql, setSql] = useState('')
@@ -12,11 +13,24 @@ function App() {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [searchCenter, setSearchCenter] = useState<{ latitude: number; longitude: number } | null>(null)
 
   function handleRun() {
+    setSearchCenter(null)
+    runSql(sql)
+  }
+
+  function handleSpatialRun(query: string, center: { latitude: number; longitude: number }) {
+    setSearchCenter(center)
+    setSql(query)
+    runSql(query)
+  }
+
+  function runSql(query: string) {
     setRunning(true)
     setError(null)
-    runQuery(sql)
+    setResult(null)
+    runQuery(query)
       .then((data) => {
         setResult(data)
         setRefreshKey((key) => key + 1)
@@ -47,6 +61,16 @@ function App() {
           <section className="panel" aria-label="Results">
             <h2>Results</h2>
             <ResultsPanel result={result} error={error} running={running} />
+          </section>
+
+          <section className="panel" aria-label="Spatial search and map">
+            <h2>Spatial Search & Map</h2>
+            <SpatialMapPanel
+              result={result}
+              running={running}
+              searchCenter={searchCenter}
+              onRunQuery={handleSpatialRun}
+            />
           </section>
 
           <section className="panel" aria-label="Execution Plan">

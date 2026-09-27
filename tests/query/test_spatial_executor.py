@@ -5,6 +5,8 @@ from query.parser.parser import Parser
 from query.parser.scanner import Scanner
 from query.planner.plan_builder import build_select_plan
 from query.query_engine import execute
+from query.executor.executor import run_plan
+from spatial.geometry import BoundingBox
 
 
 def make_catalog(base_dir, with_rtree):
@@ -142,3 +144,16 @@ def test_knn_plan_uses_index_and_places_limit_after_sort(tmp_path):
     assert "KNNScan" in names
     assert "Limit" in names
     assert names.index("Projection") < names.index("Limit") < names.index("KNNScan")
+
+
+def test_limited_knn_expands_rtree_search_instead_of_scanning_world(tmp_path):
+    sql = (
+        "SELECT id FROM places ORDER BY distancia(location, "
+        "POINT(-77.0428, -12.0464)) LIMIT 3;"
+    )
+    catalog = make_catalog(tmp_path / "indexed", with_rtree=True)
+    plan = build_select_plan(parse(sql), catalog)
+    scans = [node for node in plan_nodes(plan) if type(node).__name__ == "SpatialIndexScan"]
+
+    assert row_ids(list(run_plan(plan))) == [1, 2, 6]
+    assert scans[0].boxes != [BoundingBox(-180, -90, 180, 90)]

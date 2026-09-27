@@ -166,6 +166,147 @@ h1, h2, h3 {
   overflow-x: auto;
 }
 
+.spatial-workbench {
+  display: grid;
+  gap: 14px;
+}
+
+.spatial-controls {
+  display: grid;
+  gap: 12px;
+}
+
+.spatial-control-row {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.spatial-field {
+  display: grid;
+  gap: 4px;
+  min-width: 110px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.spatial-field input,
+.spatial-field select,
+.spatial-presets input {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--editor-bg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.segmented-control {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.segmented-control legend,
+.spatial-presets > span {
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.segmented-control label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.spatial-presets {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.spatial-presets > span {
+  align-self: center;
+  margin: 0 4px 0 0;
+}
+
+.spatial-preset {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.spatial-preset.selected {
+  border-color: var(--accent);
+  background: rgba(124, 58, 237, 0.12);
+  font-weight: 700;
+}
+
+.spatial-presets input {
+  width: 110px;
+}
+
+.spatial-run {
+  margin: 0 0 0 auto;
+  min-height: 36px;
+}
+
+.spatial-index-status {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.spatial-map-frame {
+  width: 100%;
+  height: 430px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #e9eeec;
+}
+
+.spatial-map-frame .leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  font-family: var(--sans);
+}
+
+@media (max-width: 600px) {
+  .spatial-map-frame {
+    height: 360px;
+  }
+
+  .spatial-field {
+    flex: 1 1 130px;
+  }
+
+  .spatial-run {
+    width: 100%;
+  }
+}
+
 .plan-list {
   margin: 0;
   padding-left: 20px;

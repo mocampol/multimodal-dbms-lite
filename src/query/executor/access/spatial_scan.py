@@ -190,14 +190,19 @@ class SpatialIndexScan(PlanNode):
 class KNNScan(PlanNode):
     """Sort source records by exact spatial distance and optional tie keys."""
 
-    def __init__(self, child: PlanNode, order_items: list, schema):
+    def __init__(self, child: PlanNode, order_items: list, schema, limit: int | None = None):
         self.child = child
         self.order_items = order_items
         self.schema = schema
+        self.limit = limit
         self._records = []
         self._cursor = 0
 
     def open(self) -> None:
+        if self._can_use_index_for_top_k():
+            self._open_index_top_k()
+            return
+
         self.child.open()
         self._records = []
         while True:
@@ -234,25 +239,21 @@ class KNNScan(PlanNode):
                 (item.metric.upper() for item in self.order_items if isinstance(item, DistanceExp)),
                 None,
             ),
-            "strategy": "exact_distance_sort",
+            "strategy": (
+                "rtree_expanding_radius"
+                if self._can_use_index_for_top_k()
+                else "exact_distance_sort"
+            ),
         }
 
     def _sort_key(self, record: Record):
         keys = []
         for item in self.order_items:
             if isinstance(item, DistanceExp):
-                geometry = point2d_from_value(
-                    record[column_index(self.schema, item.geometry.value)].data
-                )
-                target = point2d_from_expression(item.point, record, self.schema)
-                if geometry is None or target is None:
+                distance = self._distance(item, record)
+                if distance is None:
                     keys.append((True, 0.0))
                     continue
-                distance = (
-                    euclidean_distance(geometry, target)
-                    if item.metric.upper() == "EUCLIDEAN"
-                    else haversine_distance(geometry, target)
-                )
                 keys.append((False, distance))
                 continue
 
@@ -260,3 +261,80 @@ class KNNScan(PlanNode):
             keys.append((value is not None, value if value is not None else 0))
         tie_breaker = tuple(repr(value.data) for value in record.values)
         return tuple(keys) + (tie_breaker,)
+
+    def _can_use_index_for_top_k(self) -> bool:
+        return (
+            isinstance(self.child, SpatialIndexScan)
+            and self.limit is not None
+            and self.limit > 0
+            and bool(self.order_items)
+            and isinstance(self.order_items[0], DistanceExp)
+            and isinstance(self.order_items[0].point, PointExp)
+        )
+
+    def _open_index_top_k(self) -> None:
+        distance = self.order_items[0]
+        center = point2d_from_expression(distance.point, None, self.schema)
+        if center is None:
+            self._open_full_sort()
+            return
+
+        geometry_index = column_index(self.schema, distance.geometry.value)
+        max_radius = (
+            math.pi * EARTH_MEAN_RADIUS_METERS
+            if distance.metric.upper() == "HAVERSINE"
+            else math.hypot(360.0, 180.0)
+        )
+        radius = 1000.0 if distance.metric.upper() == "HAVERSINE" else 0.01
+
+        while True:
+            complete_coverage = radius >= max_radius
+            self.child.boxes = distance_bounding_boxes(center, radius, distance.metric)
+            self.child.include_nulls_column = geometry_index if complete_coverage else None
+            self.child.open()
+            candidates = []
+            non_null_count = 0
+            while True:
+                record = self.child.next()
+                if record is None:
+                    break
+                actual_distance = self._distance(distance, record)
+                if actual_distance is None:
+                    if complete_coverage:
+                        candidates.append(record)
+                    continue
+                if actual_distance <= radius:
+                    candidates.append(record)
+                    non_null_count += 1
+            self.child.close()
+
+            if non_null_count >= self.limit or complete_coverage:
+                self._records = candidates
+                self._records.sort(key=self._sort_key)
+                self._cursor = 0
+                return
+            radius = min(radius * 2, max_radius)
+
+    def _open_full_sort(self) -> None:
+        self.child.open()
+        self._records = []
+        while True:
+            record = self.child.next()
+            if record is None:
+                break
+            self._records.append(record)
+        self._records.sort(key=self._sort_key)
+        self._cursor = 0
+
+    def _distance(self, expression: DistanceExp, record: Record) -> float | None:
+        geometry = point2d_from_value(
+            record[column_index(self.schema, expression.geometry.value)].data
+        )
+        target = point2d_from_expression(expression.point, record, self.schema)
+        if geometry is None or target is None:
+            return None
+        return (
+            euclidean_distance(geometry, target)
+            if expression.metric.upper() == "EUCLIDEAN"
+            else haversine_distance(geometry, target)
+        )

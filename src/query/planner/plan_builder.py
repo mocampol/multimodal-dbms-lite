@@ -161,7 +161,12 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
 
     if stm.order_by is not None:
         if any(isinstance(item, DistanceExp) for item in stm.order_by.columns):
-            node = KNNScan(node, stm.order_by.columns, schema)
+            node = KNNScan(
+                node,
+                stm.order_by.columns,
+                schema,
+                limit=stm.limit.value if stm.limit is not None else None,
+            )
         else:
             order_columns = [_resolve_column_name(schema, name) for name in stm.order_by.columns]
             node = Sort(node, order_columns, schema)
