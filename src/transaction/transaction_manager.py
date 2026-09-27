@@ -67,9 +67,9 @@ class TransactionManager:
             raise RuntimeError("no active transaction on this thread")
         return txn_id
 
-    def lock(self, resource: str, mode=LockMode.EXCLUSIVE):
+    def lock(self, resource: str, mode=LockMode.EXCLUSIVE, timeout=None):
         txn_id = self.require()
-        self.lock_manager.acquire(txn_id, resource, mode)
+        self.lock_manager.acquire(txn_id, resource, mode, timeout=timeout)
 
     def log_update(self, resource, old_value, new_value):
         txn_id = self.require()
@@ -84,8 +84,13 @@ class TransactionManager:
 
     def commit(self):
         txn_id = self.require()
-        self.log_manager.commit(txn_id)
-        self.log_manager.flush()
+        try:
+            self.log_manager.commit(txn_id)
+            self.log_manager.flush()
+        except Exception:
+            # COMMIT never reached the WAL: the transaction did not commit
+            self.abort()
+            raise
         with self._mutex:
             self._states[txn_id] = TransactionState.COMMITTED
         self.lock_manager.release_all(txn_id)
@@ -93,13 +98,16 @@ class TransactionManager:
 
     def abort(self):
         txn_id = self.require()
-        for callback in reversed(getattr(self._local, "undo", [])):
-            callback()
-        self.log_manager.abort(txn_id)
-        with self._mutex:
-            self._states[txn_id] = TransactionState.ABORTED
-        self.lock_manager.release_all(txn_id)
-        self._clear()
+        try:
+            for callback in reversed(getattr(self._local, "undo", [])):
+                callback()
+            # only mark ABORT once undo finished; otherwise recovery must undo it
+            self.log_manager.abort(txn_id)
+        finally:
+            with self._mutex:
+                self._states[txn_id] = TransactionState.ABORTED
+            self.lock_manager.release_all(txn_id)
+            self._clear()
 
     def _clear(self):
         self._local.txn_id = None

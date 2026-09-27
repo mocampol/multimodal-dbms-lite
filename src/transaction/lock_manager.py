@@ -30,6 +30,9 @@ class LockManager:
         with self._condition:
             deadline = None if timeout is None else time.monotonic() + timeout
             while True:
+                held_mode = self._holders.get(resource, {}).get(txn_id)
+                if held_mode == LockMode.EXCLUSIVE or held_mode == mode:
+                    return
                 blockers = self._blockers(txn_id, resource, mode)
                 if not blockers:
                     self._holders[resource][txn_id] = mode
@@ -43,6 +46,7 @@ class LockManager:
                 if timeout is not None:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        self._waiting[txn_id].pop(resource, None)
                         raise LockTimeoutError(resource)
                     self._condition.wait(remaining)
                 else:
@@ -56,6 +60,10 @@ class LockManager:
                     del self._holders[resource]
             self._waiting.pop(txn_id, None)
             self._condition.notify_all()
+
+    def held_mode(self, txn_id: int, resource: str):
+        with self._condition:
+            return self._holders.get(resource, {}).get(txn_id)
 
     def held_resources(self, txn_id: int):
         with self._condition:
