@@ -23,6 +23,11 @@ class Column:
         is_unique (bool): Whether values must be unique. A primary key is always UNIQUE.
             NOTE: this class only stores the flag — actually enforcing uniqueness
             requires checking existing rows, which is catalog/storage's job, not this class's.
+
+    Spatial value objects are defined in common.value, but are not yet DataType
+    members: parser and storage support must be added before spatial columns can
+    be declared or persisted. SQL NULL continues to be represented by None and
+    is accepted only when nullable is true.
     """
     def __init__(
         self,

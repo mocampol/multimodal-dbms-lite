@@ -220,6 +220,25 @@ source .venv/bin/activate
 pytest -q
 ```
 
+## Contrato espacial (preliminar)
+
+La representación espacial normativa está definida antes de añadir soporte al
+parser SQL, al catálogo o al almacenamiento. Los value objects `Point`,
+`Rectangle`, `Polygon` y `Distance` se encuentran en `src/common/value.py`;
+todavía no son tipos SQL declarables ni persistibles.
+
+- `POINT(longitud, latitud)` usa ese orden y almacena ambas coordenadas en grados. Longitud acepta `[-180, 180]` y latitud `[-90, 90]`, incluidos los extremos; no se convierten ni recortan valores fuera de rango.
+- Un rectángulo se representa por oeste, sur, este, norte. `oeste > este` indica que envuelve el antimeridiano.
+- Un polígono es una secuencia de puntos cerrada con al menos tres vértices distintos y el primer punto repetido al final. Sus lados son segmentos en el plano longitud/latitud; el anillo no puede cruzar el antimeridiano.
+- `HAVERSINE` usa el arco longitudinal más corto y una esfera de radio `6 371 008.8 m`; distancia y radio de consulta se expresan en metros. `EUCLIDEAN` opera directamente sobre longitud/latitud y expresa distancia y radio en unidades de coordenada (grados).
+- Los límites de rangos son inclusivos. Un punto sobre el borde pertenece al rango y dos geometrías que solo se tocan cuentan como intersección.
+- Los polos se aceptan. Para Haversine, las longitudes representan el mismo punto en cada polo; para Euclidiana y rangos se conservan las coordenadas numéricas sin esa equivalencia.
+- Coordenadas no numéricas, booleanas, no finitas o fuera de rango, rectángulos con `sur > norte`, anillos abiertos o mal formados y radios negativos son inválidos y se rechazan; no hay coerción ni normalización silenciosa.
+- SQL `NULL` se representa en Python como `None`. Las columnas nullable pueden contenerlo; operaciones espaciales con un operando `NULL` producen `NULL` y no satisfacen un `WHERE`.
+
+La sintaxis SQL propuesta y los ejemplos normativos están en
+[`src/query/parser/GRAMMAR.md`](src/query/parser/GRAMMAR.md).
+
 ## Nota
 
 Este sistema no pretende ser un motor SQL completo comparable con PostgreSQL o MySQL; su objetivo principal es servir como laboratorio de aprendizaje para entender los principios internos de un sistema de gestión de datos.
