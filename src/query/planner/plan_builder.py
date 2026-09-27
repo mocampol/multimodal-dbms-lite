@@ -45,19 +45,20 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             else input_schema.column_index(right_join_column)
         )
         node = HashJoin(
-            SeqScan(stm.table, catalog, lock_rid=lock_rid),
-            SeqScan(stm.join.table, catalog, lock_rid=lock_rid),
+            SeqScan(stm.table, catalog, lock_rid=_for_table(lock_rid, stm.table)),
+            SeqScan(stm.join.table, catalog, lock_rid=_for_table(lock_rid, stm.join.table)),
             left_index,
             right_index,
         )
         schema = _join_schema(stm.table, input_schema, stm.join.table, right_schema)
     else:
         schema = input_schema
-        node = SeqScan(stm.table, catalog, lock_rid=lock_rid)
+        table_lock_rid = _for_table(lock_rid, stm.table)
+        node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
         indexed = _equality_index(catalog, stm.table, stm.where_cond)
         if indexed is not None:
             index, key = indexed
-            node = IndexScan(index, catalog.get_storage(stm.table), key, lock_rid=lock_rid)
+            node = IndexScan(index, catalog.get_storage(stm.table), key, lock_rid=table_lock_rid)
 
     physical_condition = _qualify_condition(stm.where_cond, schema)
     if physical_condition is not None and (
@@ -156,7 +157,7 @@ def _aggregate_schema(input_schema, output_items):
     return Schema(f"aggregate_{input_schema.table_name}", columns)
 
 
-def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -> None:
+def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None, after_insert=None) -> None:
     """
     INSERT has no plan tree: it writes each literal row directly to storage.
     """
@@ -191,9 +192,11 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None) -
             before_insert(record)
         rid = storage.insert(record)
         if lock_rid is not None:
-            lock_rid(rid, LockMode.EXCLUSIVE)
+            lock_rid(stm.table, rid, LockMode.EXCLUSIVE)
         catalog.register_insert(stm.table, record, rid)
         catalog.register_insert_uniques(stm.table, record)
+        if after_insert is not None:
+            after_insert(rid)
         rids.append(rid)
     return rids
 
@@ -205,35 +208,21 @@ def execute_delete(stm: DeleteStm, catalog, lock_rid=None, before_delete=None) -
     a WHERE) purely as a convenient way to iterate matching records, but
     calls storage.delete() as a side effect rather than yielding rows.
 
-    HeapFile exposes stable RIDs for this operation. Sequential storage
-    supports the same operation only for its current equality-by-key API.
+    Both HeapFile and SequentialFile expose RIDs through scan_with_rid(),
+    which lets every deleted row be X-locked, logged and undone.
     """
     schema = catalog.get_schema(stm.table)
     storage = catalog.get_storage(stm.table)
 
-    if hasattr(storage, "scan_with_rid"):
-        matches = []
-        for rid, record in storage.scan_with_rid():
-            if stm.where_cond is None or _condition_matches(stm.where_cond, record, schema):
-                if lock_rid is not None:
-                    lock_rid(rid, LockMode.EXCLUSIVE)
-                matches.append((rid, record))
-        for rid, record in matches:
-            if before_delete is not None:
-                before_delete(rid, record)
-            catalog.unregister_delete(stm.table, record, rid)
-            storage.delete(rid)
-        return len(matches)
-
-    if stm.where_cond is not None and isinstance(stm.where_cond, BinaryExp):
-        if isinstance(stm.where_cond.right, IdExp):
-            raise ValueError("DELETE sobre SequentialFile requiere un literal como clave")
-        if stm.where_cond.op.name != "EQ_OP":
-            raise ValueError("DELETE sobre SequentialFile solo soporta igualdad")
-        deleted = storage.delete(stm.where_cond.right.value)
-        return deleted
-
-    raise ValueError("DELETE sin filtro sobre SequentialFile no está soportado")
+    if not hasattr(storage, "scan_with_rid"):
+        raise ValueError("DELETE requiere un storage con RIDs")
+    matches = _locked_matches(stm.table, storage, stm.where_cond, schema, lock_rid)
+    for rid, record in matches:
+        if before_delete is not None:
+            before_delete(rid, record)
+        catalog.unregister_delete(stm.table, record, rid)
+        storage.delete(rid)
+    return len(matches)
 
 
 def execute_update(stm: UpdateStm, catalog, lock_rid=None, on_update=None) -> int:
@@ -244,19 +233,43 @@ def execute_update(stm: UpdateStm, catalog, lock_rid=None, on_update=None) -> in
     column_index = schema.column_index(stm.column)
     new_value = Value(schema.columns[column_index].data_type, stm.value.value)
     matches = []
-    for rid, record in storage.scan_with_rid():
-        if _condition_matches(stm.where_cond, record, schema):
-            if lock_rid is not None:
-                lock_rid(rid, LockMode.EXCLUSIVE)
-            values = list(record.values)
-            values[column_index] = new_value
-            matches.append((rid, record, Record(values)))
+    for rid, record in _locked_matches(stm.table, storage, stm.where_cond, schema, lock_rid):
+        values = list(record.values)
+        values[column_index] = new_value
+        matches.append((rid, record, Record(values)))
     for rid, old_record, new_record in matches:
         new_rid = storage.update(rid, new_record)
         if on_update is not None:
             on_update(rid, new_rid, old_record, new_record)
         catalog.register_update(stm.table, rid, new_rid, old_record, new_record)
     return len(matches)
+
+
+def _for_table(lock_rid, table_name):
+    if lock_rid is None:
+        return None
+    return lambda rid, mode: lock_rid(table_name, rid, mode)
+
+
+def _locked_matches(table_name, storage, condition, schema, lock_rid):
+    """
+    Collects (rid, record) pairs matching `condition`, taking an X lock on
+    each one. The record is re-read after the lock is granted, since a
+    concurrent writer may have changed or deleted it while we waited.
+    """
+    matches = []
+    for rid, record in storage.scan_with_rid():
+        if condition is not None and not _condition_matches(condition, record, schema):
+            continue
+        if lock_rid is not None:
+            lock_rid(table_name, rid, LockMode.EXCLUSIVE)
+            record = storage.get(rid)
+            if record is None:
+                continue
+            if condition is not None and not _condition_matches(condition, record, schema):
+                continue
+        matches.append((rid, record))
+    return matches
 
 
 def _equality_index(catalog, table_name, condition):
