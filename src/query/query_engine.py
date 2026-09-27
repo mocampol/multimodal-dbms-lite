@@ -14,7 +14,7 @@ from query.parser.ast_nodes import (
     BeginTransactionStm, EndTransactionStm,
 )
 from transaction import TransactionManager, rid_resource
-from storage.latch import table_latch
+from transaction.row_undo import undo_delete, undo_insert, undo_update
 
 from query.rewriter.rewriter import rewrite
 from query.planner.plan_builder import (
@@ -236,42 +236,43 @@ def _execute_statement(stm, catalog):
             lambda: list(run_plan(build_select_plan(stm, catalog, lock_rid=lock_rid))),
         )
 
+    # the hooks below run inside the table latch, so each WAL record is
+    # durable before its page can be flushed
     if isinstance(stm, InsertStm):
         storage = catalog.get_storage(stm.table)
-        def insert_operation():
-            return execute_insert(
-                stm, catalog,
-                lock_rid=lock_rid,
-                before_insert=lambda record: manager.log_data_change(
-                    "INSERT", stm.table, None, None, _record_data(record)
-                ),
-                # registered per row so a failure mid-batch still undoes earlier rows
-                after_insert=lambda rid: manager.add_undo(
-                    lambda rid=rid: _undo_insert(catalog, stm.table, storage, rid)
-                ),
-            )
-        return _run_in_transaction(manager, insert_operation)
+        def after_insert(rid, record):
+            manager.log_data_change("INSERT", stm.table, rid, None, record)
+            # registered per row so a failure mid-batch still undoes earlier rows
+            manager.add_undo(lambda: undo_insert(manager, catalog, stm.table, storage, rid))
+        return _run_in_transaction(
+            manager,
+            lambda: execute_insert(stm, catalog, lock_rid=lock_rid, after_insert=after_insert),
+            catalog, stm.table,
+        )
 
     if isinstance(stm, DeleteStm):
         storage = catalog.get_storage(stm.table)
         def before_delete(rid, record):
-            manager.log_data_change("DELETE", stm.table, _rid_data(rid), _record_data(record), None)
-            manager.add_undo(
-                lambda rid=rid, record=record: _undo_delete(
-                    catalog, stm.table, storage, record
-                )
-            )
-        return _run_in_transaction(manager, lambda: execute_delete(stm, catalog, lock_rid=lock_rid, before_delete=before_delete))
+            manager.log_data_change("DELETE", stm.table, rid, record, None)
+            manager.add_undo(lambda: undo_delete(manager, catalog, stm.table, storage, record))
+        return _run_in_transaction(
+            manager,
+            lambda: execute_delete(stm, catalog, lock_rid=lock_rid, before_delete=before_delete),
+            catalog, stm.table,
+        )
 
     if isinstance(stm, UpdateStm):
         storage = catalog.get_storage(stm.table)
         def on_update(old_rid, new_rid, old_record, new_record):
-            manager.log_data_change("UPDATE", stm.table, _rid_data(old_rid), _record_data(old_record), _record_data(new_record))
+            manager.log_data_change("UPDATE", stm.table, old_rid, old_record, new_record, new_rid=new_rid)
             manager.add_undo(
-                lambda old_rid=old_rid, new_rid=new_rid, old_record=old_record, new_record=new_record:
-                _undo_update(catalog, stm.table, storage, old_rid, new_rid, new_record, old_record)
+                lambda: undo_update(manager, catalog, stm.table, storage, new_rid, new_record, old_record)
             )
-        return _run_in_transaction(manager, lambda: execute_update(stm, catalog, lock_rid=lock_rid, on_update=on_update))
+        return _run_in_transaction(
+            manager,
+            lambda: execute_update(stm, catalog, lock_rid=lock_rid, on_update=on_update),
+            catalog, stm.table,
+        )
 
     if isinstance(stm, (CreateTableStm, CreateIndexStm)):
         return None
@@ -279,15 +280,20 @@ def _execute_statement(stm, catalog):
     raise QueryError(f"Tipo de sentencia no soportado: {type(stm).__name__}")
 
 
-def _run_in_transaction(manager, operation):
+def _run_in_transaction(manager, operation, catalog=None, written_table=None):
     """
     Runs `operation` inside the thread's transaction, opening an implicit
     one if none is active. Any failure (including a DeadlockError) aborts
     the transaction so its locks are released and its changes undone.
+    `written_table`'s pages are flushed before the transaction ends (FORCE).
     """
     implicit = manager.current() is None
     if implicit:
         manager.begin()
+    if written_table is not None:
+        manager.add_flush(
+            ("table", written_table), lambda: catalog.flush_table(written_table)
+        )
     try:
         result = operation()
         if implicit:
@@ -298,31 +304,3 @@ def _run_in_transaction(manager, operation):
             manager.abort()
         raise
 
-
-def _record_data(record):
-    return [{"type": value.data_type.value, "data": value.data} for value in record.values]
-
-
-def _rid_data(rid):
-    return {"page_id": rid.page_id, "slot": rid.slot}
-
-
-def _undo_insert(catalog, table_name, storage, rid):
-    with table_latch(catalog, table_name):
-        record = storage.get(rid)
-        if record is not None:
-            catalog.unregister_delete(table_name, record, rid)
-            storage.delete(rid)
-
-
-def _undo_delete(catalog, table_name, storage, record):
-    with table_latch(catalog, table_name):
-        rid = storage.insert(record)
-        catalog.register_insert(table_name, record, rid)
-        catalog.register_insert_uniques(table_name, record)
-
-
-def _undo_update(catalog, table_name, storage, old_rid, new_rid, current, previous):
-    with table_latch(catalog, table_name):
-        restored_rid = storage.update(new_rid, previous)
-        catalog.register_update(table_name, new_rid, restored_rid, current, previous)

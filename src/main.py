@@ -4,6 +4,7 @@ from storage.heap.heap_file import HeapFile
 from storage.sequential.sequential_file import SequentialFile
 from catalog.catalog import Catalog
 from catalog.table_metadata import StorageType
+from transaction import TransactionManager
 
 def make_heap_factory(base_dir: str, pool_size: int = 64):
     def factory(schema):
@@ -47,3 +48,7 @@ catalog = Catalog(
     },
     index_buffer_factory=make_index_buffer_factory("data"),
 )
+
+# undo any transaction the previous run left unfinished before serving queries
+catalog._transaction_manager = TransactionManager("data/transactions.wal")
+startup_recovery = catalog._transaction_manager.recovery_manager.run_startup_recovery(catalog)

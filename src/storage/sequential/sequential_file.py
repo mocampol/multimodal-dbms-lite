@@ -333,6 +333,9 @@ class SequentialFile:
         real_page_id = self._get_real_page_id(rid)
         page = self.bm.fetch_page(real_page_id)
         try:
+            num_slots = self._read_header(page)[0]
+            if rid.slot >= num_slots:
+                return None
             status, a, b = self._read_slot(page, rid.slot)
             if status == STATUS_VALID:
                 return decode_record(page.read_bytes(a, b), self.schema)

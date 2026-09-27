@@ -55,11 +55,12 @@ def phase_1_simulate_crash():
 
     
     txn_a = txn_manager.begin()
+    txn_manager.add_flush("cuentas", heap.bm.flush_all)
     rid_a = heap.insert(_record(1, 100))
     txn_manager.log_data_change("INSERT", "cuentas", rid_a, before=None, after=_record(1, 100))
     print(f"txn={txn_a} INSERT id=1 saldo=100 rid={rid_a}")
     txn_manager.commit()
-    print(f"txn={txn_a} COMMIT")
+    print(f"txn={txn_a} COMMIT (sus páginas se escribieron a disco antes del registro COMMIT)")
 
     
     txn_b = txn_manager.begin()
@@ -74,8 +75,8 @@ def phase_1_simulate_crash():
 def phase_2_recover_and_verify():
     """
     Session 2: simulates restarting the engine. Runs RecoveryManager
-    against the same WAL file, then verifies id=1 is present (REDO/
-    already committed) and id=2 is gone (UNDO applied).
+    against the same WAL file, then verifies id=1 is present (committed,
+    already on disk) and id=2 is gone (UNDO applied).
     """
     print("\n=== Fase 2: reinicio del motor, corriendo recovery automático ===")
     heap = _open_heap_file()
@@ -92,8 +93,8 @@ def phase_2_recover_and_verify():
     recovery_manager = RecoveryManager(log_manager)
     result = recovery_manager.run_startup_recovery(_FakeCatalog())
 
-    print(f"Transacciones commiteadas (REDO aplicado): {result['committed']}")
-    print(f"Transacciones deshechas (UNDO aplicado):    {result['undone']}")
+    print(f"Transacciones commiteadas (ya en disco):   {result['committed']}")
+    print(f"Transacciones deshechas (UNDO aplicado):   {result['undone']}")
 
     records = list(heap.scan())
     ids_presentes = sorted(r[0].data for r in records)

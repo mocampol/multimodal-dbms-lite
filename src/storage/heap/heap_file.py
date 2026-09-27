@@ -140,6 +140,9 @@ class HeapFile:
         """
         page = self.bm.fetch_page(rid.page_id)
         try:
+            num_slots, _ = self._read_header(page)
+            if rid.slot >= num_slots:
+                return None
             status, a, b = self._read_slot(page, rid.slot)
             if status == STATUS_EMPTY:
                 return None

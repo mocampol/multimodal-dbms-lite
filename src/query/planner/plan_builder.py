@@ -161,7 +161,7 @@ def _aggregate_schema(input_schema, output_items):
     return Schema(f"aggregate_{input_schema.table_name}", columns)
 
 
-def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None, after_insert=None) -> None:
+def execute_insert(stm: InsertStm, catalog, lock_rid=None, after_insert=None) -> None:
     """
     INSERT has no plan tree: it writes each literal row directly to storage.
     """
@@ -196,13 +196,11 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, before_insert=None, a
             if violated:
                 raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
 
-            if before_insert is not None:
-                before_insert(record)
             rid = storage.insert(record)
             catalog.register_insert(stm.table, record, rid)
             catalog.register_insert_uniques(stm.table, record)
             if after_insert is not None:
-                after_insert(rid)
+                after_insert(rid, record)
             locked = _try_lock_new_rid(lock_rid, stm.table, rid)
         if not locked:
             lock_rid(stm.table, rid, LockMode.EXCLUSIVE)
