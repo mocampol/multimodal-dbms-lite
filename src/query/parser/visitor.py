@@ -149,7 +149,7 @@ class SemanticVisitor(Visitor):
             if stm.order_by is not None:
                 for column in stm.order_by.columns:
                     if isinstance(column, DistanceExp):
-                        self._validate_distance(stm, column, require_index=False)
+                        self._validate_distance(stm, column)
                     else:
                         self._require_select_column(stm, column)
 
@@ -231,12 +231,11 @@ class SemanticVisitor(Visitor):
                 raise SemanticError("POLYGON requiere al menos tres puntos")
             for point in predicate.polygon.points:
                 self._validate_point_literal(point)
-            self._require_rtree_index(table_name, column.name)
             return
 
         if not isinstance(predicate.left, DistanceExp):
             raise SemanticError("El predicado espacial debe comparar una expresión DISTANCIA")
-        self._validate_distance(stm, predicate.left, require_index=True)
+        self._validate_distance(stm, predicate.left)
 
         if isinstance(predicate.right, NumExp):
             if isinstance(predicate.right.value, bool) or not isinstance(
@@ -251,15 +250,13 @@ class SemanticVisitor(Visitor):
             return
         raise SemanticError("La distancia debe compararse con un valor numérico")
 
-    def _validate_distance(self, stm, distance: DistanceExp, require_index: bool):
+    def _validate_distance(self, stm, distance: DistanceExp):
         if not isinstance(distance.metric, str) or distance.metric.upper() not in {
             "EUCLIDEAN", "HAVERSINE"
         }:
             raise SemanticError("La métrica debe ser EUCLIDEAN o HAVERSINE")
 
-        table_name, column = self._require_point_column(stm, distance.geometry)
-        if require_index:
-            self._require_rtree_index(table_name, column.name)
+        self._require_point_column(stm, distance.geometry)
 
         if isinstance(distance.point, PointExp):
             self._validate_point_literal(distance.point)
@@ -289,17 +286,6 @@ class SemanticVisitor(Visitor):
             point.to_point()
         except ValueError as error:
             raise SemanticError(f"Coordenadas POINT inválidas: {error}") from error
-
-    def _require_rtree_index(self, table_name: str, column_name: str):
-        indexes = self.catalog.get_indexes(table_name)
-        if not any(
-            entry.get("column_name") == column_name
-            and str(entry.get("index_type", "")).lower() == "rtree"
-            for entry in indexes
-        ):
-            raise SemanticError(
-                f"La columna '{table_name}.{column_name}' requiere un índice RTREE"
-            )
 
     def _require_select_column(self, stm, name):
         return self._resolve_select_column(stm, name)[1]

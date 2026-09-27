@@ -121,10 +121,10 @@ def test_spatial_semantic_errors_become_query_error(sql, message):
     assert_query_error(sql, make_catalog(), message)
 
 
-def test_spatial_filter_requires_rtree_but_ordering_does_not():
+def test_spatial_filter_can_fall_back_without_rtree():
     sql = "SELECT * FROM tiendas WHERE distancia(ubicacion, POINT(0, 0)) < 10;"
 
-    assert_query_error(sql, make_catalog(with_rtree=False), "índice RTREE")
+    assert_semantically_valid(sql, make_catalog(with_rtree=False))
 
 
 def test_limit_must_be_positive():

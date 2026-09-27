@@ -8,7 +8,7 @@ Sequential Scan.
 
 from query.parser.ast_nodes import (
     SelectStm, InsertStm, DeleteStm, UpdateStm, IdExp, BinaryExp,
-    AggregateSpec, PointExp, NullExp,
+    AggregateSpec, PointExp, NullExp, DistanceExp, SpatialPredicate, WithinExp,
 )
 from common.value import DataType, Value
 from common.record import Record
@@ -18,8 +18,16 @@ from storage.latch import latched_scan, table_latch
 
 from query.executor.access.seq_scan import SeqScan
 from query.executor.access.index_scan import IndexScan
+from query.executor.access.spatial_scan import (
+    KNNScan,
+    SpatialIndexScan,
+    WORLD_BOUNDS,
+    candidate_boxes_for_predicate,
+)
 from query.executor.processing.filter import Filter
+from query.executor.processing.limit import Limit
 from query.executor.processing.projection import Projection
+from query.executor.processing.spatial_filter import SpatialFilter
 from query.executor.processing.sort import Sort
 from query.executor.aggregate.group_aggregate import GroupAggregate
 from query.executor.aggregate.hash_aggregate import HashAggregate
@@ -32,6 +40,13 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
     source -> Filter -> Group/Aggregate -> Sort -> Projection.
     """
     input_schema = catalog.get_schema(stm.table)
+
+    spatial_condition = isinstance(stm.where_cond, SpatialPredicate)
+    distance_order = next(
+        (item for item in (stm.order_by.columns if stm.order_by else [])
+         if isinstance(item, DistanceExp)),
+        None,
+    )
 
     if stm.join is not None:
         right_schema = catalog.get_schema(stm.join.table)
@@ -55,23 +70,58 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             right_index,
         )
         schema = _join_schema(stm.table, input_schema, stm.join.table, right_schema)
+        if spatial_condition:
+            node = SpatialFilter(node, stm.where_cond, schema)
+        elif stm.where_cond is not None:
+            node = Filter(node, _qualify_condition(stm.where_cond, schema), schema)
     else:
         schema = input_schema
         table_lock_rid = _for_table(lock_rid, stm.table)
-        node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
-        indexed = _equality_index(catalog, stm.table, stm.where_cond)
-        if indexed is not None:
-            index, key = indexed
-            node = IndexScan(
-                index, catalog.get_storage(stm.table), key,
-                lock_rid=table_lock_rid, latch=table_latch(catalog, stm.table),
-            )
-
-    physical_condition = _qualify_condition(stm.where_cond, schema)
-    if physical_condition is not None and (
-        stm.join is not None or _equality_index(catalog, stm.table, stm.where_cond) is None
-    ):
-        node = Filter(node, physical_condition, schema)
+        if spatial_condition:
+            geometry = _spatial_geometry(stm.where_cond)
+            column_name = _resolve_column_name(schema, geometry.value)
+            index = catalog.get_physical_index(stm.table, column_name)
+            if index is not None and hasattr(index, "range_query"):
+                node = SpatialIndexScan(
+                    index,
+                    catalog.get_storage(stm.table),
+                    stm.table,
+                    candidate_boxes_for_predicate(stm.where_cond, schema),
+                    latch=table_latch(catalog, stm.table),
+                    lock_rid=table_lock_rid,
+                )
+            else:
+                node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
+            node = SpatialFilter(node, stm.where_cond, schema)
+        elif distance_order is not None:
+            column_name = _resolve_column_name(schema, distance_order.geometry.value)
+            index = catalog.get_physical_index(stm.table, column_name)
+            if index is not None and hasattr(index, "range_query"):
+                column_position = schema.column_index(column_name)
+                node = SpatialIndexScan(
+                    index,
+                    catalog.get_storage(stm.table),
+                    stm.table,
+                    [WORLD_BOUNDS],
+                    latch=table_latch(catalog, stm.table),
+                    lock_rid=table_lock_rid,
+                    include_nulls_column=column_position,
+                )
+            else:
+                node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
+            if stm.where_cond is not None:
+                node = Filter(node, _qualify_condition(stm.where_cond, schema), schema)
+        else:
+            node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
+            indexed = _equality_index(catalog, stm.table, stm.where_cond)
+            if indexed is not None:
+                index, key = indexed
+                node = IndexScan(
+                    index, catalog.get_storage(stm.table), key,
+                    lock_rid=table_lock_rid, latch=table_latch(catalog, stm.table),
+                )
+            if stm.where_cond is not None and indexed is None:
+                node = Filter(node, _qualify_condition(stm.where_cond, schema), schema)
 
     aggregate_items = [item for item in stm.columns if isinstance(item, AggregateSpec)]
     if aggregate_items:
@@ -104,10 +154,22 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             node = GroupAggregate(node, group_columns, schema)
 
     if stm.order_by is not None:
-        order_columns = [_resolve_column_name(schema, name) for name in stm.order_by.columns]
-        node = Sort(node, order_columns, schema)
+        if any(isinstance(item, DistanceExp) for item in stm.order_by.columns):
+            node = KNNScan(node, stm.order_by.columns, schema)
+        else:
+            order_columns = [_resolve_column_name(schema, name) for name in stm.order_by.columns]
+            node = Sort(node, order_columns, schema)
+
+    if stm.limit is not None:
+        node = Limit(node, stm.limit.value)
 
     return Projection(node, projection_columns, schema)
+
+
+def _spatial_geometry(predicate):
+    if isinstance(predicate, WithinExp):
+        return predicate.geometry
+    return predicate.left.geometry
 
 
 def _join_schema(left_name, left_schema, right_name, right_schema):
