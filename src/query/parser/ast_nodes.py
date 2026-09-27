@@ -63,6 +63,22 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
+    def visit_polygon_literal(self, exp: "PolygonLiteral"):
+        ...
+
+    @abstractmethod
+    def visit_distance_exp(self, exp: "DistanceExp"):
+        ...
+
+    @abstractmethod
+    def visit_spatial_predicate(self, exp: "SpatialPredicate"):
+        ...
+
+    @abstractmethod
+    def visit_within_exp(self, exp: "WithinExp"):
+        ...
+
+    @abstractmethod
     def visit_binary_exp(self, exp: "BinaryExp"):
         ...
 
@@ -123,7 +139,7 @@ class Exp(ABC):
 class NumExp(Exp):
     """<Value> ::= NUM"""
 
-    def __init__(self, value: int):
+    def __init__(self, value: int | float):
         self.value = value
 
     def accept(self, visitor: Visitor):
@@ -176,6 +192,69 @@ class PointExp(Exp):
         return f"POINT({self.longitude}, {self.latitude})"
 
 
+class PointLiteral(PointExp):
+    """A point literal used inside a spatial SQL expression."""
+
+
+class PolygonLiteral(Exp):
+    """<Polygon> ::= POLYGON LPAREN <PointList> RPAREN"""
+
+    def __init__(self, points: List[PointLiteral]):
+        self.points = points
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_polygon_literal(self)
+
+    def __repr__(self):
+        return f"POLYGON({', '.join(map(repr, self.points))})"
+
+
+class DistanceExp(Exp):
+    """DISTANCIA(<GeometryArg>, <Point>)"""
+
+    def __init__(self, geometry: "IdExp", point: PointLiteral):
+        self.geometry = geometry
+        self.point = point
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_distance_exp(self)
+
+    def __repr__(self):
+        return f"distancia({self.geometry!r}, {self.point!r})"
+
+
+class SpatialPredicate(Exp):
+    """A spatial value comparison used as a WHERE condition."""
+
+    def __init__(self, left: Exp, operator: Optional[BinaryOp], right: Exp):
+        self.left = left
+        self.operator = operator
+        self.right = right
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_spatial_predicate(self)
+
+    def __repr__(self):
+        if self.operator is None:
+            return f"({self.left!r}, {self.right!r})"
+        return f"({self.left!r} {binop_to_char(self.operator)} {self.right!r})"
+
+
+class WithinExp(SpatialPredicate):
+    """DENTRO_DE(<GeometryArg>, <Polygon>)"""
+
+    def __init__(self, geometry: "IdExp", polygon: PolygonLiteral):
+        super().__init__(geometry, None, polygon)
+        self.geometry = geometry
+        self.polygon = polygon
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_within_exp(self)
+
+    def __repr__(self):
+        return f"dentro_de({self.geometry!r}, {self.polygon!r})"
+
+
 class NullExp(Exp):
     """<Value> ::= NULL"""
 
@@ -218,16 +297,27 @@ class BinaryExp(Exp):
 
 # Auxiliary clauses (<GroupOrOrder>)
 class OrderByClause:
-    """ORDER_BY QualifiedName { COMA QualifiedName }"""
+    """ORDER_BY <OrderByItem> { COMA <OrderByItem> }"""
 
-    def __init__(self, columns: Optional[List[str]] = None):
-        self.columns: List[str] = columns if columns is not None else []
+    def __init__(self, columns: Optional[List[object]] = None):
+        self.columns: List[object] = columns if columns is not None else []
 
     def accept(self, visitor: Visitor):
         return visitor.visit_order_by_clause(self)
 
     def __repr__(self):
-        return f"ORDER BY {', '.join(self.columns)}"
+        items = [item if isinstance(item, str) else repr(item) for item in self.columns]
+        return f"ORDER BY {', '.join(items)}"
+
+
+class LimitClause:
+    """LIMIT <non-negative integer>"""
+
+    def __init__(self, value: int):
+        self.value = value
+
+    def __repr__(self):
+        return f"LIMIT {self.value}"
 
 
 class GroupByClause:
@@ -318,6 +408,7 @@ class SelectStm(Stm):
         order_by: Optional[OrderByClause] = None,
         group_by: Optional[GroupByClause] = None,
         join: Optional[JoinClause] = None,
+        limit: Optional[LimitClause] = None,
     ):
         self.columns = columns
         self.table = table
@@ -325,6 +416,7 @@ class SelectStm(Stm):
         self.order_by = order_by
         self.group_by = group_by
         self.join = join
+        self.limit = limit
 
     def accept(self, visitor: Visitor):
         return visitor.visit_select_stm(self)
@@ -339,6 +431,8 @@ class SelectStm(Stm):
             parts.append(repr(self.group_by))
         if self.order_by is not None:
             parts.append(repr(self.order_by))
+        if self.limit is not None:
+            parts.append(repr(self.limit))
         if self.join is not None:
             parts.insert(2, repr(self.join))
         return " ".join(parts)

@@ -10,6 +10,9 @@ from query.parser.ast_nodes import (
     StringExp,
     PointExp,
     NullExp,
+    PolygonLiteral,
+    DistanceExp,
+    SpatialPredicate,
     BinaryExp,
     BinaryOp,
     Stm,
@@ -133,10 +136,21 @@ class SemanticVisitor(Visitor):
                         self._require_select_column(stm, col)
 
             if stm.where_cond is not None:
+                if isinstance(stm.where_cond, SpatialPredicate) or (
+                    isinstance(stm.where_cond, BinaryExp)
+                    and isinstance(stm.where_cond.left, DistanceExp)
+                ):
+                    raise SemanticError(
+                        "La sintaxis espacial se parsea, pero su ejecución aún no está soportada"
+                    )
                 self._validate_select_condition(stm, stm.where_cond)
 
             if stm.order_by is not None:
                 for column in stm.order_by.columns:
+                    if isinstance(column, DistanceExp):
+                        raise SemanticError(
+                            "La sintaxis espacial se parsea, pero su ejecución aún no está soportada"
+                        )
                     self._require_select_column(stm, column)
 
             if stm.group_by is not None:
@@ -386,6 +400,18 @@ class SemanticVisitor(Visitor):
 
     def visit_null_exp(self, exp: NullExp) -> _ExpResult:
         return ("literal", None)
+
+    def visit_polygon_literal(self, exp: PolygonLiteral):
+        raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
+
+    def visit_distance_exp(self, exp: DistanceExp):
+        raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
+
+    def visit_spatial_predicate(self, exp: SpatialPredicate):
+        raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
+
+    def visit_within_exp(self, exp):
+        raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
 
     def visit_id_exp(self, exp: IdExp) -> _ExpResult:
         column = self._require_column(self._current_schema, exp.value)

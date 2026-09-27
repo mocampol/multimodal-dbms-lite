@@ -60,6 +60,10 @@ class TokenType(Enum):
     T_TIMESTAMP = auto()
     T_BYTEA = auto()
     T_POINT = auto()
+    DISTANCE = auto()
+    WITHIN = auto()
+    POLYGON = auto()
+    LIMIT = auto()
 
     BTREE = auto()
     HASH = auto()
@@ -127,6 +131,10 @@ _TYPE_NAMES = {
     TokenType.T_TIMESTAMP: "'TIMESTAMP'",
     TokenType.T_BYTEA: "'BYTEA'",
     TokenType.T_POINT: "'POINT'",
+    TokenType.DISTANCE: "'DISTANCIA'",
+    TokenType.WITHIN: "'DENTRO_DE'",
+    TokenType.POLYGON: "'POLYGON'",
+    TokenType.LIMIT: "'LIMIT'",
 
     TokenType.BTREE: "'BTREE'",
     TokenType.HASH: "'HASH'",

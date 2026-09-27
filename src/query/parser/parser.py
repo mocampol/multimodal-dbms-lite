@@ -9,6 +9,12 @@ from query.parser.ast_nodes import (
     IdExp,
     StringExp,
     PointExp,
+    PointLiteral,
+    PolygonLiteral,
+    DistanceExp,
+    WithinExp,
+    SpatialPredicate,
+    LimitClause,
     NullExp,
     BinaryExp,
     BinaryOp,
@@ -206,8 +212,9 @@ class Parser:
             where_cond = self.parse_where_clause()
 
         order_by, group_by = self.parse_group_or_order()
+        limit = self.parse_limit_clause() if self.check(TokenType.LIMIT) else None
 
-        return SelectStm(columns, table, where_cond, order_by, group_by, join)
+        return SelectStm(columns, table, where_cond, order_by, group_by, join, limit)
 
     def parse_select_list(self) -> List[str]:
         """<SelectList> ::= MUL | ID { COMA ID }"""
@@ -247,12 +254,21 @@ class Parser:
         return self.parse_condition()
 
     def parse_condition(self) -> Exp:
-        """<Condition> ::= QualifiedName <Operator> <Value>"""
-        left = IdExp(self.parse_qualified_name())
+        """<Condition> ::= distancia(...) <Operator> <Value> | dentro_de(...) | QualifiedName <Operator> <Value>"""
+        if self.check(TokenType.WITHIN):
+            return self.parse_within_exp()
+
+        spatial_comparison = self.check(TokenType.DISTANCE)
+        if spatial_comparison:
+            left = self.parse_distance_exp()
+        else:
+            left = IdExp(self.parse_qualified_name())
 
         op = self.parse_operator()
         right = self.parse_value()
 
+        if spatial_comparison:
+            return SpatialPredicate(left, op, right)
         return BinaryExp(left, right, op)
 
     def parse_operator(self) -> BinaryOp:
@@ -288,7 +304,45 @@ class Parser:
         self.expect(TokenType.COMA)
         latitude = self.parse_number()
         self.expect(TokenType.RPAREN)
-        return PointExp(longitude, latitude)
+        return PointLiteral(longitude, latitude)
+
+    def parse_distance_exp(self) -> DistanceExp:
+        self.expect(TokenType.DISTANCE)
+        self.expect(TokenType.LPAREN)
+        geometry = IdExp(self.parse_qualified_name())
+        self.expect(TokenType.COMA)
+        point = self.parse_point()
+        self.expect(TokenType.RPAREN)
+        return DistanceExp(geometry, point)
+
+    def parse_polygon(self) -> PolygonLiteral:
+        self.expect(TokenType.POLYGON)
+        self.expect(TokenType.LPAREN)
+        points = [self.parse_point()]
+        while self.match(TokenType.COMA):
+            points.append(self.parse_point())
+        self.expect(TokenType.RPAREN)
+        return PolygonLiteral(points)
+
+    def parse_within_exp(self) -> WithinExp:
+        self.expect(TokenType.WITHIN)
+        self.expect(TokenType.LPAREN)
+        geometry = IdExp(self.parse_qualified_name())
+        self.expect(TokenType.COMA)
+        polygon = self.parse_polygon()
+        self.expect(TokenType.RPAREN)
+        return WithinExp(geometry, polygon)
+
+    def parse_limit_clause(self) -> LimitClause:
+        self.expect(TokenType.LIMIT)
+        token = self.expect(TokenType.NUM)
+        try:
+            value = int(token.text)
+        except ValueError:
+            raise RuntimeError("Error sintáctico: LIMIT requiere un entero no negativo") from None
+        if value < 0:
+            raise RuntimeError("Error sintáctico: LIMIT requiere un entero no negativo")
+        return LimitClause(value)
 
     def parse_group_or_order(self):
         """<GroupOrOrder> ::= [ GROUP_BY QualifiedNameList ] [ ORDER_BY QualifiedNameList ]"""
@@ -297,9 +351,9 @@ class Parser:
 
         while self.check(TokenType.ORDER_BY) or self.check(TokenType.GROUP_BY):
             if self.match(TokenType.ORDER_BY):
-                columns = [self.parse_qualified_name()]
+                columns = [self.parse_order_by_item()]
                 while self.match(TokenType.COMA):
-                    columns.append(self.parse_qualified_name())
+                    columns.append(self.parse_order_by_item())
                 order_by = OrderByClause(columns)
             else:
                 self.expect(TokenType.GROUP_BY)
@@ -309,6 +363,11 @@ class Parser:
                 group_by = GroupByClause(columns)
 
         return order_by, group_by
+
+    def parse_order_by_item(self):
+        if self.check(TokenType.DISTANCE):
+            return self.parse_distance_exp()
+        return self.parse_qualified_name()
 
     def parse_insert(self) -> InsertStm:
         """<InsertStmt> ::= INSERT_INTO ID [ LPAREN <ColumnNameList> RPAREN ] VALUES <ValueRow> { COMA <ValueRow> }"""

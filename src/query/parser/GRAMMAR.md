@@ -1,14 +1,18 @@
 ````text
 <Statement>    ::= [ EXPLAIN [ ANALYZE ] ] ( <SelectStmt> | <InsertStmt> | <DeleteStmt> ) SEMICOL
-<SelectStmt>   ::= SELECT <SelectList> FROM ID [ <WhereClause> ] [ <GroupOrOrder> ]
+<SelectStmt>   ::= SELECT <SelectList> FROM ID [ <WhereClause> ] [ <GroupOrOrder> ] [ <LimitClause> ]
 <SelectList>   ::= MUL | ID { COMA ID }
 <WhereClause>  ::= WHERE <Condition>
 <Condition>    ::= <QualifiedName> <Operator> <Value>
+				 | <DistanceExp> <Operator> NUM
+				 | <WithinExp>
 <Operator>     ::= EQ | LE | LEQ | GT | GEQ
 <Value>        ::= NUM | STRING | <QualifiedName> | NULL | <Point>
 <QualifiedName> ::= ID [ DOT ID ]
 <GroupOrOrder> ::= { GROUP_BY <QualifiedName> { COMA <QualifiedName> } }
-				   { ORDER_BY <QualifiedName> { COMA <QualifiedName> } }
+				   { ORDER_BY <OrderByItem> { COMA <OrderByItem> } }
+<OrderByItem>  ::= <QualifiedName> | <DistanceExp>
+<LimitClause>  ::= LIMIT NUM
 <InsertStmt>      ::= INSERT_INTO ID [ LPAREN <ColumnNameList> RPAREN ] VALUES <ValueRow> { COMA <ValueRow> }
 <ColumnNameList>  ::= ID { COMA ID }
 <ValueRow>     ::= LPAREN <ValueList> RPAREN
@@ -19,12 +23,15 @@
 
 ## Valores espaciales
 
-El parser acepta `POINT` como valor literal en `INSERT` y `UPDATE`. Las demás
-producciones espaciales de esta sección describen extensiones futuras.
+El parser acepta literales `POINT` en `INSERT`, `UPDATE` y expresiones
+espaciales. Estas reglas agregan sintaxis y AST; la evaluación de consultas
+espaciales todavía no está implementada.
 
 ```text
 <SpatialType> ::= POINT | RECTANGLE | POLYGON
 <Point>       ::= POINT LPAREN NUM COMA NUM RPAREN
+<DistanceExp> ::= DISTANCIA LPAREN <QualifiedName> COMA <Point> RPAREN
+<WithinExp>   ::= DENTRO_DE LPAREN <QualifiedName> COMA <Polygon> RPAREN
 <Rectangle>   ::= RECTANGLE LPAREN <Point> COMA <Point> RPAREN
 <PointList>   ::= <Point> { COMA <Point> }
 <Polygon>     ::= POLYGON LPAREN <PointList> RPAREN
@@ -65,6 +72,21 @@ CREATE TABLE sitios (ubicacion POINT);
 INSERT INTO sitios VALUES (POINT(-122.3, 47.6));
 SELECT ubicacion FROM sitios
 WHERE WITHIN_DISTANCE(ubicacion, POINT(-122.4, 47.6), 5000, HAVERSINE);
+```
+
+La sintaxis SQL de consultas espaciales admitida por el parser es:
+
+```sql
+SELECT * FROM tiendas
+WHERE distancia(ubicacion, POINT(-12.0464, -77.0428)) < 5000;
+
+SELECT * FROM restaurantes
+ORDER BY distancia(ubicacion, POINT(-12.05, -77.04)) LIMIT 10;
+
+SELECT * FROM restaurantes
+WHERE dentro_de(ubicacion, POLYGON(
+	POINT(-78, -13), POINT(-77, -13), POINT(-77, -12), POINT(-78, -13)
+));
 ```
 
 ```sql
