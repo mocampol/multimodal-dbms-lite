@@ -1,0 +1,13 @@
+{
+  "postgres_version": "PostgreSQL 16.4 (Debian 16.4-1.pgdg110+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 10.2.1-6) 10.2.1 20210110, 64-bit",
+  "postgis_version": "POSTGIS=\"3.4.3 e365945\" [EXTENSION] PGSQL=\"160\" GEOS=\"3.9.0-CAPI-1.16.2\" PROJ=\"7.2.1 NETWORK_ENABLED=OFF URL_ENDPOINT=https://cdn.proj.org USER_WRITABLE_DIRECTORY=/var/lib/postgresql/.local/share/proj DATABASE_PATH=/usr/share/proj/proj.db\" LIBXML=\"2.9.10\" LIBJSON=\"0.15\" LIBPROTOBUF=\"1.3.3\" WAGYU=\"0.5.0 (Internal)\" TOPOLOGY",
+  "docker_version": "Docker version 28.0.4, build b8034c0",
+  "container_cpus": 2.0,
+  "container_memory_bytes": 4294967296,
+  "host_platform": "Windows-11-10.0.26200-SP0",
+  "host_processor": "Intel64 Family 6 Model 186 Stepping 3, GenuineIntel",
+  "host_cpu_count": 12,
+  "host_ram_bytes": 16845533184,
+  "python_version": "3.12.2",
+  "psycopg_version": "3.3.6"
+}
