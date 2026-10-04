@@ -422,10 +422,10 @@ class Catalog:
             )
         except (AttributeError, ValueError):
             raise ValueError(f"Tipo de índice no soportado: {index_type}") from None
-        if index_type == IndexType.RTREE and column.data_type != DataType.POINT:
-            raise ValueError("RTREE requiere una columna de tipo POINT")
-        if column.data_type == DataType.POINT and index_type != IndexType.RTREE:
-            raise ValueError("Las columnas POINT requieren un índice RTREE")
+        if index_type == IndexType.RTREE and column.data_type not in (DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY):
+            raise ValueError("RTREE requiere una columna de tipo POINT, POLYGON, RECTANGLE o GEOMETRY")
+        if column.data_type in (DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY) and index_type != IndexType.RTREE:
+            raise ValueError("Las columnas espaciales (POINT, POLYGON, RECTANGLE, GEOMETRY) requieren un índice RTREE")
         if index_type == IndexType.RTREE and any(
             entry["column_name"] == column_name and entry["index_type"] == index_type.value
             for entry in self.indexes.get(table_name, [])
@@ -495,8 +495,21 @@ class Catalog:
     def _rtree_key(value):
         if value.data is None:
             return None
-        point = value.data
-        return Point2D(point.longitude, point.latitude)
+        geom = value.data
+        from spatial.geometry import Point2D, BoundingBox
+        from common.value import Point, Polygon, Rectangle
+        if isinstance(geom, Point):
+            return Point2D(geom.longitude, geom.latitude)
+        if isinstance(geom, Rectangle):
+            return BoundingBox(geom.west, geom.south, geom.east, geom.north)
+        if isinstance(geom, Polygon):
+            return BoundingBox(
+                min(p.longitude for p in geom.points),
+                min(p.latitude for p in geom.points),
+                max(p.longitude for p in geom.points),
+                max(p.latitude for p in geom.points),
+            )
+        return geom
 
     @staticmethod
     def _scan_with_rids(storage):
