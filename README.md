@@ -239,6 +239,50 @@ todavía no son tipos SQL declarables ni persistibles.
 La sintaxis SQL propuesta y los ejemplos normativos están en
 [`src/query/parser/GRAMMAR.md`](src/query/parser/GRAMMAR.md).
 
+## Benchmarks
+
+Los scripts de `benchmarks/` generan reportes y gráficas (no son pass/fail); la suite formal de pruebas vive en `tests/`.
+
+| Script | Compara | Salidas |
+|---|---|---|
+| `benchmark_indexes.py` | B+ clusterizado vs. B+ no clusterizado vs. Hash dinámico | `results/index_comparison_*.csv/md`, `results/charts/` |
+| `benchmark_spatial.py` | Búsqueda secuencial vs. R-Tree propio vs. PostgreSQL + PostGIS (GiST) | `results/spatial_results.csv`, `results/spatial_summary.md`, `results/charts/spatial_*.png` |
+
+### Benchmark espacial (`benchmark_spatial.py`)
+
+Configuración: N = 1 000 / 10 000 / 100 000 puntos; búsqueda por radio de 1, 5 y 10 km; k-NN con k = 10, 50 y 100; 100 consultas por configuración con los mismos centros para las tres técnicas; semilla fija (`SEED = 42`); warm-up de 10 consultas por celda; 3 repeticiones (cada una reconstruye los índices). Se mide tiempo de construcción, tiempo promedio de consulta (media, mediana, p95), memoria, espacio en disco y exactitud frente a la búsqueda secuencial. La distancia es Haversine en metros (esfera de 6 371 008.8 m), igual que `src/spatial/distance.py`.
+
+```bash
+pip install -r requirements.txt
+
+python benchmarks/benchmark_spatial.py --quick       # corrida corta (humo); escribe *_quick.csv/md y charts_quick/
+python benchmarks/benchmark_spatial.py               # corrida completa
+python benchmarks/benchmark_spatial.py --no-postgres # sin PostgreSQL
+python benchmarks/benchmark_spatial.py --help        # --sizes, --queries, --repetitions, --seed, ...
+```
+
+La corrida completa es lenta (el R-Tree se construye con inserciones una a una y la búsqueda secuencial recorre todo el heap en cada consulta). Para una primera prueba conviene `--sizes 1000,10000 --repetitions 1`.
+
+#### PostgreSQL + PostGIS
+
+Se necesita una instancia de PostgreSQL con la extensión PostGIS (local, en Docker o un servidor del curso). La conexión se lee de la variable de entorno `PG_DSN` (o `--pg-dsn`). Si no está definida o la conexión falla, **PostGIS se omite** y las filas del CSV quedan con `status = OMITIDO_SIN_POSTGRES...`; el resto del benchmark continúa.
+
+Una forma rápida de tener PostGIS es con Docker:
+
+```bash
+docker run --name dbms-postgis-bench -e POSTGRES_PASSWORD=postgres -p 5433:5432 -d postgis/postgis:16-3.4
+export PG_DSN="postgresql://postgres:postgres@localhost:5433/postgres"   # Windows (PowerShell): $env:PG_DSN="..."
+python benchmarks/benchmark_spatial.py
+```
+
+(El puerto 5433 evita chocar con un PostgreSQL local en el 5432.)
+
+El benchmark crea (y al terminar borra, salvo `--keep-pg-data`) el esquema `bench_spatial` con la tabla `bench_points(id, lon, lat, geog geography(Point,4326))` y un índice GiST sobre `geog`. Rango: `ST_DWithin(..., false)` (esfera); k-NN: `ORDER BY geog <-> punto LIMIT k`. Ajustes de sesión: `max_parallel_workers_per_gather = 0` y `jit = off` (las otras técnicas son de un solo hilo). La versión de PostgreSQL/PostGIS y los parámetros efectivos (`shared_buffers`, `work_mem`, ...) se registran automáticamente en `spatial_summary.md`, junto con si el planificador usó realmente el índice GiST (`EXPLAIN`).
+
+#### Errores, descartes y equivalencia
+
+Las consultas que fallan, o que ya no caben en el presupuesto de tiempo de la celda (`--cell-budget-s`, 900 s), se **descartan y se cuentan** (`queries_discarded`, `query_errors`, `error_samples` en el CSV y sección 6 del resumen). Los resultados de R-Tree y PostGIS se comparan consulta a consulta con la búsqueda secuencial: *exacto*, *con tolerancia* (`--tolerance-m`, solo puntos en el borde del radio o empates en k-NN) o *diferente* (error).
+
 ## Nota
 
 Este sistema no pretende ser un motor SQL completo comparable con PostgreSQL o MySQL; su objetivo principal es servir como laboratorio de aprendizaje para entender los principios internos de un sistema de gestión de datos.
