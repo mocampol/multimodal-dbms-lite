@@ -37,14 +37,17 @@ class RTree:
     def root_page_id(self) -> int:
         return self._root_page_id
 
-    def insert(self, point: Point2D, rid: RID) -> None:
+    def insert(self, geom, rid: RID) -> None:
         """Insert one point/RID pair. Duplicate points and RIDs are allowed."""
-        if not isinstance(point, Point2D):
-            raise TypeError("point debe ser un Point2D")
+        if not isinstance(geom, (Point2D, BoundingBox)):
+            raise TypeError("geom debe ser un Point2D o un BoundingBox")
         if not isinstance(rid, RID):
             raise TypeError("rid debe ser un RID")
 
-        point_mbr = BoundingBox(point.x, point.y, point.x, point.y)
+        if isinstance(geom, Point2D):
+            point_mbr = BoundingBox(geom.x, geom.y, geom.x, geom.y)
+        else:
+            point_mbr = geom
         left_mbr, split = self._insert_recursive(
             self._root_page_id,
             LeafEntry(point_mbr, rid),
@@ -59,6 +62,26 @@ class RTree:
             right_page_id,
             right_mbr,
         )
+
+    def dump_all_mbrs(self) -> list[BoundingBox]:
+        """Return the bounding boxes of all nodes in the tree."""
+        mbrs = []
+        stack = [self._root_page_id]
+        
+        while stack:
+            page_id = stack.pop()
+            page = self.bm.fetch_page(page_id)
+            try:
+                node = RTreeNode(page)
+                if len(node.entries) > 0:
+                    mbrs.append(node.bounding_box)
+                    if node.node_type == NodeType.INTERNAL:
+                        for entry in node.entries:
+                            stack.append(entry.child_page_id)
+            finally:
+                self.bm.unpin_page(page_id, is_dirty=False)
+                
+        return mbrs
 
     def fetch_node(self, page_id: int) -> RTreeNode:
         """Fetch and pin a node; callers must unpin its page when finished."""

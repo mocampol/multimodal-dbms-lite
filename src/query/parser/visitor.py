@@ -12,6 +12,8 @@ from query.parser.ast_nodes import (
     PointExp,
     NullExp,
     PolygonLiteral,
+    RectangleLiteral,
+    CentroidExp,
     DistanceExp,
     SpatialPredicate,
     WithinExp,
@@ -256,26 +258,26 @@ class SemanticVisitor(Visitor):
         }:
             raise SemanticError("La métrica debe ser EUCLIDEAN o HAVERSINE")
 
-        self._require_point_column(stm, distance.geometry)
+        self._require_spatial_column(stm, distance.geometry)
 
         if isinstance(distance.point, PointExp):
             self._validate_point_literal(distance.point)
         elif isinstance(distance.point, IdExp):
             _point_table, point_column = self._resolve_select_column(stm, distance.point.value)
-            if point_column.data_type != DataType.POINT:
-                raise SemanticError("El segundo argumento de distancia debe ser POINT")
+            if point_column.data_type not in (DataType.POINT, DataType.GEOMETRY):
+                raise SemanticError("El segundo argumento de distancia debe ser POINT o GEOMETRY")
         else:
             raise SemanticError("El segundo argumento de distancia debe ser POINT")
 
-    def _require_point_column(self, stm, expression, function_name="distancia"):
+    def _require_spatial_column(self, stm, expression, function_name="distancia"):
         if not isinstance(expression, IdExp):
             raise SemanticError(
-                f"El primer argumento de {function_name} debe ser una columna POINT"
+                f"El primer argumento de {function_name} debe ser una columna espacial"
             )
         table_name, column = self._resolve_select_column(stm, expression.value)
-        if column.data_type != DataType.POINT:
+        if column.data_type not in {DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY}:
             raise SemanticError(
-                f"La columna '{column.name}' usada en {function_name} debe ser de tipo POINT"
+                f"La columna '{column.name}' usada en {function_name} debe ser de tipo POINT, POLYGON, RECTANGLE o GEOMETRY"
             )
         return table_name, column
 
@@ -442,8 +444,8 @@ class SemanticVisitor(Visitor):
     def visit_create_index_stm(self, stm: CreateIndexStm):
         schema = self.catalog.get_schema(stm.table)
         column = self._require_column(schema, stm.column)
-        if stm.index_type == IndexType.RTREE and column.data_type != DataType.POINT:
-            raise SemanticError("RTREE requiere una columna de tipo POINT")
+        if stm.index_type == IndexType.RTREE and column.data_type not in (DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY):
+            raise SemanticError("RTREE requiere una columna de tipo POINT, POLYGON, RECTANGLE o GEOMETRY")
 
         self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
         return None
@@ -473,11 +475,48 @@ class SemanticVisitor(Visitor):
     def visit_null_exp(self, exp: NullExp) -> _ExpResult:
         return ("literal", None)
 
-    def visit_polygon_literal(self, exp: PolygonLiteral):
-        raise SemanticError("La sintaxis espacial se parsea, pero su ejecución aún no está soportada")
+    def visit_polygon_literal(self, exp: PolygonLiteral) -> _ExpResult:
+        from common.value import Point, Polygon
+        try:
+            points = tuple(Point(p.longitude, p.latitude) for p in exp.points)
+            return ("literal", Polygon(points))
+        except ValueError as error:
+            raise SemanticError(f"POLYGON inválido: {error}") from error
+
+    def visit_rectangle_literal(self, exp: RectangleLiteral) -> _ExpResult:
+        from common.value import Point, Rectangle
+        try:
+            if len(exp.args) == 4:
+                return ("literal", Rectangle(exp.args[0], exp.args[1], exp.args[2], exp.args[3]))
+            else:
+                p1, p2 = exp.args
+                # Assume p1 is southwest, p2 is northeast
+                return ("literal", Rectangle(p1.longitude, p1.latitude, p2.longitude, p2.latitude))
+        except ValueError as error:
+            raise SemanticError(f"RECTANGLE inválido: {error}") from error
 
     def visit_distance_exp(self, exp: DistanceExp):
         raise SemanticError("DISTANCIA solo se valida dentro de SELECT")
+
+    def visit_centroid_exp(self, exp: CentroidExp) -> _ExpResult:
+        from common.value import Point, Polygon, Rectangle
+        kind, payload = exp.geometry.accept(self)
+        if kind != "literal":
+            raise SemanticError("CENTROIDE solo soporta literales espaciales en VALUES por ahora")
+        
+        if isinstance(payload, Polygon):
+            # Calculate simple arithmetic mean of unique vertices (ignoring the closing point)
+            unique_points = payload.points[:-1]
+            avg_lon = sum(p.longitude for p in unique_points) / len(unique_points)
+            avg_lat = sum(p.latitude for p in unique_points) / len(unique_points)
+            return ("literal", Point(avg_lon, avg_lat))
+        elif isinstance(payload, Rectangle):
+            avg_lon = (payload.west + payload.east) / 2.0
+            avg_lat = (payload.south + payload.north) / 2.0
+            return ("literal", Point(avg_lon, avg_lat))
+        else:
+            raise SemanticError("El argumento de CENTROIDE debe ser un POLYGON o RECTANGLE")
+
 
     def visit_spatial_predicate(self, exp: SpatialPredicate):
         raise SemanticError("El predicado espacial solo se valida dentro de SELECT")

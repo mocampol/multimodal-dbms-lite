@@ -21,7 +21,7 @@ import struct
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
-from common.value import DataType, Point, Value, FIXED_SIZE
+from common.value import DataType, Point, Value, Polygon, Rectangle, FIXED_SIZE
 from common.schema import Schema
 from common.record import Record
 
@@ -87,7 +87,8 @@ _FIXED_CODECS = {
 
 _VARIABLE_LENGTH_TYPES = {
     DataType.CHAR, DataType.VARCHAR, DataType.TEXT,
-    DataType.BYTEA, DataType.NUMERIC,
+    DataType.BYTEA, DataType.NUMERIC, DataType.POLYGON,
+    DataType.GEOMETRY,
 }
 
 
@@ -100,6 +101,32 @@ def encode_scalar(value: Value) -> bytes:
 
     if dt == DataType.POINT:
         return struct.pack(">dd", value.data.longitude, value.data.latitude)
+
+    if dt == DataType.RECTANGLE:
+        return struct.pack(">dddd", value.data.west, value.data.south, value.data.east, value.data.north)
+
+    if dt == DataType.POLYGON:
+        count = len(value.data.points)
+        fmt = f">I{count * 2}d"
+        coords = []
+        for p in value.data.points:
+            coords.extend([p.longitude, p.latitude])
+        return struct.pack(fmt, count, *coords)
+
+    if dt == DataType.GEOMETRY:
+        from common.value import Point, Rectangle, Polygon
+        if isinstance(value.data, Point):
+            return b"\x01" + struct.pack(">dd", value.data.longitude, value.data.latitude)
+        if isinstance(value.data, Rectangle):
+            return b"\x02" + struct.pack(">dddd", value.data.west, value.data.south, value.data.east, value.data.north)
+        if isinstance(value.data, Polygon):
+            count = len(value.data.points)
+            fmt = f">I{count * 2}d"
+            coords = []
+            for p in value.data.points:
+                coords.extend([p.longitude, p.latitude])
+            return b"\x03" + struct.pack(fmt, count, *coords)
+        raise ValueError(f"Geometría no soportada para codificación: {type(value.data)}")
 
     if dt in _FIXED_CODECS:
         fmt, encode_fn, _ = _FIXED_CODECS[dt]
@@ -124,6 +151,35 @@ def decode_scalar(data_type: DataType, buf: bytes):
     """
     if data_type == DataType.POINT:
         return Point(*struct.unpack(">dd", buf))
+
+    if data_type == DataType.RECTANGLE:
+        return Rectangle(*struct.unpack(">dddd", buf))
+
+    if data_type == DataType.POLYGON:
+        count = struct.unpack_from(">I", buf, 0)[0]
+        fmt = f">{count * 2}d"
+        coords = struct.unpack_from(fmt, buf, 4)
+        from common.value import Polygon
+        points = []
+        for i in range(count):
+            points.append(Point(coords[i*2], coords[i*2+1]))
+        return Polygon(points)
+
+    if data_type == DataType.GEOMETRY:
+        tag = buf[0]
+        payload = buf[1:]
+        if tag == 1:
+            return Point(*struct.unpack(">dd", payload))
+        if tag == 2:
+            return Rectangle(*struct.unpack(">dddd", payload))
+        if tag == 3:
+            count = struct.unpack_from(">I", payload, 0)[0]
+            fmt = f">{count * 2}d"
+            coords = struct.unpack_from(fmt, payload, 4)
+            from common.value import Polygon
+            points = [Point(coords[i*2], coords[i*2+1]) for i in range(count)]
+            return Polygon(points)
+        raise ValueError(f"Tag de GEOMETRY desconocido: {tag}")
 
     if data_type in _FIXED_CODECS:
         fmt, _, decode_fn = _FIXED_CODECS[data_type]

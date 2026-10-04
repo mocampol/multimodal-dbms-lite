@@ -69,6 +69,7 @@ function App() {
               result={result}
               running={running}
               searchCenter={searchCenter}
+              refreshKey={refreshKey}
               onRunQuery={handleSpatialRun}
             />
           </section>

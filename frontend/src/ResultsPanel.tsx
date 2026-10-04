@@ -94,15 +94,25 @@ function ResultContent({ result }: { result: SingleQueryResult }) {
 
 function formatCellValue(value: QueryValue): string {
   if (value === null) return 'NULL'
-  if (isPointCoordinates(value)) {
-    return `lat: ${value.latitude}, lon: ${value.longitude}`
+  if (typeof value === 'object' && value !== null) {
+    if ('points' in value && Array.isArray((value as any).points)) {
+      return `POLYGON(${(value as any).points.length} puntos)`
+    }
+    if ('west' in value && 'south' in value) {
+      const r = value as any
+      return `RECTANGLE(${r.west}, ${r.south}, ${r.east}, ${r.north})`
+    }
+    if (isPointCoordinates(value)) {
+      return `lat: ${value.latitude}, lon: ${value.longitude}`
+    }
+    if (isDistanceValue(value)) return `${value.value} ${value.unit}`
+    return JSON.stringify(value)
   }
-  if (isDistanceValue(value)) return `${value.value} ${value.unit}`
   return String(value)
 }
 
 function isPointCoordinates(value: QueryValue): value is PointCoordinates {
-  return typeof value === 'object' && value !== null && 'longitude' in value && 'latitude' in value
+  return typeof value === 'object' && value !== null && 'longitude' in value && 'latitude' in value && !('points' in value)
 }
 
 function isDistanceValue(value: QueryValue): value is DistanceValue {

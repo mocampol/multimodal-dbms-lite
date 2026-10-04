@@ -300,6 +300,13 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, after_insert=None) ->
 def _literal_value(exp):
     if isinstance(exp, PointExp):
         return exp.to_point()
+    from query.parser.ast_nodes import PolygonLiteral, RectangleLiteral, CentroidExp
+    if isinstance(exp, CentroidExp):
+        return exp.to_point()
+    if isinstance(exp, PolygonLiteral):
+        return exp.to_polygon()
+    if isinstance(exp, RectangleLiteral):
+        return exp.to_rectangle()
     if isinstance(exp, NullExp):
         return None
     return exp.value
