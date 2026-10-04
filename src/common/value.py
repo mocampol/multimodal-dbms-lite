@@ -157,6 +157,9 @@ class DataType(Enum):
 
     # Spatial type
     POINT = "point"
+    POLYGON = "polygon"
+    RECTANGLE = "rectangle"
+    GEOMETRY = "geometry"
 
 
 FIXED_SIZE = {
@@ -170,6 +173,7 @@ FIXED_SIZE = {
     DataType.TIME: 8,
     DataType.TIMESTAMP: 8,
     DataType.POINT: 16,
+    DataType.RECTANGLE: 32,
 }
 
 VARIABLE_SIZE_TYPES = {
@@ -181,6 +185,8 @@ UNBOUNDED_TYPES = {
     DataType.TEXT,
     DataType.BYTEA,
     DataType.NUMERIC,
+    DataType.POLYGON,
+    DataType.GEOMETRY,
 }
 
 
@@ -235,6 +241,15 @@ class Value:
 
         if self.data_type == DataType.POINT:
             return isinstance(self.data, Point)
+            
+        if self.data_type == DataType.POLYGON:
+            return isinstance(self.data, Polygon)
+            
+        if self.data_type == DataType.RECTANGLE:
+            return isinstance(self.data, Rectangle)
+
+        if self.data_type == DataType.GEOMETRY:
+            return isinstance(self.data, (Point, Polygon, Rectangle))
 
         return False
 
@@ -260,6 +275,18 @@ class Value:
 
         if self.data_type == DataType.NUMERIC:
             return len(str(self.data).encode("utf-8"))
+
+        if self.data_type == DataType.POLYGON:
+            return 4 + len(self.data.points) * 16
+
+        if self.data_type == DataType.GEOMETRY:
+            if isinstance(self.data, Point):
+                return 1 + 16
+            if isinstance(self.data, Rectangle):
+                return 1 + 32
+            if isinstance(self.data, Polygon):
+                return 1 + 4 + len(self.data.points) * 16
+            raise ValueError(f"Geometría desconocida en byte_size: {type(self.data)}")
 
         raise ValueError(f"No se conoce el tamaño físico de {self.data_type}")
 
