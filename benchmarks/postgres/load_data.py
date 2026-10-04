@@ -54,7 +54,7 @@ from spatial_common import (
 )
 
 ENGINE = "postgis"
-DEFAULT_DSN = "host=localhost port=5433 dbname=spatial_bench user=bench password=bench"
+DEFAULT_DSN = "host=localhost port=5434 dbname=spatial_bench user=bench password=bench"
 CONTAINER_NAME = "mdbms-postgis-bench"
 INDEX_NAME = "places_geom_gist"
 

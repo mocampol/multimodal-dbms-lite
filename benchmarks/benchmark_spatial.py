@@ -48,6 +48,7 @@ from query.query_engine import execute
 from storage.buffer_manager import BufferManager
 from storage.file_manager import FileManager
 from storage.heap.heap_file import HeapFile
+from transaction import TransactionManager
 
 from spatial_common import (
     N_VALUES,
@@ -84,11 +85,15 @@ def make_catalog(base_dir: str, n: int) -> Catalog:
         file_manager = FileManager(f"{base_dir}/{table_name}.{column_name}.{index_id}.idx")
         return BufferManager(file_manager, pool_size=pool_size)
 
-    return Catalog(
+    catalog = Catalog(
         heap_factory=heap_factory,
         storage_factories={StorageType.HEAP: heap_factory},
         index_buffer_factory=index_buffer_factory,
     )
+    # Sin esto, execute() crea un TransactionManager con el WAL por defecto
+    # (data/transactions.wal relativo al directorio actual), fuera de base_dir.
+    catalog._transaction_manager = TransactionManager(f"{base_dir}/transactions.wal")
+    return catalog
 
 
 def load_table(catalog: Catalog, n: int) -> None:

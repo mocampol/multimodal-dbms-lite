@@ -19,7 +19,7 @@ El resto de este documento describe la comparación espacial externa.
 |---|---|
 | `spatial_common.py` | Dataset, consultas y formato del CSV, compartidos por ambos motores |
 | `benchmark_spatial.py` | Lado DBMS propio (R-tree) |
-| `postgres/docker-compose.yml` | PostGIS fijado a `postgis/postgis:16-3.4`, puerto 5433, 2 CPU / 4 GB |
+| `postgres/docker-compose.yml` | PostGIS fijado a `postgis/postgis:16-3.4`, puerto 5434, 2 CPU / 4 GB |
 | `postgres/schema.sql` | Tabla `places (id, name, geom geometry(Point, 0))` |
 | `postgres/queries.sql` | Consultas equivalentes (`ST_DWithin`, `<->`, `ST_Intersects`) |
 | `postgres/load_data.py` | Carga, índice GiST, consultas, tiempos, tamaño del índice y entorno |

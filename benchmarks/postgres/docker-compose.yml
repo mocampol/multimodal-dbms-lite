@@ -21,8 +21,9 @@ services:
       POSTGRES_PASSWORD: bench
       POSTGRES_DB: spatial_bench
     ports:
-      # 5433 en el host para no chocar con un PostgreSQL local en 5432.
-      - "5433:5432"
+      # 5434 en el host para no chocar con instalaciones locales de PostgreSQL
+      # (5432 y 5433 suelen estar ocupados por servicios nativos).
+      - "5434:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     # Recursos fijos para que las mediciones sean comparables entre máquinas;
