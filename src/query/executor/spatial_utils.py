@@ -1,4 +1,4 @@
-from common.value import Point
+from common.value import Point, Polygon as ValuePolygon, Rectangle
 from query.parser.ast_nodes import IdExp, PointExp
 from spatial.geometry import Point2D, Polygon
 
@@ -24,6 +24,15 @@ def point2d_from_value(value) -> Point2D | None:
         return value
     if isinstance(value, Point):
         return Point2D(value.longitude, value.latitude)
+    if isinstance(value, ValuePolygon):
+        unique_points = value.points[:-1]
+        avg_lon = sum(p.longitude for p in unique_points) / len(unique_points)
+        avg_lat = sum(p.latitude for p in unique_points) / len(unique_points)
+        return Point2D(avg_lon, avg_lat)
+    if isinstance(value, Rectangle):
+        avg_lon = (value.west + value.east) / 2.0
+        avg_lat = (value.south + value.north) / 2.0
+        return Point2D(avg_lon, avg_lat)
     return None
 
 

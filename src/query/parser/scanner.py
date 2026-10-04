@@ -65,7 +65,7 @@ class Scanner:
                 "TIME": TokenType.T_TIME, "TIMESTAMP": TokenType.T_TIMESTAMP, "BYTEA": TokenType.T_BYTEA,
                 "POINT": TokenType.T_POINT, "NULL": TokenType.NULL,
                 "DISTANCIA": TokenType.DISTANCE, "DENTRO_DE": TokenType.WITHIN,
-                "POLYGON": TokenType.POLYGON, "LIMIT": TokenType.LIMIT,
+                "POLYGON": TokenType.POLYGON, "RECTANGLE": TokenType.RECTANGLE, "GEOMETRY": TokenType.T_GEOMETRY, "CENTROIDE": TokenType.CENTROID, "LIMIT": TokenType.LIMIT,
                 "BTREE": TokenType.BTREE, "HASH": TokenType.HASH, "RTREE": TokenType.RTREE,
                 "HEAP": TokenType.HEAP,
                 "SEQUENTIAL": TokenType.SEQUENTIAL,

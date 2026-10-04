@@ -60,9 +60,14 @@ class TokenType(Enum):
     T_TIMESTAMP = auto()
     T_BYTEA = auto()
     T_POINT = auto()
+    T_POLYGON = auto()
+    T_RECTANGLE = auto()
+    T_GEOMETRY = auto()
     DISTANCE = auto()
     WITHIN = auto()
     POLYGON = auto()
+    RECTANGLE = auto()
+    CENTROID = auto()
     LIMIT = auto()
 
     BTREE = auto()
@@ -131,9 +136,14 @@ _TYPE_NAMES = {
     TokenType.T_TIMESTAMP: "'TIMESTAMP'",
     TokenType.T_BYTEA: "'BYTEA'",
     TokenType.T_POINT: "'POINT'",
+    TokenType.T_POLYGON: "'POLYGON'",
+    TokenType.T_RECTANGLE: "'RECTANGLE'",
+    TokenType.T_GEOMETRY: "'GEOMETRY'",
     TokenType.DISTANCE: "'DISTANCIA'",
     TokenType.WITHIN: "'DENTRO_DE'",
     TokenType.POLYGON: "'POLYGON'",
+    TokenType.RECTANGLE: "'RECTANGLE'",
+    TokenType.CENTROID: "'CENTROIDE'",
     TokenType.LIMIT: "'LIMIT'",
 
     TokenType.BTREE: "'BTREE'",

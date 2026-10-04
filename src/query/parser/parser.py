@@ -11,7 +11,9 @@ from query.parser.ast_nodes import (
     PointExp,
     PointLiteral,
     PolygonLiteral,
+    RectangleLiteral,
     DistanceExp,
+    CentroidExp,
     WithinExp,
     SpatialPredicate,
     LimitClause,
@@ -66,6 +68,9 @@ _TYPE_MAP = {
     TokenType.T_TIMESTAMP: DataType.TIMESTAMP,
     TokenType.T_BYTEA: DataType.BYTEA,
     TokenType.T_POINT: DataType.POINT,
+    TokenType.POLYGON: DataType.POLYGON,
+    TokenType.RECTANGLE: DataType.RECTANGLE,
+    TokenType.T_GEOMETRY: DataType.GEOMETRY,
 }
 
 _INDEX_TYPE_MAP = {
@@ -279,7 +284,7 @@ class Parser:
         self.error("un operador ('=', '!=', '<>', '<', '<=', '>' o '>=')")
 
     def parse_value(self) -> Exp:
-        """<Value> ::= NUM | STRING | ID | NULL | <Point> | <Polygon>"""
+        """<Value> ::= NUM | STRING | ID | NULL | <Point> | <Polygon> | <Rectangle>"""
         if self.check(TokenType.NUM):
             return NumExp(self.parse_number())
         if self.check(TokenType.STRING):
@@ -289,11 +294,15 @@ class Parser:
             return self.parse_point()
         if self.check(TokenType.POLYGON):
             return self.parse_polygon()
+        if self.check(TokenType.RECTANGLE):
+            return self.parse_rectangle()
         if self.match(TokenType.NULL):
             return NullExp()
+        if self.check(TokenType.CENTROID):
+            return self.parse_centroid_exp()
         if self.check(TokenType.ID):
             return IdExp(self.parse_qualified_name())
-        self.error("un valor (NUM, STRING, ID, NULL, POINT o POLYGON)")
+        self.error("un valor (NUM, STRING, ID, NULL, POINT, POLYGON, RECTANGLE o CENTROIDE)")
 
     def parse_number(self) -> int | float:
         token = self.expect(TokenType.NUM)
@@ -328,6 +337,22 @@ class Parser:
             points.append(self.parse_point())
         self.expect(TokenType.RPAREN)
         return PolygonLiteral(points)
+
+    def parse_rectangle(self) -> RectangleLiteral:
+        self.expect(TokenType.RECTANGLE)
+        self.expect(TokenType.LPAREN)
+        args = [self.parse_number()]
+        while self.match(TokenType.COMA):
+            args.append(self.parse_number())
+        self.expect(TokenType.RPAREN)
+        return RectangleLiteral(args)
+
+    def parse_centroid_exp(self) -> CentroidExp:
+        self.expect(TokenType.CENTROID)
+        self.expect(TokenType.LPAREN)
+        geometry = self.parse_value()
+        self.expect(TokenType.RPAREN)
+        return CentroidExp(geometry)
 
     def parse_within_exp(self) -> WithinExp:
         self.expect(TokenType.WITHIN)
@@ -492,13 +517,13 @@ class Parser:
 
     def parse_type_name(self) -> DataType:
         """<TypeName> ::= SMALLINT | INTEGER | BIGINT | NUMERIC | REAL | DOUBLE_PRECISION
-                         | CHAR | VARCHAR | TEXT | BOOLEAN | DATE | TIME | TIMESTAMP | BYTEA | POINT"""
+                         | CHAR | VARCHAR | TEXT | BOOLEAN | DATE | TIME | TIMESTAMP | BYTEA | POINT | POLYGON | RECTANGLE"""
         for ttype, data_type in _TYPE_MAP.items():
             if self.match(ttype):
                 return data_type
         self.error("un nombre de tipo (SMALLINT, INTEGER, BIGINT, NUMERIC, REAL, "
                     "DOUBLE PRECISION, CHAR, VARCHAR, TEXT, BOOLEAN, DATE, TIME, "
-                    "TIMESTAMP, BYTEA o POINT)")
+                    "TIMESTAMP, BYTEA, POINT, POLYGON, RECTANGLE o GEOMETRY)")
 
     # =========================================================================
     # CREATE INDEX

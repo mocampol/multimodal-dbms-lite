@@ -71,6 +71,10 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
+    def visit_centroid_exp(self, exp: "CentroidExp"):
+        ...
+
+    @abstractmethod
     def visit_spatial_predicate(self, exp: "SpatialPredicate"):
         ...
 
@@ -207,6 +211,57 @@ class PolygonLiteral(Exp):
 
     def __repr__(self):
         return f"POLYGON({', '.join(map(repr, self.points))})"
+
+    def to_polygon(self):
+        from common.value import Polygon, Point
+        return Polygon([Point(p.longitude, p.latitude) for p in self.points])
+
+
+class RectangleLiteral(Exp):
+    """<Rectangle> ::= RECTANGLE LPAREN <args> RPAREN"""
+
+    def __init__(self, args: List[float]):
+        self.args = args
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_rectangle_literal(self)
+
+    def __repr__(self):
+        return f"RECTANGLE({', '.join(map(str, self.args))})"
+
+    def to_rectangle(self):
+        from common.value import Rectangle
+        return Rectangle(*self.args)
+
+
+class CentroidExp(Exp):
+    """CENTROIDE(<GeometryArg>)"""
+
+    def __init__(self, geometry: Exp):
+        self.geometry = geometry
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_centroid_exp(self)
+
+    def to_point(self):
+        from common.value import Point
+        # Since this is a literal, we can extract it directly.
+        if hasattr(self.geometry, 'to_polygon'):
+            payload = self.geometry.to_polygon()
+            unique_points = payload.points[:-1]
+            avg_lon = sum(p.longitude for p in unique_points) / len(unique_points)
+            avg_lat = sum(p.latitude for p in unique_points) / len(unique_points)
+            return Point(avg_lon, avg_lat)
+        elif hasattr(self.geometry, 'to_rectangle'):
+            payload = self.geometry.to_rectangle()
+            avg_lon = (payload.west + payload.east) / 2.0
+            avg_lat = (payload.south + payload.north) / 2.0
+            return Point(avg_lon, avg_lat)
+        else:
+            raise ValueError("CENTROIDE supporta solo literales en este punto")
+
+    def __repr__(self):
+        return f"CENTROIDE({self.geometry!r})"
 
 
 class DistanceExp(Exp):
