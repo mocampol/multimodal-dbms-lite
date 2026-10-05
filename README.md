@@ -15,7 +15,7 @@ El proyecto busca implementar, de forma progresiva y modular, conceptos clave de
 - gestión de archivos y páginas en disco
 - almacenamiento relacional mediante heap y archivos secuenciales
 - registro de metadatos y esquemas
-- índices B+ y hashing extensible
+- índices B+, hashing extensible y R-Tree espacial
 - parser SQL básico
 - ejecución de consultas SELECT, INSERT, DELETE y UPDATE
 - ejecución de planes lógicos y físicos
@@ -27,33 +27,34 @@ La solución sigue una organización por capas:
 
 ```text
 multimodal-dbms-lite/
-├── src/                 # lógica principal del motor de base de datos
-│   ├── catalog/         # catálogo de tablas, columnas y metadatos
-│   ├── common/          # estructuras comunes y valores
-│   ├── index/           # índices (B+ y hash dinámico)
-│   ├── query/           # parser, planner, rewriter y executor
-│   ├── storage/         # heap files, buffer manager, file manager, páginas
-│   ├── transaction/     # transacciones y locks
-│   ├── main.py          # configuración del catálogo y factories
-│   └── engine.py        # acceso desde la API
-├── api/                 # API REST con FastAPI
-│   ├── routers/         # endpoints de tablas y query
-│   ├── engine.py        # wrapper para el catálogo del motor
-│   ├── main.py          # aplicación FastAPI
-│   ├── schemas.py       # modelos de request
-│   ├── serialize.py     # serialización de registros
-│   └── explain.py       # descripción del plan de ejecución
-├── frontend/            # aplicación React + Vite
-│   ├── src/             # componentes y lógica de presentación
-│   ├── package.json     # dependencias del frontend
-│   ├── vite.config.ts   # configuración de desarrollo
-│   └── .env.example     # ejemplo de variables de entorno
-├── tests/               # pruebas del motor y persistencia
-├── requirements.txt     # dependencias del backend
-├── pyproject.toml       # configuración PyProject
-├── pytest.ini           # configuración de pytest
-├── LICENSE              # licencia del proyecto
-└── README.md            # documentación técnica
+├── api/                     # API REST con FastAPI
+│   └── routers/             # endpoints de tablas, consultas e importación
+├── benchmarks/              # mediciones de rendimiento
+│   ├── postgres/            # comparación con PostgreSQL/PostGIS
+│   └── results/             # resultados y gráficas versionados
+├── frontend/                # aplicación React + Vite
+│   └── src/                 # componentes y lógica de presentación
+├── sql/
+│   ├── examples/            # scripts SQL de ejemplo
+│   ├── generated/           # SQL producido por generadores
+│   └── scripts/             # generadores y utilidades SQL
+├── src/                     # motor de base de datos
+│   ├── catalog/             # tablas, columnas y metadatos
+│   ├── common/              # tipos, esquemas y registros
+│   ├── index/               # B+, hash extensible y R-Tree
+│   ├── loader/              # lectura e importación de CSV
+│   ├── query/               # parser, planner, rewriter y executor
+│   ├── spatial/             # geometría y operaciones espaciales
+│   ├── storage/             # páginas, buffer manager, heap y secuencial
+│   ├── transaction/         # transacciones, locks y recuperación
+│   └── main.py              # configuración del motor
+├── tests/                   # pruebas organizadas por módulo
+├── pyproject.toml           # configuración del proyecto y pytest
+├── requirements.txt         # dependencias de benchmarks
+├── pytest.ini               # configuración de pytest
+├── uv.lock                  # versiones bloqueadas de dependencias
+├── LICENSE
+└── README.md
 ```
 
 ## Módulos principales
@@ -91,6 +92,7 @@ La carpeta `src/index` encapsula las estructuras de indexación, como:
 - acceso por columnas e índices secundarios
 
 Estas estructuras permiten acelerar búsquedas y mejorar la ejecución de consultas.
+El R-Tree se encuentra en `src/index/rtree/` y se utiliza para consultas espaciales.
 
 ### 4. Query engine
 
@@ -243,9 +245,9 @@ La sintaxis SQL propuesta y los ejemplos normativos están en
 
 Los scripts de `benchmarks/` generan reportes y gráficas (no son pass/fail); la suite formal de pruebas vive en `tests/`.
 
-| Script | Compara | Salidas |
-|---|---|---|
-| `benchmark_indexes.py` | B+ clusterizado vs. B+ no clusterizado vs. Hash dinámico | `results/index_comparison_*.csv/md`, `results/charts/` |
+| Script                 | Compara                                                               | Salidas                                                                                     |
+| ---------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `benchmark_indexes.py` | B+ clusterizado vs. B+ no clusterizado vs. Hash dinámico              | `results/index_comparison_*.csv/md`, `results/charts/`                                      |
 | `benchmark_spatial.py` | Búsqueda secuencial vs. R-Tree propio vs. PostgreSQL + PostGIS (GiST) | `results/spatial_results.csv`, `results/spatial_summary.md`, `results/charts/spatial_*.png` |
 
 ### Benchmark espacial (`benchmark_spatial.py`)
@@ -281,7 +283,7 @@ El benchmark crea (y al terminar borra, salvo `--keep-pg-data`) el esquema `benc
 
 #### Errores, descartes y equivalencia
 
-Las consultas que fallan, o que ya no caben en el presupuesto de tiempo de la celda (`--cell-budget-s`, 900 s), se **descartan y se cuentan** (`queries_discarded`, `query_errors`, `error_samples` en el CSV y sección 6 del resumen). Los resultados de R-Tree y PostGIS se comparan consulta a consulta con la búsqueda secuencial: *exacto*, *con tolerancia* (`--tolerance-m`, solo puntos en el borde del radio o empates en k-NN) o *diferente* (error).
+Las consultas que fallan, o que ya no caben en el presupuesto de tiempo de la celda (`--cell-budget-s`, 900 s), se **descartan y se cuentan** (`queries_discarded`, `query_errors`, `error_samples` en el CSV y sección 6 del resumen). Los resultados de R-Tree y PostGIS se comparan consulta a consulta con la búsqueda secuencial: _exacto_, _con tolerancia_ (`--tolerance-m`, solo puntos en el borde del radio o empates en k-NN) o _diferente_ (error).
 
 ## Nota
 

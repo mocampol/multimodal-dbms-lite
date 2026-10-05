@@ -96,7 +96,7 @@ def generate_sql(num_records: int = 500, seed: int = 42) -> str:
 
 
 if __name__ == "__main__":
-    out_dir = Path(__file__).resolve().parent.parent / "querys"
+    out_dir = Path(__file__).resolve().parent.parent / "generated"
     out_dir.mkdir(exist_ok=True)
     out_file = out_dir / "places_postgis_inserts.sql"
 
