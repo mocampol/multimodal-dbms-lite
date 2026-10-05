@@ -220,12 +220,16 @@ source .venv/bin/activate
 pytest -q
 ```
 
-## Contrato espacial (preliminar)
+## Base de datos espacial
 
-La representación espacial normativa está definida antes de añadir soporte al
-parser SQL, al catálogo o al almacenamiento. Los value objects `Point`,
-`Rectangle`, `Polygon` y `Distance` se encuentran en `src/common/value.py`;
-todavía no son tipos SQL declarables ni persistibles.
+El motor soporta datos geográficos 2D con tipos SQL propios, un índice R-Tree
+persistente y una extensión del parser para consultas por radio, k-NN y
+polígonos. Los value objects `Point`, `Rectangle`, `Polygon` y `Distance` se
+encuentran en `src/common/value.py`, y la geometría y las métricas en `src/spatial/`.
+La sintaxis SQL completa está en
+[`src/query/parser/GRAMMAR.md`](src/query/parser/GRAMMAR.md).
+
+### Reglas de representación
 
 - `POINT(longitud, latitud)` usa ese orden y almacena ambas coordenadas en grados. Longitud acepta `[-180, 180]` y latitud `[-90, 90]`, incluidos los extremos; no se convierten ni recortan valores fuera de rango.
 - Un rectángulo se representa por oeste, sur, este, norte. `oeste > este` indica que envuelve el antimeridiano.
@@ -236,8 +240,204 @@ todavía no son tipos SQL declarables ni persistibles.
 - Coordenadas no numéricas, booleanas, no finitas o fuera de rango, rectángulos con `sur > norte`, anillos abiertos o mal formados y radios negativos son inválidos y se rechazan; no hay coerción ni normalización silenciosa.
 - SQL `NULL` se representa en Python como `None`. Las columnas nullable pueden contenerlo; operaciones espaciales con un operando `NULL` producen `NULL` y no satisfacen un `WHERE`.
 
-La sintaxis SQL propuesta y los ejemplos normativos están en
-[`src/query/parser/GRAMMAR.md`](src/query/parser/GRAMMAR.md).
+> **Orden de coordenadas:** Lima es `POINT(-77.0428, -12.0464)`. Escribir
+> `POINT(-12.0464, -77.0428)` (latitud primero) no da error, porque ambos
+> valores están en rango, pero ubica el punto en la Antártida.
+
+### Tipos espaciales
+
+| Tipo | Literal SQL | Uso |
+|---|---|---|
+| `POINT` | `POINT(longitud, latitud)` | ubicaciones (tiendas, restaurantes, etc.) |
+| `RECTANGLE` | `RECTANGLE(oeste, sur, este, norte)` | zonas rectangulares |
+| `POLYGON` | `POLYGON(POINT(...), POINT(...), ...)` | zonas irregulares (distritos) |
+| `GEOMETRY` | cualquiera de los anteriores | columna genérica |
+
+### Crear una tabla espacial
+
+```sql
+CREATE TABLE tiendas (
+    id INTEGER PRIMARY KEY,
+    nombre VARCHAR(100),
+    ubicacion POINT
+);
+```
+
+### Insertar puntos
+
+```sql
+INSERT INTO tiendas (id, nombre, ubicacion) VALUES
+    (1, 'Tienda Miraflores', POINT(-77.0300, -12.1200)),
+    (2, 'Tienda San Isidro', POINT(-77.0365, -12.0970)),
+    (3, 'Tienda Centro',     POINT(-77.0428, -12.0464));
+```
+
+El archivo [`sql/querys/places_postgis_inserts.sql`](sql/querys/places_postgis_inserts.sql)
+contiene un dataset de 500 lugares de Lima, generado con
+[`sql/scripts/generate_places_postgis.py`](sql/scripts/generate_places_postgis.py).
+
+### Crear un índice R-Tree
+
+```sql
+CREATE INDEX idx_tiendas_ubicacion ON tiendas(ubicacion) USING RTREE;
+```
+
+- Solo se admite sobre columnas `POINT`, `POLYGON`, `RECTANGLE` o `GEOMETRY`.
+- Puede crearse antes o después de cargar los datos.
+- El planner lo usa automáticamente: el plan muestra `SpatialIndexScan`
+  (candidatos por MBR) seguido de `SpatialFilter` (verificación exacta).
+  Sin índice, el plan usa `SeqScan` + `SpatialFilter`. Para verlo:
+  `EXPLAIN SELECT ...;`
+
+### Consultas por radio
+
+```sql
+-- Tiendas a menos de 5 km (Haversine, en metros: métrica por defecto)
+SELECT * FROM tiendas
+WHERE distancia(ubicacion, POINT(-77.0428, -12.0464)) < 5000;
+
+-- Misma idea con distancia euclidiana (en grados)
+SELECT * FROM tiendas
+WHERE distancia(ubicacion, POINT(-77.0428, -12.0464), EUCLIDEAN) <= 0.05;
+```
+
+El R-Tree se consulta con el rectángulo que envuelve el círculo, y luego se
+descartan los falsos positivos calculando la distancia exacta.
+
+### Consultas k-NN
+
+```sql
+-- Las 10 tiendas más cercanas
+SELECT * FROM tiendas
+ORDER BY distancia(ubicacion, POINT(-77.0428, -12.0464)) LIMIT 10;
+```
+
+Con índice, el k-NN busca en un radio inicial (1 km en Haversine, 0.01° en
+Euclidiana) y lo duplica hasta reunir al menos `k` puntos; después ordena por
+distancia exacta.
+
+### Consultas con polígonos
+
+```sql
+-- Tiendas dentro de un polígono (anillo cerrado: el primer punto se repite al final)
+SELECT * FROM tiendas
+WHERE dentro_de(ubicacion, POLYGON(
+    POINT(-77.06, -12.13),
+    POINT(-77.00, -12.13),
+    POINT(-77.00, -12.08),
+    POINT(-77.06, -12.08),
+    POINT(-77.06, -12.13)
+));
+```
+
+### Métricas de distancia
+
+| Métrica | Sintaxis | Unidad de distancia y radio | Cuándo usarla |
+|---|---|---|---|
+| Haversine (por defecto) | `distancia(col, POINT(...))` o `distancia(col, POINT(...), HAVERSINE)` | metros | distancias reales sobre la superficie terrestre |
+| Euclidiana | `distancia(col, POINT(...), EUCLIDEAN)` | grados de coordenada | comparaciones rápidas en zonas pequeñas o datos no geográficos |
+
+### Panel de mapa
+
+El panel **Spatial Search & Map** del frontend permite buscar sin escribir SQL:
+
+1. Elegir la tabla y la columna espacial. El panel indica si la columna tiene
+   R-Tree (`R-Tree #id`) o si se usará `Scan secuencial`.
+2. Elegir el modo: **Radio** (presets o valor libre, en km para Haversine o en
+   grados para Euclidiana) o **k-NN** (10, 50 o 100 vecinos).
+3. Elegir la métrica e ingresar latitud y longitud del centro (por defecto, Lima).
+4. Pulsar **Buscar**. El panel genera la consulta `distancia(...)`, la ejecuta y
+   muestra en el mapa:
+   - el punto de búsqueda y el círculo del radio;
+   - los resultados resaltados;
+   - en gris, los MBR de los nodos del R-Tree; en naranja punteado, las cajas
+     de candidatos consultadas.
+
+Las consultas con polígonos se escriben en el panel de consultas; sus resultados
+también se dibujan en el mapa. El mapa base usa teselas de OpenStreetMap, por lo
+que requiere conexión a internet.
+
+### Reproducir los benchmarks espaciales
+
+El benchmark espacial compara búsqueda secuencial, R-Tree propio y PostgreSQL +
+PostGIS (GiST). Su configuración, requisitos y opciones están en la sección
+[Benchmarks](#benchmarks). Corrida completa:
+
+```bash
+pip install -r requirements.txt
+python benchmarks/benchmark_spatial.py
+```
+
+Los resultados se escriben en `benchmarks/results/spatial_results.csv`, el
+reporte en [`benchmarks/results/spatial_summary.md`](benchmarks/results/spatial_summary.md)
+y las gráficas en `benchmarks/results/charts/`.
+
+### Resultados experimentales
+
+Puntos uniformes en Lima, 100 consultas por configuración, 3 repeticiones,
+semilla 42 y distancia Haversine. El R-Tree y PostGIS devolvieron exactamente
+los mismos resultados que la búsqueda secuencial en las 3 600 comparaciones.
+
+**Tiempo promedio de consulta con N = 100 000 (ms)**
+
+| Consulta | Secuencial | R-Tree propio | PostGIS (GiST) | R-Tree vs. secuencial |
+|---|---|---|---|---|
+| Radio 1 km | 455.4 | 4.2 | 0.89 | 107x |
+| Radio 5 km | 457.1 | 25.2 | 2.11 | 18x |
+| Radio 10 km | 453.6 | 70.8 | 4.48 | 6x |
+| k-NN k = 10 | 464.8 | 4.3 | 0.67 | 109x |
+| k-NN k = 50 | 463.8 | 12.5 | 0.85 | 37x |
+| k-NN k = 100 | 467.1 | 18.2 | 1.02 | 26x |
+
+**Construcción y espacio del índice**
+
+| N | Build R-Tree | Build GiST | Índice R-Tree | Índice GiST |
+|---|---|---|---|---|
+| 1 000 | 2.2 s | 0.003 s | 56 KB | 72 KB |
+| 10 000 | 36.9 s | 0.022 s | 596 KB | 696 KB |
+| 100 000 | 448.6 s | 0.406 s | 5 772 KB | 7 176 KB |
+
+![Tiempo de búsqueda por radio](benchmarks/results/charts/spatial_range_query_time.png)
+![Tiempo de k-NN](benchmarks/results/charts/spatial_knn_query_time.png)
+
+**Conclusiones**
+
+- La búsqueda secuencial escala linealmente (~4.5 ms, ~45 ms y ~455 ms para
+  1 000, 10 000 y 100 000 puntos) y no depende del radio ni de k.
+- El R-Tree propio gana en búsqueda por radio en todos los tamaños. Su ventaja
+  baja al crecer el radio, porque cada resultado exige una lectura del heap.
+  En k-NN el punto de cruce con la búsqueda secuencial está entre 1 000 y
+  10 000 puntos.
+- PostGIS es la técnica más rápida en todas las configuraciones. Su ventaja
+  sobre el R-Tree crece con N y con el tamaño del resultado, y combina
+  algoritmo e implementación (C frente a Python).
+- La construcción es la mayor debilidad del R-Tree propio (~1 100x más lenta que
+  GiST con 100 000 puntos), por la inserción registro por registro sin bulk-load.
+  En cambio, su índice ocupa ~20 % menos que el GiST.
+
+### Cuándo usar SeqScan, R-Tree o PostGIS GiST
+
+| Técnica | Conviene cuando | Evitar cuando |
+|---|---|---|
+| SeqScan (sin índice) | tablas muy pequeñas (≈ 1 000 puntos o menos); k-NN con k grande sobre pocos datos; tablas con muchas escrituras y pocas consultas espaciales | tablas grandes: su costo crece linealmente con N |
+| R-Tree propio | desde ≈ 10 000 puntos (antes en búsquedas por radio); consultas selectivas dentro del motor, integradas con el catálogo, el planner y el panel de mapa | cargas masivas frecuentes (construcción lenta) o radios que devuelven gran parte de la tabla |
+| PostGIS GiST | máximo rendimiento en cualquier escenario medido; datasets grandes y carga masiva | cuando no se dispone de un servidor PostgreSQL externo |
+
+### Limitaciones espaciales conocidas
+
+- El R-Tree solo poda la búsqueda por radio cuando la consulta compara
+  `distancia(col, POINT(...))` con un número usando `<`, `<=` o `=`. Con `>` o
+  `>=` se recorre todo el índice.
+- El k-NN usa el índice solo con `LIMIT` y un `POINT` literal. Si el segundo
+  argumento es una columna, se ordena la tabla completa.
+- El k-NN usa radio expansivo y repite la búsqueda en cada ampliación, en lugar
+  de una búsqueda best-first con cola de prioridad.
+- Los predicados espaciales sobre un `JOIN` no usan el índice (se filtra después del join).
+- La distancia euclidiana está en grados, no en metros; en el mapa, su círculo
+  se dibuja con una aproximación de 111 320 m por grado.
+- El índice se construye insertando registro por registro (sin bulk-load), lo
+  que hace lenta su creación con 100 000 puntos.
+
 
 ## Benchmarks
 
