@@ -1,10 +1,15 @@
 import math
+import re
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 
-from common.value import DataType, Value
+from common.value import DataType, Point, Polygon, Rectangle, Value
 
 from .exceptions import UnsupportedTypeError
+
+_SPATIAL_TYPES = {DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY}
+_SPATIAL_PREFIX = re.compile(r"^\s*(POINT|POLYGON|RECTANGLE)\s*\(", re.IGNORECASE)
+_NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
 
 
 # Matched during AUTOMATIC inference only — alphabetic forms alone.
@@ -58,6 +63,13 @@ def narrow_type(current: DataType | None, raw: str) -> DataType | None:
             return DataType.BOOLEAN
         return DataType.VARCHAR
 
+    if current in _SPATIAL_TYPES:
+        spatial = _spatial_type_for(raw)
+        if spatial is None:
+            return DataType.VARCHAR
+        # una columna que mezcla POINT y POLYGON, por ejemplo, es GEOMETRY
+        return current if spatial == current else DataType.GEOMETRY
+
     return DataType.VARCHAR  # ya en VARCHAR: estado absorbente
 
 
@@ -81,7 +93,20 @@ def _narrowest_type_for(raw: str) -> DataType:
         return DataType.DOUBLE_PRECISION
     if _looks_like_bool_word(raw):
         return DataType.BOOLEAN
-    return DataType.VARCHAR
+    return _spatial_type_for(raw) or DataType.VARCHAR
+
+
+def _spatial_type_for(raw: str) -> DataType | None:
+    """POINT/POLYGON/RECTANGLE if raw is a valid literal with that prefix."""
+    match = _SPATIAL_PREFIX.match(raw)
+    if match is None:
+        return None
+    data_type = DataType(match.group(1).lower())
+    try:
+        _parse_spatial(raw, data_type)
+    except (ValueError, UnsupportedTypeError):
+        return None
+    return data_type
 
 
 def _looks_like_int(v: str) -> bool:
@@ -175,4 +200,59 @@ def _parse_raw(raw: str, data_type: DataType):
     if data_type == DataType.BYTEA:
         return bytes.fromhex(raw.strip())
 
+    if data_type in _SPATIAL_TYPES:
+        return _parse_spatial(raw, data_type)
+
     raise UnsupportedTypeError(f"Tipo de dato no soportado para conversión: {data_type}")
+
+# ---------- spatial literals ----------
+
+def _parse_spatial(raw: str, data_type: DataType):
+    """
+    Parses a spatial CSV cell. Coordinates go as (longitude latitude),
+    separated by spaces or commas; both WKT and the engine's SQL syntax work:
+
+        POINT(-77.03 -12.12)          POINT(-77.03, -12.12)      -77.03 -12.12
+        POLYGON((x y, x y, x y))      POLYGON(POINT(x, y), POINT(x, y), POINT(x, y))
+        RECTANGLE(west south east north)
+
+    GEOMETRY takes whichever kind the prefix names. A polygon that does not
+    repeat its first vertex at the end is closed automatically, as in SQL.
+    """
+    text = raw.strip()
+    match = _SPATIAL_PREFIX.match(text)
+    kind = DataType(match.group(1).lower()) if match else None
+
+    if data_type == DataType.GEOMETRY:
+        data_type = kind or DataType.POINT
+    elif kind is not None and kind != data_type:
+        raise UnsupportedTypeError(f"{raw!r} es un {kind.value.upper()}, no un {data_type.value.upper()}")
+
+    if match is not None:
+        body = text[match.end():]
+        if not body.endswith(")"):
+            raise ValueError(f"{raw!r}: falta el paréntesis de cierre")
+        body = body[:-1]
+    else:
+        body = text
+    # dentro del cuerpo solo pueden quedar números, separadores y POINT(...)
+    if re.sub(r"POINT", "", _NUMBER.sub("", body), flags=re.IGNORECASE).strip(" ,()\t"):
+        raise ValueError(f"{raw!r} no es un literal {data_type.value.upper()} válido")
+    numbers = [float(n) for n in _NUMBER.findall(body)]
+
+    if data_type == DataType.POINT:
+        if len(numbers) != 2:
+            raise ValueError(f"POINT requiere 2 coordenadas (longitud latitud), se encontraron {len(numbers)}")
+        return Point(*numbers)
+
+    if data_type == DataType.RECTANGLE:
+        if len(numbers) != 4:
+            raise ValueError(f"RECTANGLE requiere 4 valores (oeste sur este norte), se encontraron {len(numbers)}")
+        return Rectangle(*numbers)
+
+    if len(numbers) % 2 != 0:
+        raise ValueError("POLYGON requiere pares de coordenadas (longitud latitud)")
+    points = [Point(numbers[i], numbers[i + 1]) for i in range(0, len(numbers), 2)]
+    if points and points[0] != points[-1]:
+        points.append(points[0])
+    return Polygon(points)

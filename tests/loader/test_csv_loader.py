@@ -14,7 +14,7 @@ from catalog.exceptions import TableAlreadyExistsError
 from catalog.table_metadata import StorageType
 from common.record import Record
 from common.schema import Column, Schema
-from common.value import DataType, Value
+from common.value import DataType, Point, Polygon, Rectangle, Value
 from loader import (
     DuplicateColumnNameError,
     EmptyCSVError,
@@ -88,6 +88,14 @@ def csv_test_data(tmp_path_factory):
             "1,Duplicado,2024-04-04\n"
             "6,Este nombre excede dieciseis,2024-06-06\n"
             "6,Luisa,2024-06-06\n"
+        ),
+        "espaciales.csv": (
+            "id,ubicacion,zona,caja,forma\n"
+            '1,POINT(-77.03 -12.12),"POLYGON((-77.05 -12.14, -77.01 -12.14, -77.01 -12.10, -77.05 -12.14))",'
+            "RECTANGLE(-77.05 -12.14 -77.01 -12.10),POINT(-77.03 -12.12)\n"
+            '2,"POINT(-77.02, -12.13)","POLYGON(POINT(-77.0, -12.0), POINT(-76.9, -12.0), POINT(-76.9, -11.9))",'
+            '"RECTANGLE(-77.0, -12.0, -76.9, -11.9)","POLYGON((-77.0 -12.0, -76.9 -12.0, -76.9 -11.9))"\n'
+            "3,,,,\n"
         ),
     }
     for name, contents in fixtures.items():
@@ -503,6 +511,77 @@ def test_override_real_rejects_precision_loss(tmp_path):
 def test_convert_value_error_messages(raw, data_type, message):
     with pytest.raises(UnsupportedTypeError, match=message):
         convert_value(raw, data_type)
+
+
+def test_infer_schema_spatial_types():
+    schema = infer_schema("t", DATA / "espaciales.csv")
+
+    assert [c.data_type for c in schema.columns] == [
+        DataType.INTEGER, DataType.POINT, DataType.POLYGON,
+        DataType.RECTANGLE, DataType.GEOMETRY,
+    ]
+
+
+@pytest.mark.parametrize(
+    "raw, data_type, expected",
+    [
+        ("POINT(-77.03 -12.12)", DataType.POINT, Point(-77.03, -12.12)),
+        ("point(-77.03, -12.12)", DataType.POINT, Point(-77.03, -12.12)),
+        ("-77.03 -12.12", DataType.POINT, Point(-77.03, -12.12)),
+        ("-77.03,-12.12", DataType.POINT, Point(-77.03, -12.12)),
+        ("RECTANGLE(-1 -2 3 4)", DataType.RECTANGLE, Rectangle(-1, -2, 3, 4)),
+        ("POINT(1 2)", DataType.GEOMETRY, Point(1, 2)),
+        (
+            "POLYGON((0 0, 1 0, 1 1))", DataType.POLYGON,
+            Polygon((Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 0))),
+        ),
+        (
+            "POLYGON(POINT(0, 0), POINT(1, 0), POINT(1, 1), POINT(0, 0))", DataType.GEOMETRY,
+            Polygon((Point(0, 0), Point(1, 0), Point(1, 1), Point(0, 0))),
+        ),
+    ],
+)
+def test_convert_value_spatial_formats(raw, data_type, expected):
+    assert convert_value(raw, data_type).data == expected
+
+
+@pytest.mark.parametrize(
+    "raw, data_type",
+    [
+        ("POINT(1)", DataType.POINT),
+        ("POINT(1 2 3)", DataType.POINT),
+        ("POINT(200 0)", DataType.POINT),
+        ("POINT(a b)", DataType.POINT),
+        ("POINT(1 2", DataType.POINT),
+        ("POLYGON((0 0, 1 1))", DataType.POLYGON),
+        ("RECTANGLE(0 0 1)", DataType.RECTANGLE),
+        ("POLYGON((0 0, 1 0, 1 1))", DataType.POINT),
+    ],
+)
+def test_convert_value_spatial_errors(raw, data_type):
+    with pytest.raises(UnsupportedTypeError):
+        convert_value(raw, data_type)
+
+
+def test_load_csv_spatial_columns_and_rtree_query(tmp_path):
+    catalog = make_catalog(tmp_path)
+    schema = override(
+        prepare_import(csv("espaciales.csv"), "lugares"),
+        id=Column("id", DataType.INTEGER, is_primary_key=True),
+    )
+
+    assert load_csv(catalog, csv("espaciales.csv"), schema) == {"inserted": 3, "skipped": []}
+    rows = rows_of(catalog, "lugares")
+    assert rows[0][1] == Point(-77.03, -12.12)
+    assert rows[1][2].points[-1] == Point(-77.0, -12.0)
+    assert rows[2][1:] == [None, None, None, None]
+
+    execute("CREATE INDEX idx_ubicacion ON lugares (ubicacion) USING RTREE;", catalog)
+    near = execute(
+        "SELECT id FROM lugares WHERE distancia(ubicacion, POINT(-77.03, -12.12), HAVERSINE) < 100;",
+        catalog,
+    )
+    assert [r.values[0].data for r in near] == [1]
 
 
 def test_override_boolean_accepts_1_0_and_words(tmp_path):
