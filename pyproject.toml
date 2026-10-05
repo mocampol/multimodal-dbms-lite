@@ -2,7 +2,9 @@
 name = "multimodal-dbms-lite"
 version = "0.1.0"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "uvicorn>=0.54.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -168,7 +168,15 @@ h1, h2, h3 {
 
 .spatial-workbench {
   display: grid;
-  gap: 14px;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .spatial-workbench {
+    grid-template-columns: 1fr;
+  }
 }
 
 .spatial-controls {
@@ -479,4 +487,38 @@ h1, h2, h3 {
   overflow-y: auto;
   font-size: 13px;
   color: var(--error);
+}
+
+.spatial-popup-content {
+  min-width: 200px;
+}
+.spatial-popup-content strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.spatial-popup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.spatial-popup-table th {
+  text-align: left;
+  color: var(--text-muted);
+  padding: 4px 8px 4px 0;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.spatial-popup-table td {
+  padding: 4px 0;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.spatial-field-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }

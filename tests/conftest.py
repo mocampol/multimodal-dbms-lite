@@ -22,6 +22,7 @@ from common.value import DataType
 from storage.file_manager import FileManager
 from storage.buffer_manager import BufferManager
 from index.btree.btree import BTree
+from index.extendible_hash.extendible_hash_index import ExtendibleHashIndex
 
 
 # ---------------------------------------------------------------------------
@@ -88,3 +89,42 @@ def small_pool_btree(tmp_path):
     fm = FileManager(str(index_file))
     bm = BufferManager(file_manager=fm, pool_size=16)
     return BTree(key_type=DataType.INTEGER, buffer_manager=bm, unique=False)
+
+
+# ---------------------------------------------------------------------------
+# Extendible Hash fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def extendible_hash(tmp_path):
+    """
+    Scope: function — a fresh, empty ExtendibleHashIndex for EVERY test.
+
+    Wiring:
+        tmp_path  →  FileManager  →  BufferManager  →  ExtendibleHashIndex
+
+    key_type=DataType.INTEGER:
+        All keys inserted through this fixture must be Value(INTEGER, int).
+
+    pool_size=128:
+        Large enough to hold a moderate hash index without eviction pressure.
+    """
+    index_file = tmp_path / "hash.idx"
+    fm = FileManager(str(index_file))
+    bm = BufferManager(file_manager=fm, pool_size=128)
+    return ExtendibleHashIndex.create(bm, key_type=DataType.INTEGER)
+
+
+@pytest.fixture
+def small_pool_hash(tmp_path):
+    """
+    Scope: function — ExtendibleHashIndex backed by a tiny Buffer Pool (16 frames).
+
+    Purpose: forces the buffer replacement policy to evict pages during bulk
+    inserts, validating no data loss or corruption across eviction cycles.
+    """
+    index_file = tmp_path / "small_pool_hash.idx"
+    fm = FileManager(str(index_file))
+    bm = BufferManager(file_manager=fm, pool_size=16)
+    return ExtendibleHashIndex.create(bm, key_type=DataType.INTEGER)
+

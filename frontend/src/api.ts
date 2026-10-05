@@ -61,6 +61,7 @@ export interface PlanNode {
   index_id?: number
   column_name?: string
   candidate_boxes?: [number, number, number, number][]
+  index_mbrs?: [number, number, number, number][]
   predicate?: string
   metric?: 'EUCLIDEAN' | 'HAVERSINE' | null
   // Solo presentes cuando el plan viene de EXPLAIN ANALYZE (plan

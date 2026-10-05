@@ -1,0 +1,41 @@
+# benchmarks/postgres/docker-compose.yml — PostGIS para la comparación
+# externa contra el R-tree del DBMS propio.
+#
+# Levantar desde cero (borra el volumen y reinicializa la base):
+#     cd benchmarks/postgres
+#     docker compose down -v && docker compose up -d
+#
+# La imagen postgis/postgis ya crea la extensión postgis en POSTGRES_DB
+# durante la inicialización; la tabla y el índice GiST los crea
+# load_data.py a partir de schema.sql en cada corrida.
+
+name: mdbms-postgis-bench
+
+services:
+  postgis:
+    # Versión fijada (no "latest") para que el benchmark sea reproducible.
+    image: postgis/postgis:16-3.4
+    container_name: mdbms-postgis-bench
+    environment:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: spatial_bench
+    ports:
+      # 5434 en el host para no chocar con instalaciones locales de PostgreSQL
+      # (5432 y 5433 suelen estar ocupados por servicios nativos).
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Recursos fijos para que las mediciones sean comparables entre máquinas;
+    # documentar estos valores en benchmarks/README.md.
+    cpus: 2
+    mem_limit: 4g
+    shm_size: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench -d spatial_bench"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

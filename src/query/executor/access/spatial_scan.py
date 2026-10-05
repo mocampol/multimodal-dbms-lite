@@ -173,7 +173,7 @@ class SpatialIndexScan(PlanNode):
         self._cursor = 0
 
     def describe_self(self) -> dict:
-        return {
+        desc = {
             "node": "SpatialIndexScan",
             "access": "rtree_candidates",
             "index_type": "rtree",
@@ -185,6 +185,16 @@ class SpatialIndexScan(PlanNode):
                 for box in self.boxes
             ],
         }
+        
+        try:
+            desc["index_mbrs"] = [
+                [box.min_x, box.min_y, box.max_x, box.max_y]
+                for box in self.index.dump_all_mbrs()
+            ]
+        except Exception:
+            pass
+            
+        return desc
 
 
 class KNNScan(PlanNode):
