@@ -150,7 +150,7 @@ Para ejecutar el backend y el frontend necesitas:
 ### 1. Clonar el repositorio
 
 ```bash
-git clone <url-del-repositorio>
+git clone https://github.com/mocampol/multimodal-dbms-lite
 cd multimodal-dbms-lite
 ```
 
