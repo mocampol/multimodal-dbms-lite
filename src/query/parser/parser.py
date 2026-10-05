@@ -35,6 +35,7 @@ from query.parser.ast_nodes import (
     ColumnDef,
     CreateTableStm,
     CreateIndexStm,
+    DropTableStm,
     IndexType,
     StorageKind,
 )
@@ -154,7 +155,8 @@ class Parser:
 
     def parse_sql_statement(self) -> Stm:
         """<Statement> ::= [ EXPLAIN [ ANALYZE ] ] ( <SelectStmt> | <InsertStmt>
-                            | <DeleteStmt> | <CreateTableStmt> | <CreateIndexStmt> ) SEMICOL
+                    | <DeleteStmt> | <CreateTableStmt> | <CreateIndexStmt>
+                    | <DropTableStmt> ) SEMICOL
 
         EXPLAIN / EXPLAIN ANALYZE solo envuelven un <SelectStmt> por ahora
         (ver ExplainStm en ast_nodes.py)."""
@@ -178,9 +180,12 @@ class Parser:
             stm = self.parse_create_table()
         elif self.check(TokenType.CREATE_INDEX):
             stm = self.parse_create_index()
+        elif self.check(TokenType.DROP_TABLE):
+            stm = self.parse_drop_table()
         else:
             self.error(
-                "'EXPLAIN', 'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE' o 'CREATE INDEX'"
+                "'EXPLAIN', 'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE', "
+                "'CREATE INDEX' o 'DROP TABLE'"
             )
 
         self.expect(TokenType.SEMICOL)
@@ -468,6 +473,11 @@ class Parser:
             storage_kind = self.parse_storage_type()
 
         return CreateTableStm(table_tok.text, columns, storage_kind)
+
+    def parse_drop_table(self) -> DropTableStm:
+        """<DropTableStmt> ::= DROP_TABLE ID"""
+        self.expect(TokenType.DROP_TABLE)
+        return DropTableStm(self.expect(TokenType.ID).text)
 
     def parse_storage_type(self) -> StorageKind:
         """<StorageType> ::= HEAP | SEQUENTIAL"""

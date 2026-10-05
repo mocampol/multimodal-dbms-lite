@@ -18,7 +18,7 @@ import pytest
 
 from common.value import DataType, Value
 from storage.heap.rid import RID
-from index.extendible_hash.hash_directory_page import HashDirectoryPage
+from index.extendible_hash.hash_directory_page import HashDirectoryPage, MAX_DIRECTORY_DEPTH
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +135,7 @@ class TestGlobalDepthConsistency:
         """Helper: fetches the directory page and returns a HashDirectoryPage."""
         bm = extendible_hash.buffer_manager
         dir_page = bm.fetch_page(extendible_hash.directory_page_id)
-        directory = HashDirectoryPage(dir_page)
+        directory = HashDirectoryPage(dir_page, bm)
         bm.unpin_page(extendible_hash.directory_page_id, is_dirty=False)
         return directory
 
@@ -157,7 +157,27 @@ class TestGlobalDepthConsistency:
         gd = directory.get_global_depth()
         assert gd >= 1, "GD must have grown after splits"
         # Directory size must be exactly 2^GD
-        assert (1 << gd) <= 512, "GD must not exceed MAX_BUCKETS capacity (9)"
+        assert gd <= MAX_DIRECTORY_DEPTH
+
+    def test_insert_and_search_use_an_extension_page(self, extendible_hash):
+        bm = extendible_hash.buffer_manager
+        dir_page = bm.fetch_page(extendible_hash.directory_page_id)
+        directory = HashDirectoryPage(dir_page, bm)
+        directory.ensure_capacity(1 << 10)
+        directory.set_global_depth(10)
+        bucket_page_id = directory.get_bucket_page_id(0)
+        directory.set_bucket_page_id(700, bucket_page_id)
+        directory.set_local_depth(700, 0)
+        bm.unpin_page(extendible_hash.directory_page_id, is_dirty=True)
+
+        key = next(
+            iv(value)
+            for value in range(10_000)
+            if extendible_hash._get_bucket_idx(extendible_hash._hash_key(iv(value)), 10) == 700
+        )
+        extendible_hash.insert(key, rid(700))
+
+        assert extendible_hash.search(key) == [rid(700)]
 
     def test_directory_size_is_always_power_of_two(self, extendible_hash):
         """

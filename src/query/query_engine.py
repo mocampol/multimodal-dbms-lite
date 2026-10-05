@@ -12,7 +12,7 @@ from query.parser.visitor import SemanticVisitor
 from query.parser.exceptions import SemanticError
 from query.parser.ast_nodes import (
     SelectStm, ExplainStm, InsertStm, DeleteStm, UpdateStm, CreateTableStm, CreateIndexStm,
-    BeginTransactionStm, EndTransactionStm,
+    DropTableStm, BeginTransactionStm, EndTransactionStm,
 )
 from transaction import TransactionManager, rid_resource
 from transaction.row_undo import undo_delete, undo_insert, undo_update
@@ -267,6 +267,9 @@ def _execute_statement(stm, catalog):
         )
 
     if isinstance(stm, (CreateTableStm, CreateIndexStm)):
+        return None
+    if isinstance(stm, DropTableStm):
+        catalog.drop_table(stm.table)
         return None
 
     raise QueryError(f"Tipo de sentencia no soportado: {type(stm).__name__}")

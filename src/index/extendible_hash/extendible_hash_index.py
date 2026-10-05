@@ -31,7 +31,7 @@ class ExtendibleHashIndex:
         bucket_page_id = buffer_manager.allocate_page()
 
         directory_page = buffer_manager.fetch_page(directory_page_id)
-        directory = HashDirectoryPage(directory_page)
+        directory = HashDirectoryPage(directory_page, buffer_manager)
         directory.format_page()
         directory.set_bucket_page_id(0, bucket_page_id)
         buffer_manager.unpin_page(directory_page_id, is_dirty=True)
@@ -50,7 +50,7 @@ class ExtendibleHashIndex:
         
         # 1. Fetch directory
         dir_page = self.buffer_manager.fetch_page(self.directory_page_id)
-        directory = HashDirectoryPage(dir_page)
+        directory = HashDirectoryPage(dir_page, self.buffer_manager)
         
         # 2. Get target bucket page ID
         bucket_idx = self._get_bucket_idx(hash_value, directory.get_global_depth())
@@ -128,7 +128,7 @@ class ExtendibleHashIndex:
         hash_value = self._hash_key(key)
         
         dir_page = self.buffer_manager.fetch_page(self.directory_page_id)
-        directory = HashDirectoryPage(dir_page)
+        directory = HashDirectoryPage(dir_page, self.buffer_manager)
         
         bucket_idx = self._get_bucket_idx(hash_value, directory.get_global_depth())
         bucket_page_id = directory.get_bucket_page_id(bucket_idx)
@@ -152,7 +152,7 @@ class ExtendibleHashIndex:
         hash_value = self._hash_key(key)
         
         dir_page = self.buffer_manager.fetch_page(self.directory_page_id)
-        directory = HashDirectoryPage(dir_page)
+        directory = HashDirectoryPage(dir_page, self.buffer_manager)
         
         bucket_idx = self._get_bucket_idx(hash_value, directory.get_global_depth())
         bucket_page_id = directory.get_bucket_page_id(bucket_idx)
@@ -193,6 +193,7 @@ class ExtendibleHashIndex:
         """
         global_depth = directory.get_global_depth()
         current_size = 1 << global_depth
+        directory.ensure_capacity(current_size * 2)
         
         for i in range(current_size):
             page_id = directory.get_bucket_page_id(i)

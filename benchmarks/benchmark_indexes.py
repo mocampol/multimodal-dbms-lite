@@ -308,27 +308,6 @@ def run_hash_experiment(n: int, ids: list[int], schema: Schema, rng: random.Rand
 # Orquestación
 # =============================================================================
 
-HASH_RESULT_FIELDS = [
-    "hash_build_time_s", "hash_exact_search_avg_us", "hash_range_search_avg_us",
-    "hash_sort_time_s", "hash_index_space_bytes", "hash_insert_avg_us",
-    "hash_delete_avg_us", "hash_query_sample_size",
-]
-
-DIRECTORY_LIMIT_EXCEEDED = "LIMITE_CAPACIDAD_DIRECTORIO"
-
-
-def hash_capacity_limit_row() -> dict:
-    """
-    Fila de reemplazo cuando ExtendibleHashIndex excede la capacidad fija
-    del directorio (MAX_BUCKETS=512 en hash_directory_page.py, ~9 niveles
-    de global_depth). NO es un fallo del benchmark: es un límite real y no
-    documentado como tal del índice, que aparece alrededor de N=100,000
-    con claves INTEGER. Se registra explícitamente en vez de reintentar o
-    silenciar el error, para que quede evidenciado en el CSV/reporte.
-    """
-    return {field: DIRECTORY_LIMIT_EXCEEDED for field in HASH_RESULT_FIELDS}
-
-
 def average_metrics(dicts: list[dict]) -> dict:
     result = {}
     for key in dicts[0]:
@@ -336,7 +315,7 @@ def average_metrics(dicts: list[dict]) -> dict:
         if all(isinstance(v, (int, float)) for v in values):
             result[key] = sum(values) / len(values)
         else:
-            result[key] = values[0]  # p.ej. "N/A" o DIRECTORY_LIMIT_EXCEEDED
+            result[key] = values[0]  # p.ej. "N/A"
     return result
 
 
@@ -358,20 +337,7 @@ def run_all(n_values, repetitions):
             nonclustered_runs.append(run_nonclustered_experiment(n, base_ids, schema, random.Random(SEED)))
 
             print(f"  dynamic hash   (run {rep}/{repetitions})...")
-            try:
-                hash_runs.append(run_hash_experiment(n, base_ids, schema, random.Random(SEED)))
-            except ValueError as e:
-                # Cualquier ValueError en esta llamada es evidencia del
-                # mismo límite de capacidad del directorio (MAX_BUCKETS):
-                # ya sea el corte limpio contra el borde de la página, o
-                # -en directorios muy chicos- corrupción de punteros que
-                # termina fallando más adelante al leer una página
-                # inexistente. En ambos casos la causa es la misma y no
-                # hay nada que el benchmark pueda hacer salvo reportarlo.
-                print(f"    ! Hash excedió la capacidad del directorio en N={n:,} "
-                      f"({type(e).__name__}: {e}) — se registra como "
-                      f"{DIRECTORY_LIMIT_EXCEEDED!r} y se continúa.")
-                hash_runs.append(hash_capacity_limit_row())
+            hash_runs.append(run_hash_experiment(n, base_ids, schema, random.Random(SEED)))
 
         row = {
             "n": n,
@@ -388,12 +354,9 @@ def run_all(n_values, repetitions):
         print(f"  nonclustered: build={row['nonclustered_build_time_s']:.4f}s  "
               f"exact={row['nonclustered_exact_search_avg_us']:.1f}us  "
               f"space={row['nonclustered_index_space_bytes']:,.0f}B")
-        if isinstance(row["hash_build_time_s"], str):
-            print(f"  hash:         {row['hash_build_time_s']} (excedió la capacidad del directorio)")
-        else:
-            print(f"  hash:         build={row['hash_build_time_s']:.4f}s  "
-                  f"exact={row['hash_exact_search_avg_us']:.1f}us  "
-                  f"space={row['hash_index_space_bytes']:,.0f}B")
+        print(f"  hash:         build={row['hash_build_time_s']:.4f}s  "
+              f"exact={row['hash_exact_search_avg_us']:.1f}us  "
+              f"space={row['hash_index_space_bytes']:,.0f}B")
 
     return rows
 
@@ -427,8 +390,7 @@ def make_charts(rows: list[dict], out_dir: Path):
 
     def numeric_series(field: str):
         """(xs, ys) solo con los N donde el valor es numérico — salta
-        puntos marcados como N/A o DIRECTORY_LIMIT_EXCEEDED en vez de
-        romper el gráfico o inventar un valor."""
+        puntos marcados como N/A en vez de romper el gráfico o inventar un valor."""
         xs, ys = [], []
         for r in rows:
             v = r[field]
@@ -442,10 +404,6 @@ def make_charts(rows: list[dict], out_dir: Path):
     for prefix, label, color in structures:
         xs, ys = numeric_series(f"{prefix}_build_time_s")
         plt.plot(xs, ys, marker="o", label=label, color=color)
-        skipped = [r["n"] for r in rows if r["n"] not in xs]
-        if skipped:
-            plt.scatter(skipped, [max(ys) if ys else 1] * len(skipped), marker="x", color=color,
-                        label=f"{label} (excedió capacidad)")
     plt.xscale("log")
     plt.yscale("log")
     plt.xlabel("N (registros)")

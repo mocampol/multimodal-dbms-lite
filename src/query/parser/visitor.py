@@ -33,6 +33,7 @@ from query.parser.ast_nodes import (
     UpdateStm,
     CreateTableStm,
     CreateIndexStm,
+    DropTableStm,
     IndexType,
     StorageKind,
 )
@@ -59,6 +60,7 @@ class CatalogProtocol(Protocol):
     def get_schema(self, table_name: str) -> Schema: ...
     def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> None: ...
     def create_index(self, table_name: str, column_name: str, index_type: str) -> None: ...
+    def drop_table(self, table_name: str) -> None: ...
     def get_indexes(self, table_name: str) -> list[dict]: ...
 
 
@@ -100,6 +102,11 @@ class InMemoryCatalog:
 
     def get_indexes(self, table_name: str) -> list[dict]:
         return self._indexes.get(table_name, [])
+
+    def drop_table(self, table_name: str) -> None:
+        self.get_schema(table_name)
+        del self._schemas[table_name]
+        self._indexes.pop(table_name, None)
 
 
 _STORAGE_KIND_TO_TYPE = {
@@ -226,7 +233,7 @@ class SemanticVisitor(Visitor):
 
     def _validate_spatial_predicate(self, stm, predicate: SpatialPredicate):
         if isinstance(predicate, WithinExp):
-            table_name, column = self._require_point_column(
+            table_name, column = self._require_spatial_column(
                 stm, predicate.geometry, function_name="dentro_de"
             )
             if len(predicate.polygon.points) < 3:
@@ -448,6 +455,11 @@ class SemanticVisitor(Visitor):
             raise SemanticError("RTREE requiere una columna de tipo POINT, POLYGON, RECTANGLE o GEOMETRY")
 
         self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
+        return None
+
+    def visit_drop_table_stm(self, stm: DropTableStm):
+        if not self.catalog.table_exists(stm.table):
+            raise SemanticError(f"La tabla '{stm.table}' no existe")
         return None
 
     def visit_order_by_clause(self, clause: OrderByClause):

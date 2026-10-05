@@ -34,6 +34,71 @@ from transaction import TransactionManager
 DATA = Path(__file__).parent / "data"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def csv_test_data(tmp_path_factory):
+    global DATA
+    DATA = tmp_path_factory.mktemp("csv-loader-data")
+    fixtures = {
+        "alumnos.csv": (
+            "id,nombre,edad,promedio,activo\n"
+            "1,Daniela,21,17.5,yes\n"
+            "2,Valentin,22,15.25,no\n"
+            "3,Mariana,20,18.0,yes\n"
+            "4,Jose,23,12.75,no\n"
+        ),
+        "productos_nulls.csv": (
+            "codigo,precio,stock,descripcion\n"
+            "1,10,5,Lapiz\n"
+            "2,12.5,,Cuaderno A4\n"
+            "3,,0,\n"
+            "4,7,3,Borrador blanco\n"
+        ),
+        "primera_celda_vacia.csv": "id,edad,nota\n1,,\n2,30,15\n3,25,\n",
+        "widening.csv": "id,valor,flag,mixto\n1,10,true,10\n2,2.5,false,abc\n3,,T,\n",
+        "fechas_override.csv": (
+            "id,fecha,hora,creado,hex,monto\n"
+            "1,2024-01-15,08:30:00,2024-01-15 08:30:00,deadbeef,19.99\n"
+            "2,2025-12-31,23:59:59,2025-12-31 23:59:59,00ff,0.10\n"
+        ),
+        "comillas.csv": (
+            'id,comentario\n1,"Hola, mundo"\n2,"Dijo ""hola"""\n'
+            '3,"linea1\nlinea2"\n'
+        ),
+        "con_bom.csv": "\ufeffid,nombre\n1,Ana\n",
+        "vacio.csv": "",
+        "solo_cabecera.csv": "id,nombre\n",
+        "fila_inconsistente.csv": "id,nombre\n1,Ana\n2\n",
+        "columnas_duplicadas.csv": "id,id\n1,2\n",
+        "pk_duplicada.csv": "id,nombre\n1,Ana\n1,Luis\n",
+        "fecha_invalida.csv": "id,fecha\n1,2024-01-01\n2,no-es-fecha\n",
+        "columna_vacia.csv": "id,vacia,nombre\n1,,Ana\n2,,Luis\n",
+        "enteros_rango.csv": (
+            "id,chico,grande\n1,32767,9223372036854775807\n"
+            "2,-32768,-9223372036854775808\n"
+        ),
+        "smallint_overflow.csv": "id,chico\n1,10\n2,40000\n",
+        "reales.csv": "id,r\n1,0.5\n2,0.1\n",
+        "booleanos_override.csv": "id,flag\n1,1\n2,0\n3,yes\n4,no\n",
+        "errores_mixtos.csv": (
+            "id,nombre,fecha\n"
+            "1,Ana,2024-01-01\n"
+            "2,Luis,no-es-fecha\n"
+            "3,Eva,2024-03-03\n"
+            "4,Jose\n"
+            "1,Duplicado,2024-04-04\n"
+            "6,Este nombre excede dieciseis,2024-06-06\n"
+            "6,Luisa,2024-06-06\n"
+        ),
+    }
+    for name, contents in fixtures.items():
+        (DATA / name).write_text(contents, encoding="utf-8")
+
+    with (DATA / "grande.csv").open("w", encoding="utf-8") as output:
+        output.write("id,x,y,label\n")
+        for row_id in range(5_000):
+            output.write(f"{row_id},{row_id},{row_id / 10},item_{row_id}\n")
+
+
 def csv(name: str) -> str:
     return str(DATA / name)
 

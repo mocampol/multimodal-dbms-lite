@@ -119,6 +119,10 @@ class Visitor(ABC):
         ...
 
     @abstractmethod
+    def visit_drop_table_stm(self, stm: "DropTableStm"):
+        ...
+
+    @abstractmethod
     def visit_create_index_stm(self, stm: "CreateIndexStm"):
         ...
 
@@ -585,6 +589,19 @@ class CreateTableStm(Stm):
         cols = ", ".join(repr(c) for c in self.columns)
         using = f" USING {self.storage_kind.name}" if self.storage_kind != StorageKind.HEAP else ""
         return f"CREATE TABLE {self.table} ({cols}){using}"
+
+
+class DropTableStm(Stm):
+    """<DropTableStmt> ::= DROP_TABLE ID"""
+
+    def __init__(self, table: str):
+        self.table = table
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_drop_table_stm(self)
+
+    def __repr__(self):
+        return f"DROP TABLE {self.table}"
 
 
 class CreateIndexStm(Stm):
