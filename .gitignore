@@ -51,3 +51,5 @@ Thumbs.db
 # Benchmarks: salidas de la corrida corta (--quick); los resultados completos SI se versionan
 benchmarks/results/*_quick.*
 benchmarks/results/charts_quick/
+benchmarks/corpus/
+tests/results/

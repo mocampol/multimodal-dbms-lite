@@ -1,0 +1,11 @@
+corpus,N,query_type,query,bm25_mean_ms,bm25_stddev_ms,bm25_median_ms,bm25_p95_ms,cosine_mean_ms,cosine_stddev_ms,cosine_median_ms,cosine_p95_ms,seq_mean_ms,speedup_bm25,speedup_cosine
+spanish,1000,1-term (high freq),gobierno,0.1232,0.003,0.122,0.1309,0.1353,0.0038,0.1348,0.143,216.9774,1761.18,1603.68
+spanish,1000,1-term (high freq),espana,0.1507,0.0123,0.1452,0.1915,0.1729,0.0095,0.171,0.1911,223.3168,1481.86,1291.6
+spanish,1000,1-term (low freq),submarino,0.0061,0.0002,0.006,0.0069,0.0032,0.0002,0.0031,0.004,217.5646,35666.33,67988.94
+spanish,1000,1-term (med freq),tribunal,0.0452,0.0016,0.0448,0.0509,0.0465,0.0008,0.0463,0.0493,217.5902,4813.94,4679.36
+spanish,1000,2-terms,economia mercado,0.0493,0.0014,0.049,0.0538,0.0537,0.0026,0.0533,0.0638,218.8143,4438.42,4074.75
+spanish,1000,2-terms,partido politica,0.1203,0.01,0.1173,0.158,0.1162,0.0051,0.1148,0.1292,218.9329,1819.89,1884.1
+spanish,1000,3-terms,crisis laboral empleo,0.0807,0.0024,0.0798,0.088,0.0775,0.007,0.076,0.1005,223.6772,2771.71,2886.16
+spanish,1000,3-terms,presidente ministro parlamento,0.113,0.0026,0.1124,0.1207,0.1234,0.0102,0.1208,0.1565,219.315,1940.84,1777.27
+spanish,1000,4-terms,justicia juez audiencia nacional,0.1672,0.0049,0.1655,0.1819,0.1723,0.0168,0.1683,0.2394,220.8487,1320.87,1281.77
+spanish,1000,out of vocab,terminoinexistente999,0.0041,0.0003,0.0039,0.0049,0.0002,0.0,0.0002,0.0004,218.4317,53276.02,1092158.5
