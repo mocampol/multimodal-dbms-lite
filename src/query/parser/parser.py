@@ -35,6 +35,7 @@ from query.parser.ast_nodes import (
     ColumnDef,
     CreateTableStm,
     CreateIndexStm,
+    DropIndexStm,
     DropTableStm,
     IndexType,
     StorageKind,
@@ -78,6 +79,8 @@ _INDEX_TYPE_MAP = {
     TokenType.BTREE: IndexType.BTREE,
     TokenType.HASH: IndexType.HASH,
     TokenType.RTREE: IndexType.RTREE,
+    TokenType.GIN: IndexType.GIN,
+    TokenType.SPIMI: IndexType.SPIMI,
 }
 
 _STORAGE_TYPE_MAP = {
@@ -182,10 +185,12 @@ class Parser:
             stm = self.parse_create_index()
         elif self.check(TokenType.DROP_TABLE):
             stm = self.parse_drop_table()
+        elif self.check(TokenType.DROP_INDEX):
+            stm = self.parse_drop_index()
         else:
             self.error(
                 "'EXPLAIN', 'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE', "
-                "'CREATE INDEX' o 'DROP TABLE'"
+                "'CREATE INDEX', 'DROP TABLE' o 'DROP INDEX'"
             )
 
         self.expect(TokenType.SEMICOL)
@@ -540,22 +545,45 @@ class Parser:
     # =========================================================================
 
     def parse_create_index(self) -> CreateIndexStm:
-        """<CreateIndexStmt> ::= CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>"""
+        """
+        <CreateIndexStmt> ::=
+            CREATE_INDEX ID ON ID USING <IndexType> LPAREN ID RPAREN
+            | CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>
+        """
         self.expect(TokenType.CREATE_INDEX)
         index_name_tok = self.expect(TokenType.ID)
         self.expect(TokenType.ON)
         table_tok = self.expect(TokenType.ID)
-        self.expect(TokenType.LPAREN)
-        column_tok = self.expect(TokenType.ID)
-        self.expect(TokenType.RPAREN)
-        self.expect(TokenType.USING)
-        index_type = self.parse_index_type()
+
+        if self.match(TokenType.USING):
+            # PostgreSQL standard: USING <IndexType> (column)
+            index_type = self.parse_index_type()
+            self.expect(TokenType.LPAREN)
+            column_tok = self.expect(TokenType.ID)
+            self.expect(TokenType.RPAREN)
+        else:
+            # Legacy: (column) USING <IndexType>
+            self.expect(TokenType.LPAREN)
+            column_tok = self.expect(TokenType.ID)
+            self.expect(TokenType.RPAREN)
+            self.expect(TokenType.USING)
+            index_type = self.parse_index_type()
 
         return CreateIndexStm(index_name_tok.text, table_tok.text, column_tok.text, index_type)
 
+    def parse_drop_index(self) -> DropIndexStm:
+        """<DropIndexStmt> ::= DROP_INDEX [ IF EXISTS ] ID"""
+        self.expect(TokenType.DROP_INDEX)
+        if_exists = False
+        if self.match(TokenType.IF):
+            self.expect(TokenType.EXISTS)
+            if_exists = True
+        index_name_tok = self.expect(TokenType.ID)
+        return DropIndexStm(index_name_tok.text, if_exists=if_exists)
+
     def parse_index_type(self) -> IndexType:
-        """<IndexType> ::= BTREE | HASH | RTREE"""
+        """<IndexType> ::= BTREE | HASH | RTREE | GIN | SPIMI"""
         for ttype, index_type in _INDEX_TYPE_MAP.items():
             if self.match(ttype):
                 return index_type
-        self.error("'BTREE', 'HASH' o 'RTREE'")
+        self.error("'BTREE', 'HASH', 'RTREE', 'GIN' o 'SPIMI'")
