@@ -158,7 +158,13 @@ def _parse_raw(raw: str, data_type: DataType):
     if data_type == DataType.REAL:
         import struct
         value = float(raw)
-        truncated = struct.unpack("f", struct.pack("f", value))[0]
+        try:
+            truncated = struct.unpack("f", struct.pack("f", value))[0]
+        except OverflowError:
+            raise UnsupportedTypeError(
+                f"{raw!r} está fuera de rango para REAL (32 bits, máx. ~3.4e38); "
+                "usa DOUBLE_PRECISION"
+            )
         if math.isinf(truncated) and not math.isinf(value):
             raise UnsupportedTypeError(
                 f"{raw!r} está fuera de rango para REAL (32 bits, máx. ~3.4e38); "
