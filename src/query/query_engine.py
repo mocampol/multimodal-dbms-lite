@@ -246,7 +246,9 @@ def _execute_statement(stm, catalog):
         storage = catalog.get_storage(stm.table)
         def before_delete(rid, record):
             manager.log_data_change("DELETE", stm.table, rid, record, None)
-            manager.add_undo(lambda: undo_delete(manager, catalog, stm.table, storage, record))
+            manager.add_undo(
+                lambda: undo_delete(manager, catalog, stm.table, storage, record, rid)
+            )
         return _run_in_transaction(
             manager,
             lambda: execute_delete(stm, catalog, lock_rid=lock_rid, before_delete=before_delete),
@@ -307,4 +309,3 @@ def _run_in_transaction(manager, operation, catalog=None, written_table=None):
         if manager.current() is not None:
             manager.abort()
         raise
-

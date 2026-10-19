@@ -185,7 +185,7 @@ def test_spimi_catalog_preserves_documents_without_indexable_tokens(tmp_path):
 
 
 def test_dynamic_dml_updates_inverted_index(tmp_path):
-    """Verifies INSERT and DELETE dynamically maintain the inverted index and persist."""
+    """Verifies INSERT, UPDATE and DELETE dynamically maintain the inverted index."""
     catalog = make_catalog(tmp_path)
     execute("CREATE TABLE logs (id INTEGER PRIMARY KEY, mensaje TEXT);", catalog)
     execute("CREATE INDEX idx_logs_msg ON logs USING gin (mensaje);", catalog)
@@ -204,6 +204,11 @@ def test_dynamic_dml_updates_inverted_index(tmp_path):
     execute("INSERT INTO logs VALUES (2, 'Advertencia de memoria en el nodo secundario');", catalog)
     assert physical_index.total_docs == 2
 
+    execute("UPDATE logs SET mensaje = 'Incidente nuevo en el cache' WHERE id = 2;", catalog)
+    assert physical_index.total_docs == 2
+    assert physical_index.bm25_search(catalog.text_processor.process("advertencia")) == []
+    assert len(physical_index.bm25_search(catalog.text_processor.process("incidente"))) == 1
+
     # Delete record 1 -> should remove document from postings
     execute("DELETE FROM logs WHERE id = 1;", catalog)
     assert physical_index.total_docs == 1
@@ -217,7 +222,94 @@ def test_dynamic_dml_updates_inverted_index(tmp_path):
     idx_rebooted = rebooted.get_physical_index("logs", "mensaje")
     assert idx_rebooted.total_docs == 1
     query_node = rebooted.text_processor.process("secundario")
-    assert len(idx_rebooted.bm25_search(query_node)) == 1
+    assert len(idx_rebooted.bm25_search(query_node)) == 0
+    assert len(idx_rebooted.bm25_search(rebooted.text_processor.process("incidente"))) == 1
+
+
+def test_rebuild_derived_reconstructs_text_index_from_table(tmp_path):
+    catalog = make_catalog(tmp_path)
+    execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, texto TEXT);", catalog)
+    execute("INSERT INTO docs VALUES (1, 'Documento persistente original');", catalog)
+    execute("CREATE INDEX docs_texto_gin ON docs USING gin (texto);", catalog)
+
+    index = catalog.get_physical_index("docs", "texto")
+    doc_id = next(iter(index.doc_lengths))
+    index.remove_document(doc_id)
+    index.save()
+    assert index.bm25_search(catalog.text_processor.process("original")) == []
+
+    catalog.rebuild_derived("docs")
+
+    rebuilt_index = catalog.get_physical_index("docs", "texto")
+    assert len(rebuilt_index.bm25_search(catalog.text_processor.process("original"))) == 1
+
+
+def test_failed_text_index_persistence_rolls_back_insert(tmp_path, monkeypatch):
+    catalog = make_catalog(tmp_path)
+    execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, texto TEXT);", catalog)
+    execute("CREATE INDEX docs_texto_gin ON docs USING gin (texto);", catalog)
+    index = catalog.get_physical_index("docs", "texto")
+    save = index.save
+    calls = 0
+
+    def fail_once():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("disk write failed")
+        save()
+
+    monkeypatch.setattr(index, "save", fail_once)
+
+    with pytest.raises(OSError, match="disk write failed"):
+        execute("INSERT INTO docs VALUES (1, 'No debe quedar indexado');", catalog)
+
+    assert execute("SELECT * FROM docs;", catalog) == []
+    assert index.total_docs == 0
+    assert index.bm25_search(catalog.text_processor.process("indexado")) == []
+
+
+@pytest.mark.parametrize(
+    ("statement", "old_term", "new_term"),
+    [
+        (
+            "UPDATE docs SET texto = 'Texto nuevo temporal' WHERE id = 1;",
+            "original",
+            "temporal",
+        ),
+        ("DELETE FROM docs WHERE id = 1;", "original", None),
+    ],
+)
+def test_failed_text_index_persistence_keeps_dml_and_index_consistent(
+    tmp_path, monkeypatch, statement, old_term, new_term
+):
+    catalog = make_catalog(tmp_path)
+    execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, texto TEXT);", catalog)
+    execute("INSERT INTO docs VALUES (1, 'Texto original persistente');", catalog)
+    execute("CREATE INDEX docs_texto_gin ON docs USING gin (texto);", catalog)
+    index = catalog.get_physical_index("docs", "texto")
+    save = index.save
+    calls = 0
+
+    def fail_once():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("disk write failed")
+        save()
+
+    monkeypatch.setattr(index, "save", fail_once)
+
+    with pytest.raises(OSError, match="disk write failed"):
+        execute(statement, catalog)
+
+    assert [tuple(value.data for value in row.values) for row in execute("SELECT * FROM docs;", catalog)] == [
+        (1, "Texto original persistente")
+    ]
+    assert len(index.bm25_search(catalog.text_processor.process(old_term))) == 1
+    if new_term is not None:
+        assert index.bm25_search(catalog.text_processor.process(new_term)) == []
+    assert index.total_docs == 1
 
 
 def test_drop_index_removes_metadata_and_disk_file(tmp_path):

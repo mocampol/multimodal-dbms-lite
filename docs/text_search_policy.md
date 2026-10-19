@@ -217,9 +217,11 @@ Esta transformación aritmética pura es estrictamente biyectiva y permite conve
 * **Reinicio del Motor (`_load`):** Al iniciar el catálogo, escanea `sys_indexes` y, al detectar entradas con `index_type in ("gin", "spimi")`, invoca `InvertedIndex.load(file_path)` restaurando automáticamente todo el vocabulario, listas de postings y longitudes de documentos en memoria.
 * **Construcción:** `USING SPIMI` construye el índice invertido mediante bloques temporales SPIMI y los fusiona antes de guardar el índice persistente; los bloques temporales se limpian al terminar.
 * **Mantenimiento Dinámico (DML):**
-  - `INSERT`: Inyecta los tokens procesados en el índice en memoria vía `add_document(doc_id, tokens)` y persiste a disco con `save()`.
-  - `DELETE`: Remueve las entradas de postings vía `remove_document(doc_id)` y persiste a disco.
-  - `UPDATE`: Remueve el `doc_id` anterior y registra el nuevo documento tokenizado.
+  - `INSERT`: Añade el documento (incluidos documentos sin tokens) y guarda el índice antes de confirmar la transacción.
+  - `DELETE`: Remueve el `doc_id` de postings y metadatos del corpus antes de confirmar la transacción.
+  - `UPDATE`: Si cambia el texto o el RID, reemplaza el documento indexado; si el valor es `NULL`, lo excluye del índice.
+  - Los errores de escritura se propagan y hacen abortar la operación. La persistencia reemplaza el archivo mediante escritura temporal atómica; ante un error, la mutación en memoria se revierte.
 * **Eliminación en Cascada:**
   - `DROP INDEX <nombre>`: Elimina el registro de `sys_indexes`, desaloca la estructura en memoria y borra físicamente el archivo `.idx` del disco (`os.remove`).
   - `DROP TABLE <tabla>`: Realiza la eliminación en cascada, eliminando de disco todos los índices secundarios e invertidos asociados a dicha tabla.
+* **Recuperación y reconstrucción:** Tras deshacer operaciones incompletas del WAL, la recuperación vuelve a construir los índices desde las filas recuperadas. También se puede reconstruir explícitamente desde código con `catalog.rebuild_derived("<tabla>")`; esta operación reconstruye los índices secundarios y las estructuras derivadas de esa tabla.

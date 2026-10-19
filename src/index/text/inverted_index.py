@@ -8,7 +8,9 @@ Provides lookup for term frequency, document frequency, and BM25 ranking.
 from __future__ import annotations
 
 import math
+import os
 import pickle
+import tempfile
 from typing import Sequence
 
 
@@ -264,8 +266,24 @@ class InvertedIndex:
             "total_docs": self.total_docs,
             "doc_norms": self._doc_norms,
         }
-        with open(target_path, "wb") as f:
-            pickle.dump(state, f, protocol=5)
+        directory = os.path.dirname(os.path.abspath(target_path))
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(target_path)}.",
+            suffix=".tmp",
+            dir=directory,
+        )
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                pickle.dump(state, handle, protocol=5)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, target_path)
+        except Exception:
+            try:
+                os.remove(temporary_path)
+            except FileNotFoundError:
+                pass
+            raise
 
     @classmethod
     def load(cls, file_path: str, manager: object | None = None) -> InvertedIndex:

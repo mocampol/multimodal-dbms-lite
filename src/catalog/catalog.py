@@ -239,15 +239,22 @@ class Catalog:
                 column = tm.schema.get_column(entry["column_name"])
                 position = tm.schema.column_index(entry["column_name"])
                 index_type = IndexType(entry["index_type"])
-                index = self._create_index(
-                    index_type, table_name, entry["column_name"],
-                    entry["index_id"], column.data_type,
-                )
                 if index_type in (IndexType.GIN, IndexType.SPIMI):
+                    manager = self._index_buffer_factory(
+                        table_name, entry["column_name"], entry["index_id"]
+                    )
+                    index = InvertedIndex(
+                        file_path=manager.file_manager.file_path,
+                        manager=manager,
+                    )
                     index = self._build_text_index(
                         index_type, index, storage, tm, entry["column_name"]
                     )
                 else:
+                    index = self._create_index(
+                        index_type, table_name, entry["column_name"],
+                        entry["index_id"], column.data_type,
+                    )
                     for rid, record in self._scan_with_rids(storage):
                         key = record[position]
                         if index_type == IndexType.RTREE:
@@ -687,8 +694,11 @@ class Catalog:
                     if val.data is not None:
                         doc_id = rid_to_doc_id(rid.page_id, rid.slot)
                         tokens = self.text_processor.process(str(val.data))
-                        index.add_document(doc_id, tokens)
-                        index.save()
+                        self._save_text_index_change(
+                            index,
+                            lambda: index.add_document(doc_id, tokens),
+                            lambda: index.remove_document(doc_id),
+                        )
                     continue
                 key = record[column_index]
                 if entry["index_type"] == IndexType.RTREE.value:
@@ -707,8 +717,18 @@ class Catalog:
             if index is not None:
                 if entry["index_type"] in (IndexType.GIN.value, IndexType.SPIMI.value):
                     doc_id = rid_to_doc_id(rid.page_id, rid.slot)
-                    index.remove_document(doc_id)
-                    index.save()
+                    had_document = doc_id in index.doc_lengths
+                    tokens = self.text_processor.process(str(record[self.get_schema(table_name).column_index(entry["column_name"])].data))
+
+                    def restore_document():
+                        if had_document:
+                            index.add_document(doc_id, tokens)
+
+                    self._save_text_index_change(
+                        index,
+                        lambda: index.remove_document(doc_id),
+                        restore_document,
+                    )
                     continue
                 column_index = self.get_schema(table_name).column_index(entry["column_name"])
                 key = record[column_index]
@@ -737,12 +757,34 @@ class Catalog:
                 new_val = new_record[column_index]
                 if old_val.data != new_val.data or old_rid != new_rid:
                     old_doc_id = rid_to_doc_id(old_rid.page_id, old_rid.slot)
-                    index.remove_document(old_doc_id)
-                    if new_val.data is not None:
-                        new_doc_id = rid_to_doc_id(new_rid.page_id, new_rid.slot)
-                        tokens = self.text_processor.process(str(new_val.data))
-                        index.add_document(new_doc_id, tokens)
-                    index.save()
+                    new_doc_id = rid_to_doc_id(new_rid.page_id, new_rid.slot)
+                    had_old_document = old_doc_id in index.doc_lengths
+                    old_tokens = (
+                        self.text_processor.process(str(old_val.data))
+                        if old_val.data is not None
+                        else []
+                    )
+                    new_tokens = (
+                        self.text_processor.process(str(new_val.data))
+                        if new_val.data is not None
+                        else None
+                    )
+
+                    def change_document():
+                        index.remove_document(old_doc_id)
+                        if new_doc_id != old_doc_id:
+                            index.remove_document(new_doc_id)
+                        if new_tokens is not None:
+                            index.add_document(new_doc_id, new_tokens)
+
+                    def restore_old_document():
+                        index.remove_document(old_doc_id)
+                        if new_doc_id != old_doc_id:
+                            index.remove_document(new_doc_id)
+                        if had_old_document:
+                            index.add_document(old_doc_id, old_tokens)
+
+                    self._save_text_index_change(index, change_document, restore_old_document)
                 continue
             old_key = old_record[column_index]
             new_key = new_record[column_index]
@@ -765,6 +807,15 @@ class Catalog:
             if old_value != new_value:
                 self._unique_values[(table_name, column_name)].discard(old_value)
                 self._unique_values[(table_name, column_name)].add(new_value)
+
+    @staticmethod
+    def _save_text_index_change(index, change, rollback):
+        try:
+            change()
+            index.save()
+        except Exception:
+            rollback()
+            raise
 
     def _persist_index_root(self, entry, index):
         if entry["index_type"] in (IndexType.GIN.value, IndexType.SPIMI.value):
