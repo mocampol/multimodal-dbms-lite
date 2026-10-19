@@ -91,6 +91,42 @@ class InvertedIndex:
             return 0.0
         return math.log(1.0 + (self.total_docs - df + 0.5) / (df + 0.5))
 
+    def idf_smooth(self, term: str) -> float:
+        """
+        Calculates standard smooth IDF for Vector Space Model (TF-IDF):
+        idf(t) = ln(1 + N / df(t))
+        Returns 0.0 if df(t) == 0 or total_docs == 0.
+        """
+        df = self.get_document_frequency(term)
+        if df == 0 or self.total_docs == 0:
+            return 0.0
+        return math.log(1.0 + (self.total_docs / df))
+
+    def compute_doc_norms(self) -> dict[int, float]:
+        """
+        Computes and caches Euclidean norm ||V(D)|| for each document in the corpus:
+        ||V(D)|| = sqrt(sum_{t in D} (tf(t, D) * idf_smooth(t))^2)
+        """
+        sum_sq: dict[int, float] = {}
+        for term, postings in self.index.items():
+            term_idf = self.idf_smooth(term)
+            if term_idf <= 0.0:
+                continue
+            for doc_id, tf in postings:
+                w = tf * term_idf
+                sum_sq[doc_id] = sum_sq.get(doc_id, 0.0) + (w * w)
+
+        self._doc_norms = {
+            doc_id: math.sqrt(val) for doc_id, val in sum_sq.items()
+        }
+        return self._doc_norms
+
+    def get_doc_norm(self, doc_id: int) -> float:
+        """Returns the Euclidean norm ||V(D)|| for a given document."""
+        if not self._doc_norms and self.index and self.total_docs > 0:
+            self.compute_doc_norms()
+        return self._doc_norms.get(doc_id, 0.0)
+
     def score_bm25(
         self,
         query_tokens: Sequence[str],
@@ -127,6 +163,78 @@ class InvertedIndex:
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return ranked[:top_k]
 
+    def score_tfidf_cosine(
+        self,
+        query_terms: Sequence[str],
+        top_k: int | None = None,
+    ) -> list[tuple[int, float]]:
+        """
+        Computes Cosine Similarity scores using TF-IDF over candidate documents:
+        sim(Q, D) = (V(Q) · V(D)) / (||V(Q)|| * ||V(D)||)
+
+        Handles non-indexable terms, empty queries, and zero-norm documents safely.
+        Results are sorted descending by cosine score with deterministic tie-breaking
+        by doc_id ascending: key=(-score, doc_id).
+
+        Returns top_k tuples of (doc_id, score) or all candidate documents if top_k is None.
+        """
+        if not query_terms or self.total_docs == 0:
+            return []
+
+        # Count term frequencies in query tf(t, Q)
+        query_tf: dict[str, int] = {}
+        for term in query_terms:
+            query_tf[term] = query_tf.get(term, 0) + 1
+
+        # Compute query vector coordinates and query Euclidean norm ||V(Q)||
+        query_weights: dict[str, float] = {}
+        query_norm_sq = 0.0
+        for term, q_tf in query_tf.items():
+            term_idf = self.idf_smooth(term)
+            if term_idf > 0.0:
+                w_q = q_tf * term_idf
+                query_weights[term] = w_q
+                query_norm_sq += w_q * w_q
+
+        # If query has no indexable or known terms, norm is 0 -> return [] safely
+        if query_norm_sq == 0.0:
+            return []
+
+        query_norm = math.sqrt(query_norm_sq)
+
+        # Accumulate dot product V(Q) · V(D) across candidate documents
+        dot_products: dict[int, float] = {}
+        for term, w_q in query_weights.items():
+            postings = self.get_postings(term)
+            term_idf = self.idf_smooth(term)
+            for doc_id, d_tf in postings:
+                w_d = d_tf * term_idf
+                dot_products[doc_id] = dot_products.get(doc_id, 0.0) + (w_q * w_d)
+
+        if not dot_products:
+            return []
+
+        # Ensure doc norms are populated
+        if not self._doc_norms:
+            self.compute_doc_norms()
+
+        # Compute cosine similarity: dot_product / (||V(Q)|| * ||V(D)||)
+        scores: dict[int, float] = {}
+        for doc_id, dot_prod in dot_products.items():
+            doc_norm = self.get_doc_norm(doc_id)
+            if doc_norm <= 0.0:
+                continue
+            sim = dot_prod / (query_norm * doc_norm)
+            # Bound numerically to [0.0, 1.0] against precision overflow
+            sim = min(1.0, max(0.0, sim))
+            scores[doc_id] = sim
+
+        # Deterministic ranking: score descending, then doc_id ascending
+        ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+        if top_k is not None:
+            return ranked[:top_k]
+        return ranked
+
     def bm25_search(
         self,
         query_tokens: Sequence[str],
@@ -136,6 +244,14 @@ class InvertedIndex:
     ) -> list[tuple[int, float]]:
         """Convenience alias for score_bm25."""
         return self.score_bm25(query_tokens, top_k=top_k, k1=k1, b=b)
+
+    def cosine_similarity_search(
+        self,
+        query_tokens: Sequence[str],
+        top_k: int = 10,
+    ) -> list[tuple[int, float]]:
+        """Convenience alias for score_tfidf_cosine."""
+        return self.score_tfidf_cosine(query_tokens, top_k=top_k)
 
     def save(self, file_path: str | None = None) -> None:
         """Persists the inverted index to disk."""
