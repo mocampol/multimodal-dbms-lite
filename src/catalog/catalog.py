@@ -17,6 +17,7 @@ from index.btree.btree import BTree
 from index.extendible_hash.extendible_hash_index import ExtendibleHashIndex
 from index.btree.clustered_index import ClusteredIndex
 from index.rtree import RTree
+from index.text import InvertedIndex, TextProcessor, rid_to_doc_id
 from spatial.geometry import Point2D
 
 from .table_metadata import TableMetadata, StorageType, IndexType
@@ -55,6 +56,7 @@ SYS_INDEXES_SCHEMA = Schema("sys_indexes", [
     Column("column_name", DataType.VARCHAR, size=64),
     Column("index_type", DataType.VARCHAR, size=16),
     Column("root_page_id", DataType.INTEGER),
+    Column("index_name", DataType.VARCHAR, size=64, nullable=True),
 ])
 
 
@@ -103,6 +105,7 @@ class Catalog:
         self._sys_latch = threading.RLock()
         self._table_latches: dict[str, threading.RLock] = {}
         self._table_latches_mutex = threading.Lock()
+        self.text_processor = TextProcessor(stopwords="spanish")
 
         self._load()
 
@@ -146,14 +149,23 @@ class Catalog:
 
         for sys_rid, record in self._sys_indexes.scan_with_rid():
             values = tuple(v.data for v in record)
-            index_id, table_id, column_name, index_type, root_page_id = values
+            index_id = values[0]
+            table_id = values[1]
+            column_name = values[2]
+            index_type = values[3]
+            root_page_id = values[4]
+            index_name = values[5] if len(values) > 5 and values[5] is not None else None
             table_name = self._table_name_by_id(table_id)
-            self.indexes.setdefault(table_name, []).append({
+            if not index_name:
+                index_name = f"{table_name}_{column_name}_idx"
+            entry = {
                 "index_id": index_id,
+                "index_name": index_name,
                 "column_name": column_name,
                 "index_type": index_type,
                 "root_page_id": root_page_id,
-            })
+            }
+            self.indexes.setdefault(table_name, []).append(entry)
             self._index_catalog_rids[index_id] = sys_rid
             if self._index_buffer_factory is not None and root_page_id >= 0:
                 self._physical_indexes[index_id] = self._open_index(
@@ -199,8 +211,10 @@ class Catalog:
             managers.append(clustered.bm)
         for entry in self.indexes.get(table_name, []):
             index = self._physical_indexes.get(entry["index_id"])
+            if hasattr(index, "save") and callable(index.save):
+                index.save()
             manager = getattr(index, "bm", None) or getattr(index, "buffer_manager", None)
-            if manager is not None:
+            if manager is not None and hasattr(manager, "flush_all"):
                 managers.append(manager)
         return managers
 
@@ -229,13 +243,22 @@ class Catalog:
                     index_type, table_name, entry["column_name"],
                     entry["index_id"], column.data_type,
                 )
-                for rid, record in self._scan_with_rids(storage):
-                    key = record[position]
-                    if index_type == IndexType.RTREE:
-                        key = self._rtree_key(key)
-                        if key is None:
-                            continue
-                    index.insert(key, rid)
+                if index_type in (IndexType.GIN, IndexType.SPIMI):
+                    for rid, record in self._scan_with_rids(storage):
+                        val = record[position]
+                        if val.data is not None:
+                            doc_id = rid_to_doc_id(rid.page_id, rid.slot)
+                            tokens = self.text_processor.process(str(val.data))
+                            index.add_document(doc_id, tokens)
+                    index.save()
+                else:
+                    for rid, record in self._scan_with_rids(storage):
+                        key = record[position]
+                        if index_type == IndexType.RTREE:
+                            key = self._rtree_key(key)
+                            if key is None:
+                                continue
+                        index.insert(key, rid)
                 self._physical_indexes[entry["index_id"]] = index
                 self._persist_index_root(entry, index)
 
@@ -362,6 +385,9 @@ class Catalog:
     def _buffer_file_path(buffer_owner):
         if buffer_owner is None:
             return None
+        file_path = getattr(buffer_owner, "file_path", None)
+        if file_path is not None:
+            return file_path
         buffer_manager = getattr(buffer_owner, "bm", None)
         if buffer_manager is None:
             buffer_manager = getattr(buffer_owner, "buffer_manager", None)
@@ -390,9 +416,15 @@ class Catalog:
     def get_clustered_index(self, table_name: str):
         return self._clustered_indexes.get(table_name)
 
-    def create_index(self, table_name: str, column_name: str, index_type: str) -> dict:
+    def create_index(
+        self,
+        table_name: str,
+        column_name: str,
+        index_type: str,
+        index_name: str | None = None,
+    ) -> dict:
         with self._ddl_latch, self.table_latch(table_name), self._sys_latch:
-            entry = self._register_index(table_name, column_name, index_type)
+            entry = self._register_index(table_name, column_name, index_type, index_name=index_name)
             self.flush_table(table_name)
             self._flush_sys_tables()
             return entry
@@ -403,11 +435,15 @@ class Catalog:
             self._sys_columns.bm.flush_all()
             self._sys_indexes.bm.flush_all()
 
-    def _register_index(self, table_name: str, column_name: str, index_type: str) -> dict:
+    def _register_index(
+        self,
+        table_name: str,
+        column_name: str,
+        index_type: str,
+        index_name: str | None = None,
+    ) -> dict:
         """
-        Registers an index over a column. Does not build the physical
-        index structure, that's the index subsystem's job. This only
-        records the metadata so the planner knows the index exists.
+        Registers an index over a column.
         """
         tm = self.get_table(table_name)
         if not tm.schema.get_column(column_name):
@@ -422,10 +458,30 @@ class Catalog:
             )
         except (AttributeError, ValueError):
             raise ValueError(f"Tipo de índice no soportado: {index_type}") from None
-        if index_type == IndexType.RTREE and column.data_type not in (DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY):
+
+        if index_type == IndexType.RTREE and column.data_type not in (
+            DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY
+        ):
             raise ValueError("RTREE requiere una columna de tipo POINT, POLYGON, RECTANGLE o GEOMETRY")
-        if column.data_type in (DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY) and index_type != IndexType.RTREE:
+        if column.data_type in (
+            DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY
+        ) and index_type != IndexType.RTREE:
             raise ValueError("Las columnas espaciales (POINT, POLYGON, RECTANGLE, GEOMETRY) requieren un índice RTREE")
+
+        if index_type in (IndexType.GIN, IndexType.SPIMI) and column.data_type not in (
+            DataType.TEXT, DataType.VARCHAR, DataType.CHAR
+        ):
+            raise ValueError(f"GIN y SPIMI requieren una columna de tipo texto (TEXT, VARCHAR o CHAR), no {column.data_type.value}")
+
+        if not index_name:
+            index_name = f"{table_name}_{column_name}_idx"
+
+        # Check uniqueness of index_name across all tables
+        for t_name, entries in self.indexes.items():
+            for e in entries:
+                if e.get("index_name") == index_name:
+                    raise ValueError(f"Ya existe un índice con nombre '{index_name}'")
+
         if index_type == IndexType.RTREE and any(
             entry["column_name"] == column_name and entry["index_type"] == index_type.value
             for entry in self.indexes.get(table_name, [])
@@ -439,15 +495,26 @@ class Catalog:
             raise ValueError("No hay fábrica de BufferManager para índices")
 
         index = self._create_index(index_type, table_name, column_name, index_id, column.data_type)
-        for rid, record in self._scan_with_rids(self._table_storage[table_name]):
-            key = record[tm.schema.column_index(column_name)]
-            if index_type == IndexType.RTREE:
-                key = self._rtree_key(key)
-                if key is None:
-                    continue
-            index.insert(key, rid)
 
-        root_page_id = index.root_page_id if index_type != IndexType.HASH else index.directory_page_id
+        if index_type in (IndexType.GIN, IndexType.SPIMI):
+            for rid, record in self._scan_with_rids(self._table_storage[table_name]):
+                val = record[tm.schema.column_index(column_name)]
+                if val.data is not None:
+                    doc_id = rid_to_doc_id(rid.page_id, rid.slot)
+                    tokens = self.text_processor.process(str(val.data))
+                    index.add_document(doc_id, tokens)
+            index.save()
+            root_page_id = 0
+        else:
+            for rid, record in self._scan_with_rids(self._table_storage[table_name]):
+                key = record[tm.schema.column_index(column_name)]
+                if index_type == IndexType.RTREE:
+                    key = self._rtree_key(key)
+                    if key is None:
+                        continue
+                index.insert(key, rid)
+            root_page_id = index.root_page_id if index_type != IndexType.HASH else index.directory_page_id
+
         index_type_value = index_type.value
         index_rid = self._sys_indexes.insert(Record([
             Value(DataType.INTEGER, index_id),
@@ -455,10 +522,12 @@ class Catalog:
             Value(DataType.VARCHAR, column_name),
             Value(DataType.VARCHAR, index_type_value),
             Value(DataType.INTEGER, root_page_id),
+            Value(DataType.VARCHAR, index_name),
         ]))
 
         entry = {
             "index_id": index_id,
+            "index_name": index_name,
             "column_name": column_name,
             "index_type": index_type_value,
             "root_page_id": root_page_id,
@@ -478,6 +547,8 @@ class Catalog:
             return ExtendibleHashIndex.create(manager, key_type)
         if index_type == IndexType.RTREE:
             return RTree(manager)
+        if index_type in (IndexType.GIN, IndexType.SPIMI):
+            return InvertedIndex(file_path=manager.file_manager.file_path, manager=manager)
         raise ValueError(f"Tipo de índice no soportado: {index_type}")
 
     def _open_index(self, table_name, column_name, index_type, root_page_id, index_id):
@@ -489,6 +560,8 @@ class Catalog:
             return ExtendibleHashIndex(manager, root_page_id, key_type)
         if index_type == IndexType.RTREE.value:
             return RTree(manager, root_page_id=root_page_id)
+        if index_type in (IndexType.GIN.value, IndexType.SPIMI.value):
+            return InvertedIndex.load(manager.file_manager.file_path, manager=manager)
         raise ValueError(f"Tipo de índice no soportado: {index_type}")
 
     @staticmethod
@@ -523,6 +596,74 @@ class Catalog:
                 return self._physical_indexes.get(entry["index_id"])
         return None
 
+    def get_index_by_name(self, index_name: str) -> tuple[str, dict] | None:
+        """Returns (table_name, entry) for an index name if it exists, else None."""
+        for table_name, entries in self.indexes.items():
+            for entry in entries:
+                if entry.get("index_name") == index_name:
+                    return table_name, entry
+        return None
+
+    def index_exists(self, index_name: str) -> bool:
+        """Returns True if an index with index_name exists in the catalog."""
+        return self.get_index_by_name(index_name) is not None
+
+    def drop_index(self, index_name_or_table: str, column_name: str | None = None) -> None:
+        """
+        Drops an index by name (PostgreSQL style: DROP INDEX <index_name>)
+        or by table and column name (drop_index(table_name, column_name)).
+        Removes the metadata entry from sys_indexes, clears physical references,
+        and deletes the physical .idx file from disk.
+        """
+        target_entry = None
+        target_table_name = None
+
+        if column_name is not None:
+            table_name = index_name_or_table
+            for entry in self.indexes.get(table_name, []):
+                if entry["column_name"] == column_name:
+                    target_entry = entry
+                    target_table_name = table_name
+                    break
+        else:
+            index_name = index_name_or_table
+            found = self.get_index_by_name(index_name)
+            if found is not None:
+                target_table_name, target_entry = found
+
+        if target_entry is None:
+            name = f"{index_name_or_table}.{column_name}" if column_name else index_name_or_table
+            raise ValueError(f"El índice '{name}' no existe")
+
+        index_id = target_entry["index_id"]
+
+        with self._ddl_latch, self.table_latch(target_table_name), self._sys_latch:
+            catalog_rid = self._index_catalog_rids.pop(index_id, None)
+            if catalog_rid is not None:
+                self._sys_indexes.delete(catalog_rid)
+            else:
+                for rid, record in self._sys_indexes.scan_with_rid():
+                    if record[0].data == index_id:
+                        self._sys_indexes.delete(rid)
+                        break
+
+            index = self._physical_indexes.pop(index_id, None)
+
+            if self._clustered_indexes.get(target_table_name) is index:
+                del self._clustered_indexes[target_table_name]
+
+            self.indexes[target_table_name] = [
+                e for e in self.indexes.get(target_table_name, []) if e["index_id"] != index_id
+            ]
+
+            self._sys_indexes.bm.flush_all()
+
+            file_path = self._buffer_file_path(index)
+            if file_path is None and self._index_buffer_factory is not None:
+                bm = self._index_buffer_factory(target_table_name, target_entry["column_name"], index_id)
+                file_path = self._buffer_file_path(bm)
+            self._remove_file(file_path)
+
     def register_insert(self, table_name: str, record: Record, rid):
         clustered = self._clustered_indexes.get(table_name)
         if clustered is not None:
@@ -531,6 +672,14 @@ class Catalog:
             index = self._physical_indexes.get(entry["index_id"])
             if index is not None:
                 column_index = self.get_schema(table_name).column_index(entry["column_name"])
+                if entry["index_type"] in (IndexType.GIN.value, IndexType.SPIMI.value):
+                    val = record[column_index]
+                    if val.data is not None:
+                        doc_id = rid_to_doc_id(rid.page_id, rid.slot)
+                        tokens = self.text_processor.process(str(val.data))
+                        index.add_document(doc_id, tokens)
+                        index.save()
+                    continue
                 key = record[column_index]
                 if entry["index_type"] == IndexType.RTREE.value:
                     key = self._rtree_key(key)
@@ -546,6 +695,11 @@ class Catalog:
         for entry in self.indexes.get(table_name, []):
             index = self._physical_indexes.get(entry["index_id"])
             if index is not None:
+                if entry["index_type"] in (IndexType.GIN.value, IndexType.SPIMI.value):
+                    doc_id = rid_to_doc_id(rid.page_id, rid.slot)
+                    index.remove_document(doc_id)
+                    index.save()
+                    continue
                 column_index = self.get_schema(table_name).column_index(entry["column_name"])
                 key = record[column_index]
                 if entry["index_type"] == IndexType.RTREE.value:
@@ -568,6 +722,18 @@ class Catalog:
             if index is None:
                 continue
             column_index = schema.column_index(entry["column_name"])
+            if entry["index_type"] in (IndexType.GIN.value, IndexType.SPIMI.value):
+                old_val = old_record[column_index]
+                new_val = new_record[column_index]
+                if old_val.data != new_val.data or old_rid != new_rid:
+                    old_doc_id = rid_to_doc_id(old_rid.page_id, old_rid.slot)
+                    index.remove_document(old_doc_id)
+                    if new_val.data is not None:
+                        new_doc_id = rid_to_doc_id(new_rid.page_id, new_rid.slot)
+                        tokens = self.text_processor.process(str(new_val.data))
+                        index.add_document(new_doc_id, tokens)
+                    index.save()
+                continue
             old_key = old_record[column_index]
             new_key = new_record[column_index]
             if old_key.data != new_key.data or old_rid != new_rid:
@@ -591,6 +757,8 @@ class Catalog:
                 self._unique_values[(table_name, column_name)].add(new_value)
 
     def _persist_index_root(self, entry, index):
+        if entry["index_type"] in (IndexType.GIN.value, IndexType.SPIMI.value):
+            return
         root_page_id = (
             index.directory_page_id if entry["index_type"] == IndexType.HASH.value else index.root_page_id
         )
@@ -607,6 +775,7 @@ class Catalog:
                 Value(DataType.VARCHAR, entry["column_name"]),
                 Value(DataType.VARCHAR, entry["index_type"]),
                 Value(DataType.INTEGER, root_page_id),
+                Value(DataType.VARCHAR, entry.get("index_name", "")),
             ]))
 
     def get_table_by_index_entry(self, entry):

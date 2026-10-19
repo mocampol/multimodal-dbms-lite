@@ -33,6 +33,7 @@ from query.parser.ast_nodes import (
     UpdateStm,
     CreateTableStm,
     CreateIndexStm,
+    DropIndexStm,
     DropTableStm,
     IndexType,
     StorageKind,
@@ -59,7 +60,9 @@ class CatalogProtocol(Protocol):
     def table_exists(self, table_name: str) -> bool: ...
     def get_schema(self, table_name: str) -> Schema: ...
     def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> None: ...
-    def create_index(self, table_name: str, column_name: str, index_type: str) -> None: ...
+    def create_index(self, table_name: str, column_name: str, index_type: str, index_name: str | None = None) -> None: ...
+    def drop_index(self, index_name: str) -> None: ...
+    def index_exists(self, index_name: str) -> bool: ...
     def drop_table(self, table_name: str) -> None: ...
     def get_indexes(self, table_name: str) -> list[dict]: ...
 
@@ -89,16 +92,29 @@ class InMemoryCatalog:
         if schema.table_name in self._schemas:
             raise SemanticError(f"La tabla '{schema.table_name}' ya existe")
         self._schemas[schema.table_name] = schema
-        # NOTE: InMemoryCatalog no tiene storage físico real detrás, así
-        # que storage_type se acepta solo para cumplir la firma del
-        # Protocol — no tiene ningún efecto aquí.
 
-    def create_index(self, table_name: str, column_name: str, index_type: str) -> None:
+    def create_index(self, table_name: str, column_name: str, index_type: str, index_name: str | None = None) -> None:
         self.get_schema(table_name)  # raises if the table doesn't exist
         self._indexes.setdefault(table_name, []).append({
+            "index_name": index_name or f"{table_name}_{column_name}_idx",
             "column_name": column_name,
             "index_type": index_type,
         })
+
+    def index_exists(self, index_name: str) -> bool:
+        for entries in self._indexes.values():
+            for entry in entries:
+                if entry.get("index_name") == index_name:
+                    return True
+        return False
+
+    def drop_index(self, index_name: str) -> None:
+        for table_name, entries in list(self._indexes.items()):
+            for entry in list(entries):
+                if entry.get("index_name") == index_name:
+                    entries.remove(entry)
+                    return
+        raise SemanticError(f"El índice '{index_name}' no existe")
 
     def get_indexes(self, table_name: str) -> list[dict]:
         return self._indexes.get(table_name, [])
@@ -453,8 +469,23 @@ class SemanticVisitor(Visitor):
         column = self._require_column(schema, stm.column)
         if stm.index_type == IndexType.RTREE and column.data_type not in (DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY):
             raise SemanticError("RTREE requiere una columna de tipo POINT, POLYGON, RECTANGLE o GEOMETRY")
+        if stm.index_type in (IndexType.GIN, IndexType.SPIMI) and column.data_type not in (DataType.TEXT, DataType.VARCHAR, DataType.CHAR):
+            raise SemanticError(f"GIN y SPIMI requieren una columna de tipo texto (TEXT, VARCHAR o CHAR), no {column.data_type.value}")
 
-        self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
+        self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower(), index_name=stm.index_name)
+        return None
+
+    def visit_drop_index_stm(self, stm: DropIndexStm):
+        exists = False
+        if hasattr(self.catalog, "index_exists"):
+            exists = self.catalog.index_exists(stm.index_name)
+        elif hasattr(self.catalog, "get_indexes"):
+            for table_name in getattr(self.catalog, "_schemas", {}).keys():
+                if any(e.get("index_name") == stm.index_name for e in self.catalog.get_indexes(table_name)):
+                    exists = True
+                    break
+        if not exists and not stm.if_exists:
+            raise SemanticError(f"El índice '{stm.index_name}' no existe")
         return None
 
     def visit_drop_table_stm(self, stm: DropTableStm):
