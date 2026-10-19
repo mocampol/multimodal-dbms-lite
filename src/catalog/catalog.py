@@ -17,7 +17,7 @@ from index.btree.btree import BTree
 from index.extendible_hash.extendible_hash_index import ExtendibleHashIndex
 from index.btree.clustered_index import ClusteredIndex
 from index.rtree import RTree
-from index.text import InvertedIndex, TextProcessor, rid_to_doc_id
+from index.text import InvertedIndex, SPIMIIndexer, TextProcessor, rid_to_doc_id
 from spatial.geometry import Point2D
 
 from .table_metadata import TableMetadata, StorageType, IndexType
@@ -244,13 +244,9 @@ class Catalog:
                     entry["index_id"], column.data_type,
                 )
                 if index_type in (IndexType.GIN, IndexType.SPIMI):
-                    for rid, record in self._scan_with_rids(storage):
-                        val = record[position]
-                        if val.data is not None:
-                            doc_id = rid_to_doc_id(rid.page_id, rid.slot)
-                            tokens = self.text_processor.process(str(val.data))
-                            index.add_document(doc_id, tokens)
-                    index.save()
+                    index = self._build_text_index(
+                        index_type, index, storage, tm, entry["column_name"]
+                    )
                 else:
                     for rid, record in self._scan_with_rids(storage):
                         key = record[position]
@@ -497,13 +493,9 @@ class Catalog:
         index = self._create_index(index_type, table_name, column_name, index_id, column.data_type)
 
         if index_type in (IndexType.GIN, IndexType.SPIMI):
-            for rid, record in self._scan_with_rids(self._table_storage[table_name]):
-                val = record[tm.schema.column_index(column_name)]
-                if val.data is not None:
-                    doc_id = rid_to_doc_id(rid.page_id, rid.slot)
-                    tokens = self.text_processor.process(str(val.data))
-                    index.add_document(doc_id, tokens)
-            index.save()
+            index = self._build_text_index(
+                index_type, index, self._table_storage[table_name], tm, column_name
+            )
             root_page_id = 0
         else:
             for rid, record in self._scan_with_rids(self._table_storage[table_name]):
@@ -536,6 +528,24 @@ class Catalog:
         self._physical_indexes[index_id] = index
         self._index_catalog_rids[index_id] = index_rid
         return entry
+
+    def _build_text_index(self, index_type, index, storage, table_metadata, column_name):
+        column_index = table_metadata.schema.column_index(column_name)
+        documents = (
+            (rid_to_doc_id(rid.page_id, rid.slot), str(record[column_index].data))
+            for rid, record in self._scan_with_rids(storage)
+            if record[column_index].data is not None
+        )
+        if index_type == IndexType.SPIMI:
+            built_index = SPIMIIndexer(processor=self.text_processor).index_corpus(documents)
+            built_index.file_path = index.file_path
+            built_index.bm = index.bm
+            index = built_index
+        else:
+            for doc_id, text in documents:
+                index.add_document(doc_id, self.text_processor.process(text))
+        index.save()
+        return index
 
     def _create_index(self, index_type, table_name, column_name, index_id, key_type):
         manager = self._index_buffer_factory(table_name, column_name, index_id)

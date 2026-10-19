@@ -124,7 +124,7 @@ class SPIMIIndexer:
                     records_in_current_block = 0
 
             # Spill any remaining records in the last block
-            if current_block:
+            if records_in_current_block:
                 t_spill = time.perf_counter()
                 block_path = self._spill_block(
                     current_block, work_dir, len(block_paths)

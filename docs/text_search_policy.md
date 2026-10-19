@@ -178,9 +178,10 @@ El motor soporta la definición y eliminación de índices textuales mediante se
 
 1. **Creación de Índice:**
    ```sql
-   CREATE INDEX [IF NOT EXISTS] <nombre_indice> ON <tabla> USING { gin | spimi } (<columna>);
+   CREATE INDEX <nombre_indice> ON <tabla> USING SPIMI (<columna>);
    ```
-   * *Compatibilidad:* `USING gin` y `USING spimi` son sinónimos soportados.
+   * Esta forma (`USING SPIMI` antes de la columna) es la sintaxis PostgreSQL que acepta el parser actual. También se aceptan `USING GIN` y la forma heredada `(<columna>) USING SPIMI`.
+   * El parser no admite actualmente `IF NOT EXISTS` en `CREATE INDEX`.
    * *Validación Semántica:* Solo se permite indexar columnas textuales (`TEXT`, `VARCHAR`, `CHAR`). Cualquier intento sobre columnas numéricas o espaciales genera `SemanticError`.
    * *Unicidad de Nombres:* El nombre del índice debe ser único en el catálogo.
 
@@ -214,6 +215,7 @@ Esta transformación aritmética pura es estrictamente biyectiva y permite conve
 ### 10.4 Persistencia, Reboot y Ciclo de Vida Físico
 * **Ubicación en Disco:** Cada índice se almacena físicamente en `{table_name}.{column_name}.{index_id}.idx` a través de la fábrica de buffers del catálogo (`_index_buffer_factory`).
 * **Reinicio del Motor (`_load`):** Al iniciar el catálogo, escanea `sys_indexes` y, al detectar entradas con `index_type in ("gin", "spimi")`, invoca `InvertedIndex.load(file_path)` restaurando automáticamente todo el vocabulario, listas de postings y longitudes de documentos en memoria.
+* **Construcción:** `USING SPIMI` construye el índice invertido mediante bloques temporales SPIMI y los fusiona antes de guardar el índice persistente; los bloques temporales se limpian al terminar.
 * **Mantenimiento Dinámico (DML):**
   - `INSERT`: Inyecta los tokens procesados en el índice en memoria vía `add_document(doc_id, tokens)` y persiste a disco con `save()`.
   - `DELETE`: Remueve las entradas de postings vía `remove_document(doc_id)` y persiste a disco.
@@ -221,4 +223,3 @@ Esta transformación aritmética pura es estrictamente biyectiva y permite conve
 * **Eliminación en Cascada:**
   - `DROP INDEX <nombre>`: Elimina el registro de `sys_indexes`, desaloca la estructura en memoria y borra físicamente el archivo `.idx` del disco (`os.remove`).
   - `DROP TABLE <tabla>`: Realiza la eliminación en cascada, eliminando de disco todos los índices secundarios e invertidos asociados a dicha tabla.
-

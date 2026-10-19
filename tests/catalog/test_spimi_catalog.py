@@ -128,12 +128,12 @@ def test_create_gin_index_builds_file_and_registers_metadata(tmp_path):
 
 
 def test_index_persistence_after_catalog_reboot(tmp_path):
-    """Verifies that GIN/SPIMI index survives reboot without loss of data or vocabulary."""
+    """Verifies that a SPIMI index survives reboot with its vocabulary and postings."""
     catalog = make_catalog(tmp_path)
     execute("CREATE TABLE articulos (id INTEGER PRIMARY KEY, contenido TEXT);", catalog)
     execute("INSERT INTO articulos VALUES (1, 'Sistemas distribuidos y consistencia eventual.');", catalog)
     execute("INSERT INTO articulos VALUES (2, 'Indices invertidos y ranking BM25 en bases de datos.');", catalog)
-    execute("CREATE INDEX idx_art_texto ON articulos USING gin (contenido);", catalog)
+    execute("CREATE INDEX idx_art_texto ON articulos USING spimi (contenido);", catalog)
     flush_catalog(catalog)
 
     # Simulate shutdown and reboot
@@ -144,7 +144,7 @@ def test_index_persistence_after_catalog_reboot(tmp_path):
     indexes = rebooted.get_indexes("articulos")
     assert len(indexes) == 1
     assert indexes[0]["index_name"] == "idx_art_texto"
-    assert indexes[0]["index_type"] == "gin"
+    assert indexes[0]["index_type"] == "spimi"
 
     physical_index = rebooted.get_physical_index("articulos", "contenido")
     assert physical_index is not None
@@ -162,6 +162,26 @@ def test_index_persistence_after_catalog_reboot(tmp_path):
     cosine_results = physical_index.cosine_similarity_search(query_tokens)
     assert len(cosine_results) >= 1
     assert cosine_results[0][1] > 0.0
+
+
+def test_spimi_catalog_preserves_documents_without_indexable_tokens(tmp_path):
+    catalog = make_catalog(tmp_path)
+    execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, texto TEXT);", catalog)
+    execute("INSERT INTO docs VALUES (1, 'el y de');", catalog)
+    execute("INSERT INTO docs VALUES (2, '');", catalog)
+    execute("CREATE INDEX docs_texto_spimi ON docs USING spimi (texto);", catalog)
+
+    physical_index = catalog.get_physical_index("docs", "texto")
+    assert physical_index.total_docs == 2
+    assert physical_index.get_terms() == []
+
+    flush_catalog(catalog)
+    del catalog
+    rebooted = make_catalog(tmp_path)
+
+    physical_index = rebooted.get_physical_index("docs", "texto")
+    assert physical_index.total_docs == 2
+    assert sorted(physical_index.doc_lengths.values()) == [0, 0]
 
 
 def test_dynamic_dml_updates_inverted_index(tmp_path):

@@ -6,6 +6,7 @@
 					   | <CreateTableStmt> SEMICOL
 					   | <CreateIndexStmt> SEMICOL
 					   | <DropTableStmt> SEMICOL
+					   | <DropIndexStmt> SEMICOL
 					   | BEGIN_TRANSACTION SEMICOL
 					   | END_TRANSACTION SEMICOL
 					   | EXPLAIN [ ANALYZE ] <SelectStmt> SEMICOL
@@ -50,9 +51,11 @@
 					   | DOUBLE_PRECISION | CHAR | VARCHAR | TEXT | BOOLEAN
 					   | DATE | TIME | TIMESTAMP | BYTEA | POINT
 <StorageType>        ::= HEAP | SEQUENTIAL
-<CreateIndexStmt>    ::= CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>
+<CreateIndexStmt>    ::= CREATE_INDEX ID ON ID USING <IndexType> LPAREN ID RPAREN
+					   | CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>
 <DropTableStmt>      ::= DROP_TABLE ID
-<IndexType>          ::= BTREE | HASH | RTREE
+<DropIndexStmt>      ::= DROP_INDEX [ IF EXISTS ] ID
+<IndexType>          ::= BTREE | HASH | RTREE | GIN | SPIMI
 
 <Point>              ::= POINT LPAREN NUM COMA NUM RPAREN
 <PointList>          ::= <Point> { COMA <Point> }
