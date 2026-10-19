@@ -77,6 +77,62 @@ def generate_synthetic_document(rng: random.Random, min_words: int = 15, max_wor
     return " ".join(chosen)
 
 
+CORPUS_URLS = {
+    "spanish": os.environ.get(
+        "SPANISH_CORPUS_URL",
+        "https://github.com/mocampol/multimodal-dbms-lite/releases/download/v1.0-data/data_larazon_publico_v2.csv",
+    ),
+    "20news": os.environ.get(
+        "ENGLISH_CORPUS_URL",
+        "https://github.com/mocampol/multimodal-dbms-lite/releases/download/v1.0-data/train_20newsgroups.csv",
+    ),
+}
+
+
+def ensure_corpus_downloaded(corpus_name: str, target_path: Path) -> Path:
+    """
+    Verifies if target_path exists and has content. If it already exists, skips downloading.
+    If missing, downloads it automatically from the configured URL into benchmarks/corpus/.
+    """
+    if target_path.exists() and target_path.stat().st_size > 0:
+        return target_path
+
+    url = CORPUS_URLS.get(corpus_name)
+    if not url:
+        raise FileNotFoundError(
+            f"El archivo {target_path.name} no existe y no hay URL configurada para '{corpus_name}'."
+        )
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"\n[INFO] Archivo de corpus no encontrado en: {target_path}")
+    print(f"[INFO] Descargando '{corpus_name}' desde: {url} ...")
+
+    import urllib.request
+    try:
+        def _reporthook(block_num, block_size, total_size):
+            downloaded = block_num * block_size
+            if total_size > 0:
+                percent = min(100.0, downloaded * 100.0 / total_size)
+                mb_down = downloaded / (1024 * 1024)
+                mb_total = total_size / (1024 * 1024)
+                sys.stdout.write(f"\r  > Descargando: {percent:5.1f}% ({mb_down:6.1f} MB / {mb_total:6.1f} MB)")
+            else:
+                sys.stdout.write(f"\r  > Descargados: {downloaded / (1024 * 1024):6.1f} MB")
+            sys.stdout.flush()
+
+        urllib.request.urlretrieve(url, target_path, reporthook=_reporthook)
+        print(f"\n[OK] Corpus descargado exitosamente en: {target_path} ({target_path.stat().st_size / (1024*1024):.1f} MB)\n")
+    except Exception as exc:
+        if target_path.exists():
+            target_path.unlink()
+        raise RuntimeError(
+            f"No se pudo descargar automáticamente el corpus '{corpus_name}' desde {url}: {exc}\n"
+            f"Por favor coloca manualmente el archivo en: {target_path}"
+        ) from exc
+
+    return target_path
+
+
 def load_corpus(
     source: str = "synthetic",
     max_docs: int = 10000,
@@ -94,8 +150,7 @@ def load_corpus(
 
     elif source in ("spanish", "espanol", "noticias"):
         csv_path = CORPUS_DIR / "data_larazon_publico_v2.csv"
-        if not csv_path.exists():
-            raise FileNotFoundError(f"Spanish news dataset not found at {csv_path}.")
+        ensure_corpus_downloaded("spanish", csv_path)
 
         raw_texts: list[str] = []
         with open(csv_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -120,10 +175,11 @@ def load_corpus(
     elif source in ("20news", "english", "newsgroups"):
         csv_path = CORPUS_DIR / "train_20newsgroups.csv"
         if not csv_path.exists():
-            csv_path = CORPUS_DIR / "20_newsgroups.csv"
-
-        if not csv_path.exists():
-            raise FileNotFoundError(f"20 Newsgroups dataset not found in {CORPUS_DIR}.")
+            fallback = CORPUS_DIR / "20_newsgroups.csv"
+            if fallback.exists() and fallback.stat().st_size > 0:
+                csv_path = fallback
+            else:
+                ensure_corpus_downloaded("20news", csv_path)
 
         raw_texts = []
         with open(csv_path, "r", encoding="utf-8", errors="ignore") as f:
