@@ -10,15 +10,35 @@ from common.record import Record
 from query.executor.plan_node import PlanNode
 
 
+class _Reversed:
+    """Inverts the ordering of a sort key so heapq (min-heap) and list.sort
+    yield descending order for that column, for any comparable type."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return self.value == other.value
+
+    def __lt__(self, other):
+        return other.value < self.value
+
+
 class Sort(PlanNode):
     """
     Sorts child's output externally. ``memory_records`` is the maximum
     number of records held while generating one initial run.
     """
 
-    def __init__(self, child: PlanNode, columns: list, schema, memory_records: int = 256):
+    def __init__(self, child: PlanNode, columns: list, schema, memory_records: int = 256,
+                 descending: list = None):
         if memory_records <= 0:
             raise ValueError("memory_records debe ser mayor que 0")
+        self.descending = list(descending) if descending else [False] * len(columns)
+        if len(self.descending) != len(columns):
+            raise ValueError("descending debe tener una entrada por columna")
         self.child = child
         self.columns = columns
         self.schema = schema
@@ -86,10 +106,11 @@ class Sort(PlanNode):
             self._temp_dir = None
 
     def _sort_key(self, record: Record):
-        return tuple(
-            (record[index].data is not None, record[index].data)
-            for index in self._indices
-        )
+        parts = []
+        for index, desc in zip(self._indices, self.descending):
+            item = (record[index].data is not None, record[index].data)
+            parts.append(_Reversed(item) if desc else item)
+        return tuple(parts)
 
     def children(self) -> list:
         return [self.child]
@@ -98,7 +119,14 @@ class Sort(PlanNode):
         (self.child,) = new_children
 
     def describe_self(self) -> dict:
-        return {"node": "Sort", "order_by": self.columns, "strategy": "external_sort_k_way_merge"}
+        return {
+            "node": "Sort",
+            "order_by": [
+                f"{name} {'DESC' if desc else 'ASC'}"
+                for name, desc in zip(self.columns, self.descending)
+            ],
+            "strategy": "external_sort_k_way_merge",
+        }
 
     def _write_run(self, records: list[Record]):
         records.sort(key=self._sort_key)
