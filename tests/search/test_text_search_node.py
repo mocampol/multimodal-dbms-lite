@@ -1,0 +1,188 @@
+import pytest
+
+from common.record import Record
+from common.schema import Column, Schema
+from common.value import DataType, Value
+from catalog.table_metadata import StorageType  # noqa: F401  (visitor import path)
+from query.executor.executor import run_plan
+from query.executor.plan_node import PlanNode
+from query.executor.processing.sort import Sort
+from query.executor.processing.text_search import TextSearch
+from query.parser.ast_nodes import MatchExp, ScoreSpec, SelectStm
+from query.parser.exceptions import SemanticError
+from query.parser.parser import Parser
+from query.parser.scanner import Scanner
+from query.parser.visitor import InMemoryCatalog, SemanticVisitor
+from search.scoring import bm25_scores
+from search.tokenizer import tokenize
+
+
+class RecordsNode(PlanNode):
+    def __init__(self, records):
+        self.records = records
+        self.index = 0
+
+    def open(self):
+        self.index = 0
+
+    def next(self):
+        if self.index >= len(self.records):
+            return None
+        self.index += 1
+        return self.records[self.index - 1]
+
+    def close(self):
+        pass
+
+
+DOCS = [
+    (1, "introduccion a las bases de datos"),
+    (2, "sistemas operativos"),
+    (3, "bases de datos relacionales bases de datos bases"),
+    (4, None),
+]
+
+
+def make_schema():
+    return Schema("docs", [
+        Column("id", DataType.INTEGER, is_primary_key=True),
+        Column("contenido", DataType.TEXT),
+    ])
+
+
+def make_records():
+    return [
+        Record([Value(DataType.INTEGER, i), Value(DataType.TEXT, t)])
+        for i, t in DOCS
+    ]
+
+
+def out_schema(schema):
+    return Schema("docs", list(schema.columns) + [
+        Column("relevancia", DataType.DOUBLE_PRECISION, nullable=False)
+    ])
+
+
+def test_tokenizer_normalizes_case_and_accents():
+    assert tokenize("Introducción, a las BASES_de-datos!") == [
+        "introduccion", "a", "las", "bases", "de", "datos"
+    ]
+    assert tokenize(None) == []
+
+
+def test_bm25_is_numeric_nonnegative_and_rewards_term_frequency():
+    docs = [tokenize(t) for _, t in DOCS]
+    scores = bm25_scores(docs, tokenize("bases datos"))
+    assert all(isinstance(s, float) and s >= 0 for s in scores)
+    assert scores[2] > scores[0] > 0
+    assert scores[1] == 0.0 and scores[3] == 0.0
+
+
+def test_text_search_filters_and_appends_score():
+    schema = make_schema()
+    node = TextSearch(
+        RecordsNode(make_records()), schema, out_schema(schema),
+        match=("contenido", "bases datos"),
+        score=("contenido", "bases datos", "relevancia"),
+    )
+    rows = list(run_plan(node))
+    assert [r[0].data for r in rows] == [1, 3]
+    assert all(len(r) == 3 and r[2].data_type == DataType.DOUBLE_PRECISION for r in rows)
+
+
+def test_score_without_match_keeps_every_document():
+    schema = make_schema()
+    node = TextSearch(
+        RecordsNode(make_records()), schema, out_schema(schema),
+        score=("contenido", "bases", "relevancia"),
+    )
+    rows = list(run_plan(node))
+    assert [r[0].data for r in rows] == [1, 2, 3, 4]
+    assert rows[1][2].data == 0.0
+
+
+def test_rank_then_limit_uses_real_score():
+    from query.executor.processing.limit import Limit  # may be the real module in the repo
+    schema = make_schema()
+    full = out_schema(schema)
+    node = TextSearch(
+        RecordsNode(make_records()), schema, full,
+        match=("contenido", "bases datos"),
+        score=("contenido", "bases datos", "relevancia"),
+    )
+    node = Sort(node, ["relevancia"], full, descending=[True])
+    node = Limit(node, 1)
+    rows = list(run_plan(node))
+    assert [r[0].data for r in rows] == [3]  # best doc, not first-inserted
+
+
+def test_sort_descending_with_nulls_and_runs():
+    schema = Schema("t", [Column("v", DataType.INTEGER, nullable=True)])
+    records = [Record([Value(DataType.INTEGER, v)]) for v in [3, None, 1, 2]]
+    node = Sort(RecordsNode(records), ["v"], schema, memory_records=2, descending=[True])
+    assert [r[0].data for r in run_plan(node)] == [3, 2, 1, None]
+
+
+def test_sort_descending_strings():
+    schema = Schema("t", [Column("s", DataType.TEXT)])
+    records = [Record([Value(DataType.TEXT, v)]) for v in ["b", "c", "a"]]
+    node = Sort(RecordsNode(records), ["s"], schema, memory_records=2, descending=[True])
+    assert [r[0].data for r in run_plan(node)] == ["c", "b", "a"]
+
+
+def parse(sql):
+    return Parser(Scanner(sql)).parse_sql_statements()[0]
+
+
+QUERY_STAR = (
+    "SELECT *, SCORE(contenido, 'bases datos') AS relevancia FROM docs "
+    "WHERE contenido MATCH 'bases datos' ORDER BY relevancia DESC LIMIT 5;"
+)
+
+
+def test_parser_builds_score_match_and_desc():
+    stm = parse(QUERY_STAR)
+    assert isinstance(stm, SelectStm)
+    assert stm.columns[0] == "*" and isinstance(stm.columns[1], ScoreSpec)
+    assert stm.columns[1].alias == "relevancia"
+    assert isinstance(stm.where_cond, MatchExp)
+    assert stm.order_by.columns == ["relevancia"] and stm.order_by.descending == [True]
+    assert stm.limit.value == 5
+
+
+def test_parser_alias_without_as_and_default_alias():
+    assert parse("SELECT id, SCORE(contenido, 'x') rel FROM docs;").columns[1].alias == "rel"
+    assert parse("SELECT id, SCORE(contenido, 'x') FROM docs;").columns[1].alias == "score"
+
+
+def make_catalog():
+    catalog = InMemoryCatalog()
+    catalog.define_table(make_schema())
+    return catalog
+
+
+def test_semantic_accepts_both_query_shapes():
+    for sql in (
+        QUERY_STAR,
+        "SELECT id, SCORE(contenido, 'bases') AS relevancia FROM docs "
+        "WHERE contenido MATCH 'bases' ORDER BY relevancia DESC LIMIT 3;",
+    ):
+        SemanticVisitor(make_catalog()).check(parse(sql))
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT *, SCORE(id, 'x') AS r FROM docs;",                       # no es texto
+    "SELECT *, SCORE(contenido, 'x') AS id FROM docs;",               # alias choca
+    "SELECT *, SCORE(contenido, '...') AS r FROM docs;",              # sin términos
+    "SELECT *, id FROM docs;",                                        # extra tras *
+    "DELETE FROM docs WHERE contenido MATCH 'x';",                    # MATCH en DELETE
+    "SELECT id FROM docs WHERE contenido MATCH 'x' ORDER BY nope;",   # columna inexistente
+])
+def test_semantic_rejects_invalid(sql):
+    with pytest.raises(SemanticError):
+        SemanticVisitor(make_catalog()).check(parse(sql))
+
+
+def test_plain_queries_still_parse_without_direction():
+    stm = parse("SELECT * FROM docs ORDER BY id, contenido;")
+    assert stm.order_by.descending == [False, False]
