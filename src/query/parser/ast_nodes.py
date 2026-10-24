@@ -33,6 +33,8 @@ class IndexType(Enum):
     BTREE = auto()
     HASH = auto()
     RTREE = auto()
+    GIN = auto()
+    SPIMI = auto()
 
 class StorageKind(Enum):
     HEAP = auto()
@@ -127,6 +129,10 @@ class Visitor(ABC):
 
     @abstractmethod
     def visit_create_index_stm(self, stm: "CreateIndexStm"):
+        ...
+
+    @abstractmethod
+    def visit_drop_index_stm(self, stm: "DropIndexStm"):
         ...
 
     @abstractmethod
@@ -663,3 +669,18 @@ class CreateIndexStm(Stm):
             f"CREATE INDEX {self.index_name} ON {self.table} "
             f"({self.column}) USING {self.index_type.name}"
         )
+
+
+class DropIndexStm(Stm):
+    """<DropIndexStmt> ::= DROP_INDEX [IF_EXISTS] ID"""
+
+    def __init__(self, index_name: str, if_exists: bool = False):
+        self.index_name = index_name
+        self.if_exists = if_exists
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_drop_index_stm(self)
+
+    def __repr__(self):
+        if_ex = " IF EXISTS" if self.if_exists else ""
+        return f"DROP INDEX{if_ex} {self.index_name}"

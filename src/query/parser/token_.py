@@ -39,6 +39,9 @@ class TokenType(Enum):
     CREATE_TABLE = auto()
     CREATE_INDEX = auto()
     DROP_TABLE = auto()
+    DROP_INDEX = auto()
+    IF = auto()
+    EXISTS = auto()
     ON = auto()
     USING = auto()
 
@@ -74,6 +77,8 @@ class TokenType(Enum):
     BTREE = auto()
     HASH = auto()
     RTREE = auto()
+    GIN = auto()
+    SPIMI = auto()
     HEAP = auto()
     SEQUENTIAL = auto()
 
@@ -151,8 +156,13 @@ _TYPE_NAMES = {
     TokenType.BTREE: "'BTREE'",
     TokenType.HASH: "'HASH'",
     TokenType.RTREE: "'RTREE'",
+    TokenType.GIN: "'GIN'",
+    TokenType.SPIMI: "'SPIMI'",
     TokenType.HEAP: "'HEAP'",
     TokenType.SEQUENTIAL: "'SEQUENTIAL'",
+    TokenType.DROP_INDEX: "'DROP INDEX'",
+    TokenType.IF: "'IF'",
+    TokenType.EXISTS: "'EXISTS'",
 }
 
 

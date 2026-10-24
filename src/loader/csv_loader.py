@@ -108,10 +108,10 @@ def _insert_one_record(catalog, manager, table_name: str, record: Record) -> Non
             raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{table_name}'")
 
         rid = storage.insert(record)
-        catalog.register_insert(table_name, record, rid)
-        catalog.register_insert_uniques(table_name, record)
         manager.log_data_change("INSERT", table_name, rid, None, record)
         manager.add_undo(lambda: undo_insert(manager, catalog, table_name, storage, rid))
+        catalog.register_insert(table_name, record, rid)
+        catalog.register_insert_uniques(table_name, record)
     # the table was just created by this import, so nobody else can hold this lock
     manager.lock(rid_resource(table_name, rid), LockMode.EXCLUSIVE)
 
