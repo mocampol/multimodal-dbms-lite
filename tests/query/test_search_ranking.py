@@ -106,6 +106,34 @@ def test_explain_shows_text_search_node(tmp_path):
     assert "TextSearch" in text and "Sort" in text and "Limit" in text
 
 
+def test_match_function_orders_by_relevance_desc_then_limits(tmp_path):
+    catalog = seed_catalog(tmp_path)
+
+    rows = execute(
+        "SELECT id, SCORE() AS relevancia FROM docs "
+        "WHERE MATCH(contenido, 'bases datos') USING BM25 "
+        "ORDER BY relevancia DESC LIMIT 1;",
+        catalog,
+    )
+
+    assert values(rows) == [[3, rows[0][1].data]]   # best doc, inserted last
+    assert rows[0][1].data > 0
+
+
+def test_match_function_orders_by_relevance_asc(tmp_path):
+    catalog = seed_catalog(tmp_path)
+
+    rows = execute(
+        "SELECT id, SCORE() AS relevancia FROM docs "
+        "WHERE MATCH(contenido, 'bases datos') ORDER BY relevancia ASC LIMIT 5;",
+        catalog,
+    )
+
+    scores = [row[1].data for row in rows]
+    assert [row[0].data for row in rows] == [1, 3]
+    assert scores == sorted(scores)
+
+
 @pytest.mark.parametrize("sql", [
     "SELECT *, SCORE(id, 'x') AS r FROM docs;",
     "SELECT *, SCORE(contenido, 'x') AS titulo FROM docs;",

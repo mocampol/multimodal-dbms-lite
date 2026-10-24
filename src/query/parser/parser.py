@@ -41,6 +41,7 @@ from query.parser.ast_nodes import (
     StorageKind,
     MatchExp,
     ScoreSpec,
+    RankingAlgorithm,
 )
 
 
@@ -88,6 +89,11 @@ _INDEX_TYPE_MAP = {
 _STORAGE_TYPE_MAP = {
     TokenType.HEAP: StorageKind.HEAP,
     TokenType.SEQUENTIAL: StorageKind.SEQUENTIAL,
+}
+
+_RANKING_MAP = {
+    TokenType.BM25: RankingAlgorithm.BM25,
+    TokenType.TF_IDF: RankingAlgorithm.TF_IDF,
 }
 
 
@@ -228,6 +234,13 @@ class Parser:
         if self.check(TokenType.WHERE):
             where_cond = self.parse_where_clause()
 
+        # SCORE() without arguments ranks with the MATCH of this same SELECT;
+        # an unbound SCORE() (no MATCH) is left for the semantic visitor
+        if isinstance(where_cond, MatchExp):
+            for item in columns:
+                if isinstance(item, ScoreSpec) and not item.is_bound:
+                    item.bind(where_cond)
+
         order_by, group_by = self.parse_group_or_order()
         limit = self.parse_limit_clause() if self.check(TokenType.LIMIT) else None
 
@@ -273,11 +286,15 @@ class Parser:
         return self.check(TokenType.ID) and self.current.text.upper() == word
 
     def parse_score_spec(self) -> ScoreSpec:
-        """SCORE ( <QualifiedName> COMA STRING ) [ [ AS ] ID ]  (SCORE and '(' already consumed)"""
-        column = self.parse_qualified_name()
-        self.expect(TokenType.COMA)
-        query = self.expect(TokenType.STRING).text
-        self.expect(TokenType.RPAREN)
+        """SCORE ( [ <QualifiedName> COMA STRING ] ) [ [ AS ] ID ]  (SCORE and '(' already consumed)"""
+        column = query = None
+        if not self.match(TokenType.RPAREN):
+            column = self.parse_qualified_name()
+            if not self.check(TokenType.COMA):
+                self.error("',' y la consulta (o SCORE() sin argumentos para usar la de MATCH)")
+            self.advance()
+            query = self.parse_search_query("SCORE")
+            self.expect(TokenType.RPAREN)
         alias = "score"
         if self._check_word("AS"):
             self.advance()
@@ -307,7 +324,9 @@ class Parser:
         return self.parse_condition()
 
     def parse_condition(self) -> Exp:
-        """<Condition> ::= distancia(...) <Operator> <Value> | dentro_de(...) | QualifiedName <Operator> <Value>"""
+        """<Condition> ::= distancia(...) <Operator> <Value> | dentro_de(...)
+                         | MATCH(...) [ USING <RankingAlgorithm> ]
+                         | QualifiedName MATCH STRING | QualifiedName <Operator> <Value>"""
         if self.check(TokenType.WITHIN):
             return self.parse_within_exp()
 
@@ -316,10 +335,12 @@ class Parser:
             left = self.parse_distance_exp()
         else:
             left = IdExp(self.parse_qualified_name())
-
-        if not spatial_comparison and self._check_word("MATCH"):
-            self.advance()
-            return MatchExp(left, self.expect(TokenType.STRING).text)
+            # MATCH is contextual: only MATCH followed by '(' is the function
+            if left.value.upper() == "MATCH" and self.match(TokenType.LPAREN):
+                return self.parse_match_function()
+            if self._check_word("MATCH"):
+                self.advance()
+                return MatchExp(left, self.parse_search_query("MATCH"))
 
         op = self.parse_operator()
         right = self.parse_value()
@@ -327,6 +348,32 @@ class Parser:
         if spatial_comparison:
             return SpatialPredicate(left, op, right)
         return BinaryExp(left, right, op)
+
+    def parse_match_function(self) -> MatchExp:
+        """MATCH ( <QualifiedName> COMA STRING ) [ USING <RankingAlgorithm> ]  (MATCH and '(' already consumed)"""
+        column = IdExp(self.parse_qualified_name())
+        if not self.check(TokenType.COMA):
+            self.error("',' y la consulta: MATCH(columna, 'consulta')")
+        self.advance()
+        query = self.parse_search_query("MATCH")
+        self.expect(TokenType.RPAREN)
+        ranking = RankingAlgorithm.BM25
+        if self.match(TokenType.USING):
+            ranking = self.parse_ranking_algorithm()
+        return MatchExp(column, query, ranking)
+
+    def parse_search_query(self, function_name: str) -> str:
+        """STRING holding the full-text query of MATCH / SCORE."""
+        if not self.check(TokenType.STRING):
+            self.error(f"la consulta de {function_name} entre comillas simples (ej. 'bases de datos')")
+        return self.expect(TokenType.STRING).text
+
+    def parse_ranking_algorithm(self) -> RankingAlgorithm:
+        """<RankingAlgorithm> ::= BM25 | TF_IDF"""
+        for ttype, ranking in _RANKING_MAP.items():
+            if self.match(ttype):
+                return ranking
+        self.error("un algoritmo de ranking ('BM25' o 'TF_IDF')")
 
     def parse_operator(self) -> BinaryOp:
         """<Operator> ::= EQ | NEQ | LE | LEQ | GT | GEQ"""

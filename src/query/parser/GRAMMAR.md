@@ -13,8 +13,9 @@
 
 <SelectStmt>         ::= SELECT <SelectList> FROM ID [ <JoinClause> ]
 						 [ <WhereClause> ] [ <GroupOrOrder> ] [ <LimitClause> ]
-<SelectList>         ::= MUL | <SelectItem> { COMA <SelectItem> }
-<SelectItem>         ::= <QualifiedName> | <Aggregate>
+<SelectList>         ::= MUL { COMA <ScoreItem> } | <SelectItem> { COMA <SelectItem> }
+<SelectItem>         ::= <QualifiedName> | <Aggregate> | <ScoreItem>
+<ScoreItem>          ::= SCORE LPAREN [ <QualifiedName> COMA STRING ] RPAREN [ [ AS ] ID ]
 <Aggregate>          ::= COUNT ( MUL | <QualifiedName> )
 					   | SUM ( <QualifiedName> )
 					   | AVG ( <QualifiedName> )
@@ -25,13 +26,18 @@
 <Condition>          ::= <QualifiedName> <Operator> <Value>
 					   | <DistanceExp> <Operator> <Value>
 					   | <WithinExp>
+					   | <MatchExp>
+<MatchExp>           ::= MATCH LPAREN <QualifiedName> COMA STRING RPAREN
+						 [ USING <RankingAlgorithm> ]
+					   | <QualifiedName> MATCH STRING
+<RankingAlgorithm>   ::= BM25 | TF_IDF
 <Operator>           ::= EQ | NEQ | LE | LEQ | GT | GEQ
 <Value>              ::= NUM | STRING | <QualifiedName> | NULL | <Point> | <Polygon>
 <QualifiedName>      ::= ID [ DOT ID ]
 <GroupOrOrder>       ::= { <GroupByClause> | <OrderByClause> }
 <GroupByClause>      ::= GROUP_BY <QualifiedName> { COMA <QualifiedName> }
 <OrderByClause>      ::= ORDER_BY <OrderByItem> { COMA <OrderByItem> }
-<OrderByItem>        ::= <QualifiedName> | <DistanceExp>
+<OrderByItem>        ::= ( <QualifiedName> | <DistanceExp> ) [ ASC | DESC ]
 <LimitClause>        ::= LIMIT NUM
 
 <InsertStmt>         ::= INSERT_INTO ID [ LPAREN <ColumnNameList> RPAREN ]

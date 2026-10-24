@@ -71,6 +71,7 @@ class Scanner:
                 "IF": TokenType.IF, "EXISTS": TokenType.EXISTS,
                 "HEAP": TokenType.HEAP,
                 "SEQUENTIAL": TokenType.SEQUENTIAL,
+                "BM25": TokenType.BM25, "TF_IDF": TokenType.TF_IDF,
             }
             if upper in words:
                 return Token(words[upper], lexeme)

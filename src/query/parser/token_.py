@@ -82,6 +82,9 @@ class TokenType(Enum):
     HEAP = auto()
     SEQUENTIAL = auto()
 
+    BM25 = auto()
+    TF_IDF = auto()
+
 
 _TYPE_NAMES = {
     TokenType.EXPLAIN: "'EXPLAIN'",
@@ -163,6 +166,9 @@ _TYPE_NAMES = {
     TokenType.DROP_INDEX: "'DROP INDEX'",
     TokenType.IF: "'IF'",
     TokenType.EXISTS: "'EXISTS'",
+
+    TokenType.BM25: "'BM25'",
+    TokenType.TF_IDF: "'TF_IDF'",
 }
 
 
