@@ -13,6 +13,10 @@ import pickle
 import tempfile
 from typing import Sequence
 
+# Okapi BM25 parameters fixed by the search contract (docs/text_search_policy.md §7)
+BM25_K1 = 1.2
+BM25_B = 0.75
+
 
 def rid_to_doc_id(page_id: int, slot: int) -> int:
     """Bijective O(1) mapping from RID(page_id, slot) to positive 32-bit doc_id."""
@@ -132,13 +136,15 @@ class InvertedIndex:
     def score_bm25(
         self,
         query_tokens: Sequence[str],
-        k1: float = 1.2,
-        b: float = 0.75,
-        top_k: int = 10,
+        k1: float = BM25_K1,
+        b: float = BM25_B,
+        top_k: int | None = 10,
     ) -> list[tuple[int, float]]:
         """
         Computes Okapi BM25 scores for candidates matching at least one query term.
-        Returns top_k tuples of (doc_id, score) sorted descending by score.
+        The sum runs over the distinct query terms (t in Q), so a repeated term
+        counts once. Returns top_k tuples of (doc_id, score) sorted descending by
+        score, or every candidate when top_k is None.
         """
         if not query_tokens or self.total_docs == 0:
             return []
@@ -146,8 +152,8 @@ class InvertedIndex:
         avgdl = self.avg_doc_length or 1.0
         scores: dict[int, float] = {}
 
-        # Disjunctive scoring across query terms
-        for term in query_tokens:
+        # Disjunctive scoring across distinct query terms
+        for term in dict.fromkeys(query_tokens):
             postings = self.get_postings(term)
             if not postings:
                 continue
@@ -163,7 +169,9 @@ class InvertedIndex:
 
         # Sort descending by score, tie-break by doc_id ascending
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
-        return ranked[:top_k]
+        if top_k is not None:
+            return ranked[:top_k]
+        return ranked
 
     def score_tfidf_cosine(
         self,
@@ -240,9 +248,9 @@ class InvertedIndex:
     def bm25_search(
         self,
         query_tokens: Sequence[str],
-        top_k: int = 10,
-        k1: float = 1.5,
-        b: float = 0.75,
+        top_k: int | None = 10,
+        k1: float = BM25_K1,
+        b: float = BM25_B,
     ) -> list[tuple[int, float]]:
         """Convenience alias for score_bm25."""
         return self.score_bm25(query_tokens, top_k=top_k, k1=k1, b=b)
