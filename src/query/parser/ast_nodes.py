@@ -86,6 +86,9 @@ class Visitor(ABC):
     def visit_binary_exp(self, exp: "BinaryExp"):
         ...
 
+    def visit_match_exp(self, exp: "MatchExp"):
+        raise NotImplementedError("Este visitor no soporta MATCH")
+
     @abstractmethod
     def visit_select_stm(self, stm: "SelectStm"):
         ...
@@ -327,6 +330,39 @@ class NullExp(Exp):
         return "NULL"
 
 
+class MatchExp(Exp):
+    """<Condition> ::= <QualifiedName> MATCH STRING  (full-text filter)"""
+
+    def __init__(self, left: "IdExp", query: str):
+        self.left = left
+        self.query = query
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_match_exp(self)
+
+    def __repr__(self):
+        return f"({self.left!r} MATCH {self.query!r})"
+
+
+class ScoreSpec:
+    """<SelectItem> ::= SCORE ( <QualifiedName> COMA STRING ) [ [ AS ] ID ]
+
+    Select-list item that exposes the BM25 relevance of `column` for
+    `query` as a numeric column named `alias`."""
+
+    def __init__(self, column: str, query: str, alias: str = "score"):
+        self.column = column
+        self.query = query
+        self.alias = alias
+
+    @property
+    def name(self) -> str:
+        return self.alias
+
+    def __repr__(self):
+        return f"SCORE({self.column}, {self.query!r}) AS {self.alias}"
+
+
 class AggregateSpec:
     def __init__(self, function: str, column: str = "*"):
         self.function = function.upper()
@@ -359,14 +395,20 @@ class BinaryExp(Exp):
 class OrderByClause:
     """ORDER_BY <OrderByItem> { COMA <OrderByItem> }"""
 
-    def __init__(self, columns: Optional[List[object]] = None):
+    def __init__(self, columns: Optional[List[object]] = None, descending: Optional[List[bool]] = None):
         self.columns: List[object] = columns if columns is not None else []
+        self.descending: List[bool] = (
+            list(descending) if descending is not None else [False] * len(self.columns)
+        )
 
     def accept(self, visitor: Visitor):
         return visitor.visit_order_by_clause(self)
 
     def __repr__(self):
-        items = [item if isinstance(item, str) else repr(item) for item in self.columns]
+        items = [
+            (item if isinstance(item, str) else repr(item)) + (" DESC" if desc else "")
+            for item, desc in zip(self.columns, self.descending)
+        ]
         return f"ORDER BY {', '.join(items)}"
 
 
@@ -483,7 +525,7 @@ class SelectStm(Stm):
 
     def __repr__(self):
         parts = [
-            f"SELECT {', '.join(column.name if isinstance(column, AggregateSpec) else column for column in self.columns)} FROM {self.table}"
+            f"SELECT {', '.join(column if isinstance(column, str) else repr(column) for column in self.columns)} FROM {self.table}"
         ]
         if self.where_cond is not None:
             parts.append(f"WHERE {self.where_cond!r}")

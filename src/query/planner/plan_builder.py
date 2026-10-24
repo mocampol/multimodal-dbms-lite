@@ -9,6 +9,7 @@ Sequential Scan.
 from query.parser.ast_nodes import (
     SelectStm, InsertStm, DeleteStm, UpdateStm, IdExp, BinaryExp,
     AggregateSpec, PointExp, NullExp, DistanceExp, SpatialPredicate, WithinExp,
+    MatchExp, ScoreSpec,
 )
 from common.value import DataType, Value
 from common.record import Record
@@ -29,6 +30,7 @@ from query.executor.processing.limit import Limit
 from query.executor.processing.projection import Projection
 from query.executor.processing.spatial_filter import SpatialFilter
 from query.executor.processing.sort import Sort
+from query.executor.processing.text_search import TextSearch
 from query.executor.aggregate.group_aggregate import GroupAggregate
 from query.executor.aggregate.hash_aggregate import HashAggregate
 from query.executor.join.hash_join import HashJoin
@@ -37,9 +39,14 @@ from query.executor.join.hash_join import HashJoin
 def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
     """
     Builds the physical plan for a SELECT statement:
-    source -> Filter -> Group/Aggregate -> Sort -> Projection.
+    source -> Filter -> [TextSearch] -> Group/Aggregate -> Sort -> Limit -> Projection.
+
+    TextSearch (MATCH filter + SCORE() column) sits right after the source,
+    so Sort ranks on the real score and Limit always cuts after ranking.
     """
     input_schema = catalog.get_schema(stm.table)
+    match_condition = stm.where_cond if isinstance(stm.where_cond, MatchExp) else None
+    score_spec = next((c for c in stm.columns if isinstance(c, ScoreSpec)), None)
 
     spatial_condition = isinstance(stm.where_cond, SpatialPredicate)
     distance_order = next(
@@ -126,8 +133,13 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
                     index, catalog.get_storage(stm.table), key,
                     lock_rid=table_lock_rid, latch=table_latch(catalog, stm.table),
                 )
-            if stm.where_cond is not None and indexed is None:
+            if stm.where_cond is not None and indexed is None and match_condition is None:
                 node = Filter(node, _qualify_condition(stm.where_cond, schema), schema)
+
+    if match_condition is not None or score_spec is not None:
+        if stm.join is not None:
+            raise ValueError("SCORE/MATCH no se admiten junto con JOIN")
+        node, schema = _text_search_node(node, schema, match_condition, score_spec)
 
     aggregate_items = [item for item in stm.columns if isinstance(item, AggregateSpec)]
     if aggregate_items:
@@ -151,9 +163,7 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             for item in physical_items
         ]
     else:
-        projection_columns = [
-            _resolve_column_name(schema, name) for name in stm.columns
-        ] if stm.columns != ["*"] else ["*"]
+        projection_columns = _projection_columns(schema, stm.columns)
         if stm.group_by is not None:
             group_columns = [_resolve_column_name(schema, name) for name in stm.group_by.columns]
             node = Sort(node, group_columns, schema)
@@ -169,12 +179,40 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             )
         else:
             order_columns = [_resolve_column_name(schema, name) for name in stm.order_by.columns]
-            node = Sort(node, order_columns, schema)
+            node = Sort(node, order_columns, schema, descending=stm.order_by.descending)
 
     if stm.limit is not None:
         node = Limit(node, stm.limit.value)
 
     return Projection(node, projection_columns, schema)
+
+
+def _text_search_node(node, schema, match, score):
+    """Wraps `node` in a TextSearch and returns it with the schema its
+    records now have (the original columns plus the SCORE alias)."""
+    match_args = None
+    if match is not None:
+        match_args = (_resolve_column_name(schema, match.left.value), match.query)
+    score_args = None
+    output_schema = schema
+    if score is not None:
+        score_args = (_resolve_column_name(schema, score.column), score.query, score.alias)
+        output_schema = Schema(
+            schema.table_name,
+            list(schema.columns) + [Column(score.alias, DataType.DOUBLE_PRECISION, nullable=False)],
+        )
+    return TextSearch(node, schema, output_schema, match=match_args, score=score_args), output_schema
+
+
+def _projection_columns(schema, columns):
+    """Column names for Projection. `*` (optionally followed by SCORE) keeps
+    every column of `schema`, which already includes the SCORE alias."""
+    if "*" in columns:
+        return ["*"]
+    return [
+        item.alias if isinstance(item, ScoreSpec) else _resolve_column_name(schema, item)
+        for item in columns
+    ]
 
 
 def _spatial_geometry(predicate):

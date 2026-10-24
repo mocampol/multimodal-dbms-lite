@@ -38,6 +38,8 @@ from query.parser.ast_nodes import (
     DropTableStm,
     IndexType,
     StorageKind,
+    MatchExp,
+    ScoreSpec,
 )
 
 
@@ -229,7 +231,12 @@ class Parser:
     def parse_select_list(self) -> List[str]:
         """<SelectList> ::= MUL | ID { COMA ID }"""
         if self.match(TokenType.MUL):
-            return ["*"]
+            columns = ["*"]
+            # SELECT *, SCORE(...) AS alias: extras after '*' are validated
+            # semantically (only SCORE is accepted there)
+            while self.match(TokenType.COMA):
+                columns.append(self.parse_select_item())
+            return columns
 
         columns = [self.parse_select_item()]
         while self.match(TokenType.COMA):
@@ -243,6 +250,8 @@ class Parser:
                 name += "." + self.expect(TokenType.ID).text
             return name
         function = name.upper()
+        if function == "SCORE":
+            return self.parse_score_spec()
         if function not in {"COUNT", "SUM", "AVG", "MIN", "MAX"}:
             self.error("una función agregada válida")
         if self.match(TokenType.MUL):
@@ -251,6 +260,35 @@ class Parser:
             column = self.parse_qualified_name()
         self.expect(TokenType.RPAREN)
         return AggregateSpec(function, column)
+
+    def _check_word(self, word: str) -> bool:
+        """True if the current token is the identifier `word` (case-insensitive).
+        MATCH / AS / ASC / DESC are contextual words, not reserved tokens,
+        so existing columns with those names keep working."""
+        return self.check(TokenType.ID) and self.current.text.upper() == word
+
+    def parse_score_spec(self) -> ScoreSpec:
+        """SCORE ( <QualifiedName> COMA STRING ) [ [ AS ] ID ]  (SCORE and '(' already consumed)"""
+        column = self.parse_qualified_name()
+        self.expect(TokenType.COMA)
+        query = self.expect(TokenType.STRING).text
+        self.expect(TokenType.RPAREN)
+        alias = "score"
+        if self._check_word("AS"):
+            self.advance()
+            alias = self.expect(TokenType.ID).text
+        elif self.check(TokenType.ID):
+            alias = self.expect(TokenType.ID).text
+        return ScoreSpec(column, query, alias)
+
+    def _parse_direction(self) -> bool:
+        """[ ASC | DESC ] -> True when DESC."""
+        if self._check_word("DESC"):
+            self.advance()
+            return True
+        if self._check_word("ASC"):
+            self.advance()
+        return False
 
     def parse_qualified_name(self) -> str:
         name = self.expect(TokenType.ID).text
@@ -273,6 +311,10 @@ class Parser:
             left = self.parse_distance_exp()
         else:
             left = IdExp(self.parse_qualified_name())
+
+        if not spatial_comparison and self._check_word("MATCH"):
+            self.advance()
+            return MatchExp(left, self.expect(TokenType.STRING).text)
 
         op = self.parse_operator()
         right = self.parse_value()
@@ -385,9 +427,11 @@ class Parser:
         while self.check(TokenType.ORDER_BY) or self.check(TokenType.GROUP_BY):
             if self.match(TokenType.ORDER_BY):
                 columns = [self.parse_order_by_item()]
+                descending = [self._parse_direction()]
                 while self.match(TokenType.COMA):
                     columns.append(self.parse_order_by_item())
-                order_by = OrderByClause(columns)
+                    descending.append(self._parse_direction())
+                order_by = OrderByClause(columns, descending)
             else:
                 self.expect(TokenType.GROUP_BY)
                 columns = [self.parse_qualified_name()]
