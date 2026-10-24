@@ -3,6 +3,12 @@ name = "multimodal-dbms-lite"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
+    "hnswlib>=0.8.0",
+    "librosa>=1.0.0",
+    "opencv-python-headless>=5.0.0.93",
+    "pillow>=13.0.0",
+    "scikit-learn>=1.9.1",
+    "soundfile>=0.14.0",
     "uvicorn>=0.54.0",
 ]
 
