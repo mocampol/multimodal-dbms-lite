@@ -17,7 +17,7 @@ from index.btree.btree import BTree
 from index.extendible_hash.extendible_hash_index import ExtendibleHashIndex
 from index.btree.clustered_index import ClusteredIndex
 from index.rtree import RTree
-from index.text import InvertedIndex, SPIMIIndexer, TextProcessor, rid_to_doc_id
+from index.text import InvertedIndex, SPIMIIndexer, default_text_processor, rid_to_doc_id
 from spatial.geometry import Point2D
 
 from .table_metadata import TableMetadata, StorageType, IndexType
@@ -105,7 +105,7 @@ class Catalog:
         self._sys_latch = threading.RLock()
         self._table_latches: dict[str, threading.RLock] = {}
         self._table_latches_mutex = threading.Lock()
-        self.text_processor = TextProcessor(stopwords="spanish")
+        self.text_processor = default_text_processor()
 
         self._load()
 
@@ -610,6 +610,16 @@ class Catalog:
     def get_physical_index(self, table_name: str, column_name: str):
         for entry in self.indexes.get(table_name, []):
             if entry["column_name"] == column_name:
+                return self._physical_indexes.get(entry["index_id"])
+        return None
+
+    def get_text_index(self, table_name: str, column_name: str):
+        """The inverted index (GIN/SPIMI) over table_name.column_name, or None.
+        Unlike get_physical_index, it skips other index types on the column."""
+        for entry in self.indexes.get(table_name, []):
+            if entry["column_name"] == column_name and entry["index_type"] in (
+                IndexType.GIN.value, IndexType.SPIMI.value,
+            ):
                 return self._physical_indexes.get(entry["index_id"])
         return None
 

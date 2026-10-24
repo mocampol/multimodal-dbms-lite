@@ -4,6 +4,7 @@ from .text_processor import (
     ENGLISH_STOPWORDS,
     SPANISH_STOPWORDS,
     TextProcessor,
+    default_text_processor,
     load_stopwords,
 )
 from .inverted_index import InvertedIndex, doc_id_to_rid, rid_to_doc_id
@@ -11,6 +12,7 @@ from .spimi import SPIMIIndexer, SPIMIStats
 
 __all__ = [
     "TextProcessor",
+    "default_text_processor",
     "SPANISH_STOPWORDS",
     "ENGLISH_STOPWORDS",
     "load_stopwords",
