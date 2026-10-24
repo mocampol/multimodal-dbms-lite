@@ -17,6 +17,8 @@ class IndexType(Enum):
     RTREE = "rtree"
     GIN = "gin"
     SPIMI = "spimi"
+    IVF = "ivf"
+    HNSW = "hnsw"
 
 
 class TableMetadata:

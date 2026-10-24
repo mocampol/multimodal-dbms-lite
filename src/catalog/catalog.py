@@ -18,6 +18,8 @@ from index.extendible_hash.extendible_hash_index import ExtendibleHashIndex
 from index.btree.clustered_index import ClusteredIndex
 from index.rtree import RTree
 from index.text import InvertedIndex, SPIMIIndexer, TextProcessor, rid_to_doc_id
+from index.vector import IVFIndex, HNSWIndex
+from index.multimedia import ExtractFeatures
 from spatial.geometry import Point2D
 
 from .table_metadata import TableMetadata, StorageType, IndexType
@@ -504,6 +506,11 @@ class Catalog:
                 index_type, index, self._table_storage[table_name], tm, column_name
             )
             root_page_id = 0
+        elif index_type in (IndexType.IVF, IndexType.HNSW):
+            index = self._build_vector_index(
+                index_type, index, self._table_storage[table_name], tm, column_name
+            )
+            root_page_id = 0
         else:
             for rid, record in self._scan_with_rids(self._table_storage[table_name]):
                 key = record[tm.schema.column_index(column_name)]
@@ -554,6 +561,21 @@ class Catalog:
         index.save()
         return index
 
+    def _build_vector_index(self, index_type, index, storage, table_metadata, column_name):
+        column_index = table_metadata.schema.column_index(column_name)
+        extractor = ExtractFeatures(k=index.dim)
+        vectors = []
+        rids = []
+        for rid, record in self._scan_with_rids(storage):
+            val = record[column_index].data
+            if val is not None:
+                fv = extractor.extract(val)
+                vectors.append(fv.data)
+                rids.append(rid)
+        index.build(vectors, rids)
+        index.save(index._storage_path)
+        return index
+
     def _create_index(self, index_type, table_name, column_name, index_id, key_type):
         manager = self._index_buffer_factory(table_name, column_name, index_id)
         if manager.file_manager.page_count() > 0:
@@ -566,6 +588,14 @@ class Catalog:
             return RTree(manager)
         if index_type in (IndexType.GIN, IndexType.SPIMI):
             return InvertedIndex(file_path=manager.file_manager.file_path, manager=manager)
+        if index_type == IndexType.IVF:
+            idx = IVFIndex(dim=64, metric="cosine")
+            idx._storage_path = manager.file_manager.file_path
+            return idx
+        if index_type == IndexType.HNSW:
+            idx = HNSWIndex(dim=64, metric="cosine")
+            idx._storage_path = manager.file_manager.file_path
+            return idx
         raise ValueError(f"Tipo de índice no soportado: {index_type}")
 
     def _open_index(self, table_name, column_name, index_type, root_page_id, index_id):
@@ -579,6 +609,22 @@ class Catalog:
             return RTree(manager, root_page_id=root_page_id)
         if index_type in (IndexType.GIN.value, IndexType.SPIMI.value):
             return InvertedIndex.load(manager.file_manager.file_path, manager=manager)
+        if index_type == IndexType.IVF.value:
+            fpath = manager.file_manager.file_path
+            if os.path.exists(fpath):
+                idx = IVFIndex.load(fpath)
+            else:
+                idx = IVFIndex(dim=64, metric="cosine")
+            idx._storage_path = fpath
+            return idx
+        if index_type == IndexType.HNSW.value:
+            fpath = manager.file_manager.file_path
+            if os.path.exists(fpath):
+                idx = HNSWIndex.load(fpath)
+            else:
+                idx = HNSWIndex(dim=64, metric="cosine")
+            idx._storage_path = fpath
+            return idx
         raise ValueError(f"Tipo de índice no soportado: {index_type}")
 
     @staticmethod
