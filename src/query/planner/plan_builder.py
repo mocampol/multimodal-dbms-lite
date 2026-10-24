@@ -149,7 +149,9 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
     if (match_condition is not None or score_spec is not None) and text_scan is None:
         if stm.join is not None:
             raise ValueError("SCORE/MATCH no se admiten junto con JOIN")
-        node, schema = _text_search_node(node, schema, match_condition, score_spec)
+        node, schema = _text_search_node(
+            node, schema, match_condition, score_spec, getattr(catalog, "text_processor", None),
+        )
 
     aggregate_items = [item for item in stm.columns if isinstance(item, AggregateSpec)]
     if aggregate_items:
@@ -235,7 +237,7 @@ def _text_index_scan(catalog, table_name, schema, match, score, lock_rid):
     return node, output_schema
 
 
-def _text_search_node(node, schema, match, score):
+def _text_search_node(node, schema, match, score, processor):
     """Wraps `node` in a TextSearch and returns it with the schema its
     records now have (the original columns plus the SCORE alias)."""
     match_args = None
@@ -246,7 +248,10 @@ def _text_search_node(node, schema, match, score):
     if score is not None:
         score_args = (_resolve_column_name(schema, score.column), score.query, score.alias)
         output_schema = _with_score_column(schema, score.alias)
-    return TextSearch(node, schema, output_schema, match=match_args, score=score_args), output_schema
+    text_search = TextSearch(
+        node, schema, output_schema, match=match_args, score=score_args, processor=processor,
+    )
+    return text_search, output_schema
 
 
 def _with_score_column(schema, alias):

@@ -13,8 +13,7 @@ from query.parser.exceptions import SemanticError
 from query.parser.parser import Parser
 from query.parser.scanner import Scanner
 from query.parser.visitor import InMemoryCatalog, SemanticVisitor
-from search.scoring import bm25_scores
-from search.tokenizer import tokenize
+from index.text import InvertedIndex, default_text_processor
 
 
 class RecordsNode(PlanNode):
@@ -63,19 +62,30 @@ def out_schema(schema):
     ])
 
 
-def test_tokenizer_normalizes_case_and_accents():
-    assert tokenize("Introducción, a las BASES_de-datos!") == [
-        "introduccion", "a", "las", "bases", "de", "datos"
-    ]
-    assert tokenize(None) == []
+def test_processor_normalizes_case_accents_and_drops_stopwords():
+    process = default_text_processor().process
+    assert process("Introducción, a las BASES_de-datos!") == ["introduccion", "bases", "datos"]
+    assert process(None) == []
 
 
-def test_bm25_is_numeric_nonnegative_and_rewards_term_frequency():
-    docs = [tokenize(t) for _, t in DOCS]
-    scores = bm25_scores(docs, tokenize("bases datos"))
-    assert all(isinstance(s, float) and s >= 0 for s in scores)
-    assert scores[2] > scores[0] > 0
-    assert scores[1] == 0.0 and scores[3] == 0.0
+def test_scores_are_those_of_an_inverted_index_over_the_same_rows():
+    schema = make_schema()
+    node = TextSearch(
+        RecordsNode(make_records()), schema, out_schema(schema),
+        score=("contenido", "bases datos", "relevancia"),
+    )
+    scores = {r[0].data: r[2].data for r in run_plan(node)}
+
+    process = default_text_processor().process
+    index = InvertedIndex()
+    for doc_id, text in DOCS:
+        if text is not None:  # NULL is not a document, as in the catalog
+            index.add_document(doc_id, process(text))
+    expected = dict(index.score_bm25(process("bases datos"), top_k=None))
+
+    assert scores == {doc_id: expected.get(doc_id, 0.0) for doc_id, _ in DOCS}
+    assert scores[3] > scores[1] > 0
+    assert scores[2] == 0.0 and scores[4] == 0.0
 
 
 def test_text_search_filters_and_appends_score():
@@ -174,6 +184,7 @@ def test_semantic_accepts_both_query_shapes():
     "SELECT *, SCORE(id, 'x') AS r FROM docs;",                       # no es texto
     "SELECT *, SCORE(contenido, 'x') AS id FROM docs;",               # alias choca
     "SELECT *, SCORE(contenido, '...') AS r FROM docs;",              # sin términos
+    "SELECT id FROM docs WHERE MATCH(contenido, 'de la');",           # solo stopwords
     "SELECT *, id FROM docs;",                                        # extra tras *
     "DELETE FROM docs WHERE contenido MATCH 'x';",                    # MATCH en DELETE
     "SELECT id FROM docs WHERE contenido MATCH 'x' ORDER BY nope;",   # columna inexistente

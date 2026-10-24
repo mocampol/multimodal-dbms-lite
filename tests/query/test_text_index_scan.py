@@ -129,6 +129,21 @@ def test_score_over_another_query_falls_back_to_text_search(catalog):
     assert "TextSearch" in plan and "TextIndexScan" not in plan
 
 
+@pytest.mark.parametrize("sql", [
+    MATCH_AND_SCORE + ";",
+    "SELECT id, SCORE(contenido, 'bases relacionales') AS relevancia FROM docs ORDER BY id;",
+])
+def test_with_and_without_index_give_the_same_scores(catalog, sql):
+    with_index = execute(sql, catalog)
+    execute("DROP INDEX idx_docs_contenido;", catalog)
+    assert "TextSearch" in explain(catalog, sql)
+    without_index = execute(sql, catalog)
+    assert [row[0].data for row in without_index] == [row[0].data for row in with_index]
+    assert {row[0].data: row[1].data for row in without_index} == pytest.approx(
+        {row[0].data: row[1].data for row in with_index}
+    )
+
+
 def test_column_without_text_index_falls_back_to_text_search(tmp_path):
     catalog = make_catalog(tmp_path)
     execute("CREATE TABLE notas (id INTEGER PRIMARY KEY, texto TEXT);", catalog)
