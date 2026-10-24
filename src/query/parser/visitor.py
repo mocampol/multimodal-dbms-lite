@@ -235,6 +235,12 @@ class SemanticVisitor(Visitor):
 
         aliases = set()
         for spec in scores:
+            if not spec.is_bound:
+                # the parser binds SCORE() only to a MATCH of the same SELECT
+                raise SemanticError(
+                    "SCORE() sin argumentos requiere un MATCH(columna, 'consulta') en el WHERE; "
+                    "sin MATCH usa SCORE(columna, 'consulta')"
+                )
             self._require_text_column(stm, spec.column, "SCORE")
             if not default_text_processor().process(spec.query):
                 raise SemanticError("SCORE requiere al menos un término de búsqueda")
