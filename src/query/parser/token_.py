@@ -85,6 +85,16 @@ class TokenType(Enum):
     BM25 = auto()
     TF_IDF = auto()
 
+    IVF = auto()
+    HNSW = auto()
+    SIMILAR_TO = auto()
+    SIMILARITY_SCORE = auto()
+    WITH = auto()
+    METRIC = auto()
+    EUCLIDEAN = auto()
+    DOT_PRODUCT = auto()
+    COSINE = auto()
+
 
 _TYPE_NAMES = {
     TokenType.EXPLAIN: "'EXPLAIN'",
@@ -169,6 +179,15 @@ _TYPE_NAMES = {
 
     TokenType.BM25: "'BM25'",
     TokenType.TF_IDF: "'TF_IDF'",
+    TokenType.IVF: "'IVF'",
+    TokenType.HNSW: "'HNSW'",
+    TokenType.SIMILAR_TO: "'SIMILAR_TO'",
+    TokenType.SIMILARITY_SCORE: "'SIMILARITY_SCORE'",
+    TokenType.WITH: "'WITH'",
+    TokenType.METRIC: "'METRIC'",
+    TokenType.EUCLIDEAN: "'EUCLIDEAN'",
+    TokenType.DOT_PRODUCT: "'DOT_PRODUCT'",
+    TokenType.COSINE: "'COSINE'",
 }
 
 

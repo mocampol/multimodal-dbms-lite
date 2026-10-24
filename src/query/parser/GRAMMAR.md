@@ -16,6 +16,7 @@
 <SelectList>         ::= MUL { COMA <ScoreItem> } | <SelectItem> { COMA <SelectItem> }
 <SelectItem>         ::= <QualifiedName> | <Aggregate> | <ScoreItem>
 <ScoreItem>          ::= SCORE LPAREN [ <QualifiedName> COMA STRING ] RPAREN [ [ AS ] ID ]
+					   | SIMILARITY_SCORE LPAREN RPAREN [ [ AS ] ID ]
 <Aggregate>          ::= COUNT ( MUL | <QualifiedName> )
 					   | SUM ( <QualifiedName> )
 					   | AVG ( <QualifiedName> )
@@ -27,10 +28,17 @@
 					   | <DistanceExp> <Operator> <Value>
 					   | <WithinExp>
 					   | <MatchExp>
+					   | <SimilarToExp>
 <MatchExp>           ::= MATCH LPAREN <QualifiedName> COMA STRING RPAREN
 						 [ USING <RankingAlgorithm> ]
 					   | <QualifiedName> MATCH STRING
 <RankingAlgorithm>   ::= BM25 | TF_IDF
+<SimilarToExp>       ::= SIMILAR_TO LPAREN [ <QualifiedName> COMA ] STRING COMA ID EQ NUM RPAREN
+						 [ USING <VectorIndexType> ] [ WITH METRIC EQ <VectorMetric> ]
+					   | <QualifiedName> SIMILAR_TO LPAREN STRING COMA ID EQ NUM RPAREN
+						 [ USING <VectorIndexType> ] [ WITH METRIC EQ <VectorMetric> ]
+<VectorIndexType>    ::= IVF | HNSW
+<VectorMetric>       ::= COSINE | EUCLIDEAN | DOT_PRODUCT
 <Operator>           ::= EQ | NEQ | LE | LEQ | GT | GEQ
 <Value>              ::= NUM | STRING | <QualifiedName> | NULL | <Point> | <Polygon>
 <QualifiedName>      ::= ID [ DOT ID ]

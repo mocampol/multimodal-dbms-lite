@@ -42,6 +42,10 @@ from query.parser.ast_nodes import (
     MatchExp,
     ScoreSpec,
     RankingAlgorithm,
+    SimilarToExp,
+    SimilarityScoreSpec,
+    VectorIndexKind,
+    VectorMetricKind,
 )
 
 
@@ -240,6 +244,10 @@ class Parser:
             for item in columns:
                 if isinstance(item, ScoreSpec) and not item.is_bound:
                     item.bind(where_cond)
+        if isinstance(where_cond, SimilarToExp):
+            for item in columns:
+                if isinstance(item, SimilarityScoreSpec) and not item.is_bound:
+                    item.bind(where_cond)
 
         order_by, group_by = self.parse_group_or_order()
         limit = self.parse_limit_clause() if self.check(TokenType.LIMIT) else None
@@ -262,7 +270,10 @@ class Parser:
         return columns
 
     def parse_select_item(self):
-        name = self.expect(TokenType.ID).text
+        if self.match(TokenType.SIMILARITY_SCORE):
+            name = "SIMILARITY_SCORE"
+        else:
+            name = self.expect(TokenType.ID).text
         if not self.match(TokenType.LPAREN):
             if self.match(TokenType.DOT):
                 name += "." + self.expect(TokenType.ID).text
@@ -270,6 +281,8 @@ class Parser:
         function = name.upper()
         if function == "SCORE":
             return self.parse_score_spec()
+        if function == "SIMILARITY_SCORE":
+            return self.parse_similarity_score_spec()
         if function not in {"COUNT", "SUM", "AVG", "MIN", "MAX"}:
             self.error("una función agregada válida")
         if self.match(TokenType.MUL):
@@ -303,6 +316,17 @@ class Parser:
             alias = self.expect(TokenType.ID).text
         return ScoreSpec(column, query, alias)
 
+    def parse_similarity_score_spec(self) -> SimilarityScoreSpec:
+        """SIMILARITY_SCORE ( ) [ [ AS ] ID ]  (SIMILARITY_SCORE and '(' already consumed)"""
+        self.expect(TokenType.RPAREN)
+        alias = "similarity_score"
+        if self._check_word("AS"):
+            self.advance()
+            alias = self.expect(TokenType.ID).text
+        elif self.check(TokenType.ID):
+            alias = self.expect(TokenType.ID).text
+        return SimilarityScoreSpec(alias=alias)
+
     def _parse_direction(self) -> bool:
         """[ ASC | DESC ] -> True when DESC."""
         if self._check_word("DESC"):
@@ -326,9 +350,14 @@ class Parser:
     def parse_condition(self) -> Exp:
         """<Condition> ::= distancia(...) <Operator> <Value> | dentro_de(...)
                          | MATCH(...) [ USING <RankingAlgorithm> ]
-                         | QualifiedName MATCH STRING | QualifiedName <Operator> <Value>"""
+                         | QualifiedName MATCH STRING | QualifiedName <Operator> <Value>
+                         | SIMILAR_TO(...) [ USING ... ] [ WITH METRIC=... ]"""
         if self.check(TokenType.WITHIN):
             return self.parse_within_exp()
+
+        if self.match(TokenType.SIMILAR_TO):
+            self.expect(TokenType.LPAREN)
+            return self.parse_similar_to_function()
 
         spatial_comparison = self.check(TokenType.DISTANCE)
         if spatial_comparison:
@@ -338,9 +367,13 @@ class Parser:
             # MATCH is contextual: only MATCH followed by '(' is the function
             if left.value.upper() == "MATCH" and self.match(TokenType.LPAREN):
                 return self.parse_match_function()
+            if left.value.upper() == "SIMILAR_TO" and self.match(TokenType.LPAREN):
+                return self.parse_similar_to_function()
             if self._check_word("MATCH"):
                 self.advance()
                 return MatchExp(left, self.parse_search_query("MATCH"))
+            if self.match(TokenType.SIMILAR_TO) or self._check_word("SIMILAR_TO"):
+                return self.parse_similar_to_function(left_id=left)
 
         op = self.parse_operator()
         right = self.parse_value()
@@ -361,6 +394,104 @@ class Parser:
         if self.match(TokenType.USING):
             ranking = self.parse_ranking_algorithm()
         return MatchExp(column, query, ranking)
+
+    def parse_similar_to_function(self, left_id: Optional[IdExp] = None) -> SimilarToExp:
+        """
+        SIMILAR_TO ( [ <QualifiedName> COMA ] STRING COMA ID EQ NUM ) [ USING ( IVF | HNSW ) ] [ WITH METRIC EQ ( COSINE | EUCLIDEAN | DOT_PRODUCT ) ]
+        """
+        if left_id is None:
+            # '(' was already consumed
+            if self.check(TokenType.STRING):
+                target = self.expect(TokenType.STRING).text
+                column = None
+            else:
+                col_name = self.parse_qualified_name()
+                column = IdExp(col_name)
+                if not self.check(TokenType.COMA):
+                    self.error("',' y la ruta u objeto en SIMILAR_TO")
+                self.advance()
+                target = self.expect(TokenType.STRING).text
+
+            if not self.check(TokenType.COMA):
+                self.error("',' y el parámetro 'k=N' en SIMILAR_TO")
+            self.advance()
+
+            if not (self.check(TokenType.ID) and self.current.text.lower() == "k"):
+                self.error("el parámetro 'k=N' en SIMILAR_TO")
+            self.advance()
+            self.expect(TokenType.EQ)
+            k_val = int(self.expect(TokenType.NUM).text)
+            if k_val <= 0:
+                self.error("k debe ser un entero positivo")
+            self.expect(TokenType.RPAREN)
+        else:
+            column = left_id
+            has_paren = self.match(TokenType.LPAREN)
+            target = self.expect(TokenType.STRING).text
+            if not self.check(TokenType.COMA):
+                self.error("',' y el parámetro 'k=N' en SIMILAR_TO")
+            self.advance()
+            if not (self.check(TokenType.ID) and self.current.text.lower() == "k"):
+                self.error("el parámetro 'k=N' en SIMILAR_TO")
+            self.advance()
+            self.expect(TokenType.EQ)
+            k_val = int(self.expect(TokenType.NUM).text)
+            if k_val <= 0:
+                self.error("k debe ser un entero positivo")
+            if has_paren:
+                self.expect(TokenType.RPAREN)
+
+        index_kind = VectorIndexKind.HNSW
+        if self.match(TokenType.USING) or self._check_word("USING"):
+            if self._check_word("USING"):
+                self.advance()
+            if self.match(TokenType.IVF) or self._check_word("IVF"):
+                if self._check_word("IVF"):
+                    self.advance()
+                index_kind = VectorIndexKind.IVF
+            elif self.match(TokenType.HNSW) or self._check_word("HNSW"):
+                if self._check_word("HNSW"):
+                    self.advance()
+                index_kind = VectorIndexKind.HNSW
+            else:
+                self.error("el tipo de índice para USING ('IVF' o 'HNSW')")
+
+        metric_kind = VectorMetricKind.COSINE
+        if self.match(TokenType.WITH) or self._check_word("WITH"):
+            if self._check_word("WITH"):
+                self.advance()
+            if self.match(TokenType.METRIC) or self._check_word("METRIC"):
+                if self._check_word("METRIC"):
+                    self.advance()
+            else:
+                self.error("la palabra clave METRIC después de WITH")
+            self.expect(TokenType.EQ)
+            if self.match(TokenType.COSINE) or self._check_word("COSINE"):
+                if self._check_word("COSINE"):
+                    self.advance()
+                metric_kind = VectorMetricKind.COSINE
+            elif self.match(TokenType.EUCLIDEAN) or self._check_word("EUCLIDEAN"):
+                if self._check_word("EUCLIDEAN"):
+                    self.advance()
+                metric_kind = VectorMetricKind.EUCLIDEAN
+            elif (
+                self.match(TokenType.DOT_PRODUCT)
+                or self._check_word("DOT_PRODUCT")
+                or self._check_word("DOT")
+            ):
+                if self._check_word("DOT_PRODUCT") or self._check_word("DOT"):
+                    self.advance()
+                metric_kind = VectorMetricKind.DOT_PRODUCT
+            else:
+                self.error("una métrica válida ('COSINE', 'EUCLIDEAN' o 'DOT_PRODUCT')")
+
+        return SimilarToExp(
+            target=target,
+            k=k_val,
+            column=column,
+            index_kind=index_kind,
+            metric=metric_kind,
+        )
 
     def parse_search_query(self, function_name: str) -> str:
         """STRING holding the full-text query of MATCH / SCORE."""
@@ -424,7 +555,10 @@ class Parser:
         point = self.parse_value()
         metric = "HAVERSINE"
         if self.match(TokenType.COMA):
-            metric = self.expect(TokenType.ID).text.upper()
+            if self.match(TokenType.EUCLIDEAN):
+                metric = "EUCLIDEAN"
+            else:
+                metric = self.expect(TokenType.ID).text.upper()
         self.expect(TokenType.RPAREN)
         return DistanceExp(geometry, point, metric)
 

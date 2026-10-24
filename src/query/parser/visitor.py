@@ -31,6 +31,8 @@ from query.parser.ast_nodes import (
     AggregateSpec,
     MatchExp,
     ScoreSpec,
+    SimilarToExp,
+    SimilarityScoreSpec,
     BeginTransactionStm,
     EndTransactionStm,
     UpdateStm,
@@ -161,19 +163,19 @@ class SemanticVisitor(Visitor):
                 if not self.catalog.table_exists(stm.join.table):
                     raise SemanticError(f"La tabla '{stm.join.table}' no existe")
                 self._validate_join(stm, schema, self.catalog.get_schema(stm.join.table))
-            score_aliases = self._validate_text_search(stm)
+            score_aliases = self._validate_text_search(stm) | self._validate_vector_search(stm)
             if stm.columns != ["*"]:
                 for col in stm.columns:
-                    if isinstance(col, ScoreSpec) or col == "*":
-                        continue  # validated by _validate_text_search
+                    if isinstance(col, (ScoreSpec, SimilarityScoreSpec)) or col == "*":
+                        continue  # validated by _validate_text_search / _validate_vector_search
                     if isinstance(col, AggregateSpec):
                         self._validate_aggregate(stm, col)
                     else:
                         self._require_select_column(stm, col)
 
             if stm.where_cond is not None:
-                if isinstance(stm.where_cond, MatchExp):
-                    pass  # validated by _validate_text_search
+                if isinstance(stm.where_cond, (MatchExp, SimilarToExp)):
+                    pass  # validated by _validate_text_search / _validate_vector_search
                 elif isinstance(stm.where_cond, SpatialPredicate):
                     self._validate_spatial_predicate(stm, stm.where_cond)
                 else:
@@ -184,7 +186,7 @@ class SemanticVisitor(Visitor):
                     if isinstance(column, DistanceExp):
                         self._validate_distance(stm, column)
                     elif column in score_aliases:
-                        continue  # ORDER BY <alias de SCORE>
+                        continue  # ORDER BY <alias de SCORE o SIMILARITY_SCORE>
                     else:
                         self._require_select_column(stm, column)
 
@@ -205,6 +207,52 @@ class SemanticVisitor(Visitor):
     def visit_match_exp(self, exp: MatchExp):
         # reached only from DELETE / UPDATE; SELECT validates MATCH itself
         raise SemanticError("MATCH solo se admite en el WHERE de un SELECT")
+
+    def visit_similar_to_exp(self, exp: SimilarToExp):
+        # reached only from DELETE / UPDATE; SELECT validates SIMILAR_TO itself
+        raise SemanticError("SIMILAR_TO solo se admite en el WHERE de un SELECT")
+
+    def _validate_vector_search(self, stm) -> set:
+        """Valida especificaciones SIMILARITY_SCORE y condición SIMILAR_TO."""
+        scores = [c for c in stm.columns if isinstance(c, SimilarityScoreSpec)]
+        sim = stm.where_cond if isinstance(stm.where_cond, SimilarToExp) else None
+        if not scores and sim is None:
+            return set()
+
+        if "*" in stm.columns:
+            if stm.columns[0] != "*" or any(
+                c != "*" and not isinstance(c, (ScoreSpec, SimilarityScoreSpec)) for c in stm.columns
+            ):
+                raise SemanticError("Después de '*' solo se admite SCORE(...) o SIMILARITY_SCORE(...)")
+
+        if stm.join is not None:
+            raise SemanticError("SIMILAR_TO no se admite junto con JOIN")
+        if stm.group_by is not None or any(isinstance(c, AggregateSpec) for c in stm.columns):
+            raise SemanticError("SIMILAR_TO no se admite junto con GROUP BY ni agregados")
+        if stm.order_by is not None and any(isinstance(c, DistanceExp) for c in stm.order_by.columns):
+            raise SemanticError("SIMILAR_TO no se admite junto con ORDER BY DISTANCIA")
+        if len(scores) > 1:
+            raise SemanticError("Solo se admite un SIMILARITY_SCORE(...) por consulta")
+
+        if scores and sim is None:
+            raise SemanticError("SIMILARITY_SCORE() requiere una condición SIMILAR_TO en el WHERE")
+
+        if sim is not None:
+            if sim.column is not None:
+                self._require_select_column(stm, sim.column.value)
+            if not sim.target or not sim.target.strip():
+                raise SemanticError("SIMILAR_TO requiere un objeto o ruta no vacía")
+            if sim.k <= 0:
+                raise SemanticError("SIMILAR_TO requiere k > 0")
+
+        aliases = set()
+        for spec in scores:
+            if self._current_schema.get_column(spec.alias) is not None:
+                raise SemanticError(
+                    f"El alias '{spec.alias}' de SIMILARITY_SCORE choca con una columna de '{stm.table}'"
+                )
+            aliases.add(spec.alias)
+        return aliases
 
     def _validate_text_search(self, stm) -> set:
         """Validates SCORE(...) items and a MATCH condition; returns the set
