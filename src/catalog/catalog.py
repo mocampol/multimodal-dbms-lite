@@ -613,6 +613,16 @@ class Catalog:
                 return self._physical_indexes.get(entry["index_id"])
         return None
 
+    def get_text_index(self, table_name: str, column_name: str):
+        """The inverted index (GIN/SPIMI) over table_name.column_name, or None.
+        Unlike get_physical_index, it skips other index types on the column."""
+        for entry in self.indexes.get(table_name, []):
+            if entry["column_name"] == column_name and entry["index_type"] in (
+                IndexType.GIN.value, IndexType.SPIMI.value,
+            ):
+                return self._physical_indexes.get(entry["index_id"])
+        return None
+
     def get_index_by_name(self, index_name: str) -> tuple[str, dict] | None:
         """Returns (table_name, entry) for an index name if it exists, else None."""
         for table_name, entries in self.indexes.items():
