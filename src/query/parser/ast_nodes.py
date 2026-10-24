@@ -41,6 +41,12 @@ class StorageKind(Enum):
     SEQUENTIAL = auto()
 
 
+# Full-text ranking (<RankingAlgorithm> ::= BM25 | TF_IDF)
+class RankingAlgorithm(Enum):
+    BM25 = auto()
+    TF_IDF = auto()
+
+
 # Visitor — interface for traversing the AST (Visitor pattern)
 class Visitor(ABC):
 
@@ -337,35 +343,61 @@ class NullExp(Exp):
 
 
 class MatchExp(Exp):
-    """<Condition> ::= <QualifiedName> MATCH STRING  (full-text filter)"""
+    """<Condition> ::= MATCH ( <QualifiedName> COMA STRING ) [ USING <RankingAlgorithm> ]
+                     | <QualifiedName> MATCH STRING  (legacy form, always BM25)
 
-    def __init__(self, left: "IdExp", query: str):
+    Full-text filter; `ranking` is the algorithm a SCORE() in the same
+    SELECT uses to rank the matching documents."""
+
+    def __init__(self, left: "IdExp", query: str, ranking: RankingAlgorithm = RankingAlgorithm.BM25):
         self.left = left
         self.query = query
+        self.ranking = ranking
 
     def accept(self, visitor: Visitor):
         return visitor.visit_match_exp(self)
 
     def __repr__(self):
-        return f"({self.left!r} MATCH {self.query!r})"
+        return f"MATCH({self.left!r}, {self.query!r}) USING {self.ranking.name}"
 
 
 class ScoreSpec:
-    """<SelectItem> ::= SCORE ( <QualifiedName> COMA STRING ) [ [ AS ] ID ]
+    """<SelectItem> ::= SCORE ( [ <QualifiedName> COMA STRING ] ) [ [ AS ] ID ]
 
-    Select-list item that exposes the BM25 relevance of `column` for
-    `query` as a numeric column named `alias`."""
+    Select-list item that exposes the relevance of `column` for `query`
+    as a numeric column named `alias`. The empty form SCORE() leaves
+    `column` and `query` as None until it is bound to the MATCH of its
+    SELECT (see bind)."""
 
-    def __init__(self, column: str, query: str, alias: str = "score"):
+    def __init__(
+        self,
+        column: Optional[str],
+        query: Optional[str],
+        alias: str = "score",
+        ranking: RankingAlgorithm = RankingAlgorithm.BM25,
+    ):
         self.column = column
         self.query = query
         self.alias = alias
+        self.ranking = ranking
 
     @property
     def name(self) -> str:
         return self.alias
 
+    @property
+    def is_bound(self) -> bool:
+        return self.column is not None
+
+    def bind(self, match: MatchExp) -> None:
+        """Takes column, query and ranking from the MATCH of the same SELECT."""
+        self.column = match.left.value
+        self.query = match.query
+        self.ranking = match.ranking
+
     def __repr__(self):
+        if not self.is_bound:
+            return f"SCORE() AS {self.alias}"
         return f"SCORE({self.column}, {self.query!r}) AS {self.alias}"
 
 
