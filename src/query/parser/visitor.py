@@ -241,6 +241,12 @@ class SemanticVisitor(Visitor):
                     "SCORE() sin argumentos requiere un MATCH(columna, 'consulta') en el WHERE; "
                     "sin MATCH usa SCORE(columna, 'consulta')"
                 )
+            if match is not None and spec.ranking != match.ranking:
+                # SCORE() inherits USING; an explicit SCORE(...) is always BM25
+                raise SemanticError(
+                    f"SCORE(columna, 'consulta') siempre usa BM25 y el MATCH pide USING "
+                    f"{match.ranking.name}; usa SCORE() para rankear con el algoritmo de USING"
+                )
             self._require_text_column(stm, spec.column, "SCORE")
             if not default_text_processor().process(spec.query):
                 raise SemanticError("SCORE requiere al menos un término de búsqueda")

@@ -174,6 +174,9 @@ def make_catalog():
 def test_semantic_accepts_both_query_shapes():
     for sql in (
         QUERY_STAR,
+        "SELECT id, SCORE() AS r FROM docs WHERE MATCH(contenido, 'x') USING TF_IDF;",
+        "SELECT id, SCORE(contenido, 'x') AS r FROM docs WHERE MATCH(contenido, 'x') USING BM25;",
+        "SELECT id FROM docs WHERE MATCH(contenido, 'x') USING TF_IDF;",
         "SELECT id, SCORE(contenido, 'bases') AS relevancia FROM docs "
         "WHERE contenido MATCH 'bases' ORDER BY relevancia DESC LIMIT 3;",
     ):
@@ -187,6 +190,8 @@ def test_semantic_accepts_both_query_shapes():
     "SELECT id FROM docs WHERE MATCH(contenido, 'de la');",           # solo stopwords
     "SELECT id, SCORE() AS r FROM docs;",                             # SCORE() sin MATCH
     "SELECT id, SCORE() AS r FROM docs WHERE id = 1;",                # WHERE sin MATCH
+    "SELECT id, SCORE(contenido, 'x') AS r FROM docs "
+    "WHERE MATCH(contenido, 'x') USING TF_IDF;",                      # SCORE explícito + TF_IDF
     "SELECT *, id FROM docs;",                                        # extra tras *
     "DELETE FROM docs WHERE contenido MATCH 'x';",                    # MATCH en DELETE
     "SELECT id FROM docs WHERE contenido MATCH 'x' ORDER BY nope;",   # columna inexistente
