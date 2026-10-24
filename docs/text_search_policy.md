@@ -225,3 +225,51 @@ Esta transformación aritmética pura es estrictamente biyectiva y permite conve
   - `DROP INDEX <nombre>`: Elimina el registro de `sys_indexes`, desaloca la estructura en memoria y borra físicamente el archivo `.idx` del disco (`os.remove`).
   - `DROP TABLE <tabla>`: Realiza la eliminación en cascada, eliminando de disco todos los índices secundarios e invertidos asociados a dicha tabla.
 * **Recuperación y reconstrucción:** Tras deshacer operaciones incompletas del WAL, la recuperación vuelve a construir los índices desde las filas recuperadas. También se puede reconstruir explícitamente desde código con `catalog.rebuild_derived("<tabla>")`; esta operación reconstruye los índices secundarios y las estructuras derivadas de esa tabla.
+
+---
+
+## 11. Consultas Full-Text en SQL: Validación y Ejecución
+
+### 11.1 Sintaxis
+```sql
+SELECT id, SCORE() AS relevancia FROM docs
+WHERE MATCH(contenido, 'bases de datos') USING BM25
+ORDER BY relevancia DESC LIMIT 10;
+```
+* `USING BM25 | TF_IDF` es opcional; por defecto `BM25`.
+* `SCORE()` sin argumentos toma columna, consulta y algoritmo del `MATCH` del mismo `SELECT`.
+* `SCORE(columna, 'consulta')` calcula BM25 de forma independiente y también funciona sin `MATCH` (puntúa todas las filas; las que no comparten términos reciben `0.0`).
+* La forma heredada `columna MATCH 'consulta'` equivale a `MATCH(columna, 'consulta') USING BM25`.
+
+### 11.2 Validación
+Todos los errores llegan al usuario como `QueryError`. Los sintácticos los detecta el parser; los semánticos, el `SemanticVisitor` contra el catálogo antes de ejecutar:
+
+| Caso | Ejemplo | Error |
+| :--- | :--- | :--- |
+| Columna inexistente | `MATCH(nope, 'x')` | `La columna 'nope' no existe en la tabla 'docs'` |
+| Columna no textual | `MATCH(id, 'x')` | `MATCH requiere una columna de texto (CHAR, VARCHAR o TEXT); 'id' es ...` |
+| Algoritmo no soportado | `USING COSENO` | `Error sintáctico: se esperaba un algoritmo de ranking ('BM25' o 'TF_IDF') ...` |
+| `USING` sin algoritmo | `MATCH(contenido, 'x') USING` | Mismo error sintáctico |
+| `MATCH` sin consulta | `MATCH(contenido)` | `Error sintáctico: se esperaba ',' y la consulta: MATCH(columna, 'consulta') ...` |
+| Consulta que no es texto | `MATCH(contenido, 5)` | `Error sintáctico: se esperaba la consulta de MATCH entre comillas simples ...` |
+| Consulta sin términos indexables | `''`, `'...'`, `'de la'` (solo stopwords) | `MATCH requiere al menos un término de búsqueda` |
+| `SCORE()` sin `MATCH` | `SELECT SCORE() AS r FROM docs` | `SCORE() sin argumentos requiere un MATCH(columna, 'consulta') en el WHERE ...` |
+| `SCORE` explícito con `USING TF_IDF` | `SCORE(contenido, 'x') ... USING TF_IDF` | `SCORE(columna, 'consulta') siempre usa BM25 y el MATCH pide USING TF_IDF ...` |
+| Más de un `SCORE` | `SCORE() AS a, SCORE() AS b` | `Solo se admite un SCORE(...) por consulta` |
+| Alias que choca con una columna | `SCORE() AS id` | `El alias 'id' de SCORE choca con una columna de 'docs'` |
+| `MATCH` fuera de un `SELECT` | `DELETE ... WHERE MATCH(...)` | `MATCH solo se admite en el WHERE de un SELECT` |
+| Combinaciones no soportadas | `JOIN`, `GROUP BY` / agregados, `ORDER BY DISTANCIA` | `SCORE/MATCH no se admiten junto con ...` |
+
+La consulta se tokeniza con el mismo `TextProcessor` que los documentos (sección 1-3), así que "sin términos indexables" significa exactamente que el índice no encontraría nada.
+
+### 11.3 `MATCH` sin Índice Creado
+**Decisión:** se permite. Igual que PostgreSQL con `tsvector @@ tsquery` sin índice GIN, la consulta se resuelve con un escaneo completo en lugar de fallar.
+
+| Columna | Plan (`EXPLAIN`) | Cómo se calcula |
+| :--- | :--- | :--- |
+| Con índice `SPIMI` o `GIN` (tabla `HEAP`) | `TextIndexScan` | Candidatos y puntajes del índice persistente; cada fila se lee por su RID. |
+| Sin índice (o tabla `SEQUENTIAL`) | `SeqScan` → `TextSearch` | Se construye un `InvertedIndex` temporal con las filas escaneadas. |
+
+* Ambos caminos usan la misma implementación (`InvertedIndex.rank`) y el mismo `TextProcessor`, por lo que **devuelven los mismos documentos, puntajes y orden**; solo cambia el costo.
+* El escaneo completo es $O(N)$ por consulta: para corpus grandes se recomienda `CREATE INDEX <nombre> ON <tabla> USING SPIMI (<columna>);`.
+* `EXPLAIN` permite verificar qué camino se usará.
