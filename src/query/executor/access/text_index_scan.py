@@ -2,10 +2,10 @@
 Full-text access node backed by the catalog's inverted index (SPIMI/GIN).
 
 With MATCH, the index yields the candidates (documents containing at least
-one query term) already ranked by InvertedIndex.score_bm25, and each one is
-fetched from the heap by its RID. With SCORE() and no MATCH, every row is
-read and gets the index score of its document (0.0 when it is not a
-candidate).
+one query term) already ranked by InvertedIndex.rank (BM25 or TF-IDF
+cosine), and each one is fetched from the heap by its RID. With SCORE() and
+no MATCH, every row is read and gets the index score of its document (0.0
+when it is not a candidate).
 
 Corpus statistics (N, df, avgdl) are the index's own, so a SQL score is
 exactly the one the index reports; no parallel BM25 structure is built.
@@ -30,7 +30,8 @@ class TextIndexScan(PlanNode):
             tokenized exactly like the documents.
         query: full-text query string.
         match: True filters to the index candidates; False keeps every row.
-        score: True appends the BM25 score as a DOUBLE_PRECISION last column.
+        score: True appends the score as a DOUBLE_PRECISION last column.
+        ranking: 'bm25' or 'tf_idf' (see InvertedIndex.rank).
     """
 
     def __init__(
@@ -41,6 +42,7 @@ class TextIndexScan(PlanNode):
         query: str,
         match: bool = True,
         score: bool = False,
+        ranking: str = "bm25",
         lock_rid=None,
         latch=NO_LATCH,
         table_name: str = "",
@@ -54,6 +56,7 @@ class TextIndexScan(PlanNode):
         self.query = query
         self.match = match
         self.score = score
+        self.ranking = ranking
         self.lock_rid = lock_rid
         self.latch = latch
         self.table_name = table_name
@@ -63,7 +66,7 @@ class TextIndexScan(PlanNode):
 
     def open(self) -> None:
         with self.latch:
-            ranked = self.index.score_bm25(self.processor.process(self.query), top_k=None)
+            ranked = self.index.rank(self.processor.process(self.query), self.ranking)
 
         self._records = []
         if self.match:
@@ -113,6 +116,6 @@ class TextIndexScan(PlanNode):
             "table": self.table_name,
             "column": self.column_name,
             "query": self.query,
-            "ranking": "bm25",
+            "ranking": self.ranking,
             "mode": "match" if self.match else "score",
         }

@@ -245,6 +245,23 @@ class InvertedIndex:
             return ranked[:top_k]
         return ranked
 
+    def rank(
+        self,
+        query_tokens: Sequence[str],
+        ranking: str = "bm25",
+        top_k: int | None = None,
+    ) -> list[tuple[int, float]]:
+        """
+        Ranks the candidates of the query with the named algorithm:
+        'bm25' (Okapi BM25) or 'tf_idf' (TF-IDF with cosine similarity).
+        Both return (doc_id, score) sorted by (-score, doc_id).
+        """
+        if ranking == "bm25":
+            return self.score_bm25(query_tokens, top_k=top_k)
+        if ranking == "tf_idf":
+            return self.score_tfidf_cosine(query_tokens, top_k=top_k)
+        raise ValueError(f"Algoritmo de ranking no soportado: {ranking}")
+
     def bm25_search(
         self,
         query_tokens: Sequence[str],

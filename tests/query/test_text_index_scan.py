@@ -38,10 +38,10 @@ def catalog(tmp_path):
     return catalog
 
 
-def index_scores(catalog, query):
+def index_scores(catalog, query, ranking="bm25"):
     """{id: score} straight from the catalog's inverted index."""
     index = catalog.get_text_index("docs", "contenido")
-    ranked = dict(index.score_bm25(catalog.text_processor.process(query), top_k=None))
+    ranked = dict(index.rank(catalog.text_processor.process(query), ranking))
     storage = catalog.get_storage("docs")
     return {
         record[0].data: ranked[rid_to_doc_id(rid.page_id, rid.slot)]
@@ -129,9 +129,33 @@ def test_score_over_another_query_falls_back_to_text_search(catalog):
     assert "TextSearch" in plan and "TextIndexScan" not in plan
 
 
+TF_IDF_QUERY = (
+    "SELECT id, SCORE() AS relevancia FROM docs "
+    "WHERE MATCH(contenido, 'bases relacionales') USING TF_IDF ORDER BY relevancia DESC;"
+)
+
+
+def test_using_tf_idf_scores_with_cosine_similarity(catalog):
+    rows = execute(TF_IDF_QUERY, catalog)
+    scores = {row[0].data: row[1].data for row in rows}
+    assert scores == pytest.approx(index_scores(catalog, "bases relacionales", "tf_idf"))
+    assert scores != pytest.approx(index_scores(catalog, "bases relacionales", "bm25"))
+    assert all(0.0 < score <= 1.0 for score in scores.values())
+    assert [row[0].data for row in rows] == [3, 1]
+    plan = explain(catalog, TF_IDF_QUERY)
+    assert "TextIndexScan" in plan and "tf_idf" in plan
+
+
+def test_tf_idf_and_bm25_return_the_same_candidates(catalog):
+    bm25 = execute(TF_IDF_QUERY.replace("TF_IDF", "BM25"), catalog)
+    tf_idf = execute(TF_IDF_QUERY, catalog)
+    assert {row[0].data for row in bm25} == {row[0].data for row in tf_idf}
+
+
 @pytest.mark.parametrize("sql", [
     MATCH_AND_SCORE + ";",
     "SELECT id, SCORE(contenido, 'bases relacionales') AS relevancia FROM docs ORDER BY id;",
+    TF_IDF_QUERY,
 ])
 def test_with_and_without_index_give_the_same_scores(catalog, sql):
     with_index = execute(sql, catalog)

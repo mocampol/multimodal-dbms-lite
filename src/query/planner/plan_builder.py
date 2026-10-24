@@ -228,6 +228,7 @@ def _text_index_scan(catalog, table_name, schema, match, score, lock_rid):
         query,
         match=match is not None,
         score=score is not None,
+        ranking=_ranking_name(score if score is not None else match),
         lock_rid=lock_rid,
         latch=table_latch(catalog, table_name),
         table_name=table_name,
@@ -250,8 +251,14 @@ def _text_search_node(node, schema, match, score, processor):
         output_schema = _with_score_column(schema, score.alias)
     text_search = TextSearch(
         node, schema, output_schema, match=match_args, score=score_args, processor=processor,
+        ranking=_ranking_name(score) if score is not None else "bm25",
     )
     return text_search, output_schema
+
+
+def _ranking_name(spec):
+    """'bm25' / 'tf_idf' from the RankingAlgorithm of a MatchExp or ScoreSpec."""
+    return spec.ranking.name.lower()
 
 
 def _with_score_column(schema, alias):
