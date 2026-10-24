@@ -171,8 +171,13 @@ class HNSWIndex(BaseVectorIndex):
         candidates.sort(key=lambda r: r.distance)
         return candidates[:actual_k]
 
-    def save(self, path: str) -> None:
-        bin_path = path + ".bin"
+    def save(self, path: str | None = None) -> None:
+        target_path = path or getattr(self, "_storage_path", None)
+        if target_path is None:
+            raise ValueError("Ruta de archivo requerida para guardar HNSWIndex")
+        self._storage_path = target_path
+
+        bin_path = target_path + ".bin"
         self._index.save_index(bin_path)
 
         meta = {
@@ -188,8 +193,8 @@ class HNSWIndex(BaseVectorIndex):
             "raw_vectors": self._raw_vectors,
             "bin_file": os.path.basename(bin_path),
         }
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "wb") as f:
+        os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+        with open(target_path, "wb") as f:
             pickle.dump(meta, f)
 
     @classmethod

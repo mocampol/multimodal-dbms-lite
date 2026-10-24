@@ -134,7 +134,12 @@ class IVFIndex(BaseVectorIndex):
         candidates.sort(key=lambda r: r.distance)
         return candidates[:k]
 
-    def save(self, path: str) -> None:
+    def save(self, path: str | None = None) -> None:
+        target_path = path or getattr(self, "_storage_path", None)
+        if target_path is None:
+            raise ValueError("Ruta de archivo requerida para guardar IVFIndex")
+        self._storage_path = target_path
+
         data = {
             "dim": self.dim,
             "metric": self.metric.value,
@@ -144,8 +149,8 @@ class IVFIndex(BaseVectorIndex):
             "inverted_lists": self.inverted_lists,
             "count": self._count,
         }
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "wb") as f:
+        os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+        with open(target_path, "wb") as f:
             pickle.dump(data, f)
 
     @classmethod

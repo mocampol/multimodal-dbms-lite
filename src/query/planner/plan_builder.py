@@ -10,6 +10,7 @@ from query.parser.ast_nodes import (
     SelectStm, InsertStm, DeleteStm, UpdateStm, IdExp, BinaryExp,
     AggregateSpec, PointExp, NullExp, DistanceExp, SpatialPredicate, WithinExp,
     MatchExp, ScoreSpec,
+    SimilarToExp, SimilarityScoreSpec,
 )
 from common.value import DataType, Value
 from common.record import Record
@@ -31,6 +32,7 @@ from query.executor.processing.projection import Projection
 from query.executor.processing.spatial_filter import SpatialFilter
 from query.executor.processing.sort import Sort
 from query.executor.processing.text_search import TextSearch
+from query.executor.processing.vector_search import VectorSearch
 from query.executor.aggregate.group_aggregate import GroupAggregate
 from query.executor.aggregate.hash_aggregate import HashAggregate
 from query.executor.join.hash_join import HashJoin
@@ -47,6 +49,8 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
     input_schema = catalog.get_schema(stm.table)
     match_condition = stm.where_cond if isinstance(stm.where_cond, MatchExp) else None
     score_spec = next((c for c in stm.columns if isinstance(c, ScoreSpec)), None)
+    similar_condition = stm.where_cond if isinstance(stm.where_cond, SimilarToExp) else None
+    similarity_score_spec = next((c for c in stm.columns if isinstance(c, SimilarityScoreSpec)), None)
 
     spatial_condition = isinstance(stm.where_cond, SpatialPredicate)
     distance_order = next(
@@ -133,13 +137,25 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
                     index, catalog.get_storage(stm.table), key,
                     lock_rid=table_lock_rid, latch=table_latch(catalog, stm.table),
                 )
-            if stm.where_cond is not None and indexed is None and match_condition is None:
+            if (
+                stm.where_cond is not None
+                and indexed is None
+                and match_condition is None
+                and similar_condition is None
+            ):
                 node = Filter(node, _qualify_condition(stm.where_cond, schema), schema)
 
     if match_condition is not None or score_spec is not None:
         if stm.join is not None:
             raise ValueError("SCORE/MATCH no se admiten junto con JOIN")
         node, schema = _text_search_node(node, schema, match_condition, score_spec)
+
+    if similar_condition is not None or similarity_score_spec is not None:
+        if stm.join is not None:
+            raise ValueError("SIMILAR_TO no se admite junto con JOIN")
+        node, schema = _vector_search_node(
+            node, schema, catalog, stm.table, similar_condition, similarity_score_spec
+        )
 
     aggregate_items = [item for item in stm.columns if isinstance(item, AggregateSpec)]
     if aggregate_items:
@@ -204,13 +220,34 @@ def _text_search_node(node, schema, match, score):
     return TextSearch(node, schema, output_schema, match=match_args, score=score_args), output_schema
 
 
+def _vector_search_node(node, schema, catalog, table_name, similar, score):
+    output_schema = schema
+    if score is not None:
+        output_schema = Schema(
+            schema.table_name,
+            list(schema.columns) + [Column(score.alias, DataType.DOUBLE_PRECISION, nullable=False)],
+        )
+    return (
+        VectorSearch(
+            node,
+            schema,
+            output_schema,
+            catalog=catalog,
+            table_name=table_name,
+            similar_to=similar,
+            score=score,
+        ),
+        output_schema,
+    )
+
+
 def _projection_columns(schema, columns):
-    """Column names for Projection. `*` (optionally followed by SCORE) keeps
-    every column of `schema`, which already includes the SCORE alias."""
+    """Column names for Projection. `*` (optionally followed by SCORE/SIMILARITY_SCORE) keeps
+    every column of `schema`, which already includes the score alias."""
     if "*" in columns:
         return ["*"]
     return [
-        item.alias if isinstance(item, ScoreSpec) else _resolve_column_name(schema, item)
+        item.alias if isinstance(item, (ScoreSpec, SimilarityScoreSpec)) else _resolve_column_name(schema, item)
         for item in columns
     ]
 
