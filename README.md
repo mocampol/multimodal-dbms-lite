@@ -30,7 +30,7 @@ multimodal-dbms-lite/
 ├── api/                     # API REST con FastAPI
 │   └── routers/             # endpoints de tablas, consultas e importación
 ├── benchmarks/              # mediciones de rendimiento
-│   ├── postgres/            # comparación con PostgreSQL/PostGIS
+│   ├── postgres/            # comparación con PostgreSQL (PostGIS y GIN)
 │   └── results/             # resultados y gráficas versionados
 ├── frontend/                # aplicación React + Vite
 │   └── src/                 # componentes y lógica de presentación
@@ -449,6 +449,8 @@ Los scripts de `benchmarks/` generan reportes y gráficas (no son pass/fail); la
 | ---------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `benchmark_indexes.py` | B+ clusterizado vs. B+ no clusterizado vs. Hash dinámico              | `results/index_comparison_*.csv/md`, `results/charts/`                                      |
 | `benchmark_spatial.py` | Búsqueda secuencial vs. R-Tree propio vs. PostgreSQL + PostGIS (GiST) | `results/spatial_results.csv`, `results/spatial_summary.md`, `results/charts/spatial_*.png` |
+| `benchmark_text_comparison.py` | SPIMI + BM25 vs. SPIMI + TF-IDF vs. PostgreSQL GIN + `ts_rank`        | `results/text_comparison_results.csv`, `results/text_comparison_environment.json`           |
+
 
 ### Benchmark espacial (`benchmark_spatial.py`)
 
@@ -484,6 +486,21 @@ El benchmark crea (y al terminar borra, salvo `--keep-pg-data`) el esquema `benc
 #### Errores, descartes y equivalencia
 
 Las consultas que fallan, o que ya no caben en el presupuesto de tiempo de la celda (`--cell-budget-s`, 900 s), se **descartan y se cuentan** (`queries_discarded`, `query_errors`, `error_samples` en el CSV y sección 6 del resumen). Los resultados de R-Tree y PostGIS se comparan consulta a consulta con la búsqueda secuencial: _exacto_, _con tolerancia_ (`--tolerance-m`, solo puntos en el borde del radio o empates en k-NN) o _diferente_ (error).
+
+### Benchmark de texto: SPIMI vs. PostgreSQL GIN (`benchmark_text_comparison.py`)
+
+Compara SPIMI + BM25, SPIMI + TF-IDF (coseno) y PostgreSQL tsvector + GIN con `ts_rank` sobre los mismos documentos (N = 1 000 / 10 000 / 100 000), las mismas consultas (1, 3 y 5+ términos) y el mismo k = 10. Mide tiempo de construcción, tamaño del índice, tiempo de consulta, Precision@10, Recall@10 y memoria, y verifica que todos los motores usen los mismos documentos relevantes.
+
+```bash
+pip install -r requirements.txt -r benchmarks/postgres/requirements.txt
+cd benchmarks/postgres && docker compose up -d && cd ../..
+
+python benchmarks/postgres/load_text_data.py       # PostgreSQL GIN
+python benchmarks/benchmark_text_comparison.py     # SPIMI + BM25 / TF-IDF
+python benchmarks/compare_text_results.py          # verificación y resumen
+```
+
+Todos aceptan `--quick` (N = 1 000). El dataset, la metodología (incluida la medición de memoria) y el formato del CSV están en [`benchmarks/README.md`](benchmarks/README.md#comparación-de-texto-spimi-vs-postgresql-gin).
 
 ## Nota
 
