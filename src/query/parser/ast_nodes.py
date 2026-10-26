@@ -33,10 +33,18 @@ class IndexType(Enum):
     BTREE = auto()
     HASH = auto()
     RTREE = auto()
+    GIN = auto()
+    SPIMI = auto()
 
 class StorageKind(Enum):
     HEAP = auto()
     SEQUENTIAL = auto()
+
+
+# Full-text ranking (<RankingAlgorithm> ::= BM25 | TF_IDF)
+class RankingAlgorithm(Enum):
+    BM25 = auto()
+    TF_IDF = auto()
 
 
 # Visitor — interface for traversing the AST (Visitor pattern)
@@ -86,6 +94,9 @@ class Visitor(ABC):
     def visit_binary_exp(self, exp: "BinaryExp"):
         ...
 
+    def visit_match_exp(self, exp: "MatchExp"):
+        raise NotImplementedError("Este visitor no soporta MATCH")
+
     @abstractmethod
     def visit_select_stm(self, stm: "SelectStm"):
         ...
@@ -124,6 +135,10 @@ class Visitor(ABC):
 
     @abstractmethod
     def visit_create_index_stm(self, stm: "CreateIndexStm"):
+        ...
+
+    @abstractmethod
+    def visit_drop_index_stm(self, stm: "DropIndexStm"):
         ...
 
     @abstractmethod
@@ -327,6 +342,65 @@ class NullExp(Exp):
         return "NULL"
 
 
+class MatchExp(Exp):
+    """<Condition> ::= MATCH ( <QualifiedName> COMA STRING ) [ USING <RankingAlgorithm> ]
+                     | <QualifiedName> MATCH STRING  (legacy form, always BM25)
+
+    Full-text filter; `ranking` is the algorithm a SCORE() in the same
+    SELECT uses to rank the matching documents."""
+
+    def __init__(self, left: "IdExp", query: str, ranking: RankingAlgorithm = RankingAlgorithm.BM25):
+        self.left = left
+        self.query = query
+        self.ranking = ranking
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_match_exp(self)
+
+    def __repr__(self):
+        return f"MATCH({self.left!r}, {self.query!r}) USING {self.ranking.name}"
+
+
+class ScoreSpec:
+    """<SelectItem> ::= SCORE ( [ <QualifiedName> COMA STRING ] ) [ [ AS ] ID ]
+
+    Select-list item that exposes the relevance of `column` for `query`
+    as a numeric column named `alias`. The empty form SCORE() leaves
+    `column` and `query` as None until it is bound to the MATCH of its
+    SELECT (see bind)."""
+
+    def __init__(
+        self,
+        column: Optional[str],
+        query: Optional[str],
+        alias: str = "score",
+        ranking: RankingAlgorithm = RankingAlgorithm.BM25,
+    ):
+        self.column = column
+        self.query = query
+        self.alias = alias
+        self.ranking = ranking
+
+    @property
+    def name(self) -> str:
+        return self.alias
+
+    @property
+    def is_bound(self) -> bool:
+        return self.column is not None
+
+    def bind(self, match: MatchExp) -> None:
+        """Takes column, query and ranking from the MATCH of the same SELECT."""
+        self.column = match.left.value
+        self.query = match.query
+        self.ranking = match.ranking
+
+    def __repr__(self):
+        if not self.is_bound:
+            return f"SCORE() AS {self.alias}"
+        return f"SCORE({self.column}, {self.query!r}) AS {self.alias}"
+
+
 class AggregateSpec:
     def __init__(self, function: str, column: str = "*"):
         self.function = function.upper()
@@ -359,14 +433,20 @@ class BinaryExp(Exp):
 class OrderByClause:
     """ORDER_BY <OrderByItem> { COMA <OrderByItem> }"""
 
-    def __init__(self, columns: Optional[List[object]] = None):
+    def __init__(self, columns: Optional[List[object]] = None, descending: Optional[List[bool]] = None):
         self.columns: List[object] = columns if columns is not None else []
+        self.descending: List[bool] = (
+            list(descending) if descending is not None else [False] * len(self.columns)
+        )
 
     def accept(self, visitor: Visitor):
         return visitor.visit_order_by_clause(self)
 
     def __repr__(self):
-        items = [item if isinstance(item, str) else repr(item) for item in self.columns]
+        items = [
+            (item if isinstance(item, str) else repr(item)) + (" DESC" if desc else "")
+            for item, desc in zip(self.columns, self.descending)
+        ]
         return f"ORDER BY {', '.join(items)}"
 
 
@@ -483,7 +563,7 @@ class SelectStm(Stm):
 
     def __repr__(self):
         parts = [
-            f"SELECT {', '.join(column.name if isinstance(column, AggregateSpec) else column for column in self.columns)} FROM {self.table}"
+            f"SELECT {', '.join(column if isinstance(column, str) else repr(column) for column in self.columns)} FROM {self.table}"
         ]
         if self.where_cond is not None:
             parts.append(f"WHERE {self.where_cond!r}")
@@ -621,3 +701,18 @@ class CreateIndexStm(Stm):
             f"CREATE INDEX {self.index_name} ON {self.table} "
             f"({self.column}) USING {self.index_type.name}"
         )
+
+
+class DropIndexStm(Stm):
+    """<DropIndexStmt> ::= DROP_INDEX [IF_EXISTS] ID"""
+
+    def __init__(self, index_name: str, if_exists: bool = False):
+        self.index_name = index_name
+        self.if_exists = if_exists
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_drop_index_stm(self)
+
+    def __repr__(self):
+        if_ex = " IF EXISTS" if self.if_exists else ""
+        return f"DROP INDEX{if_ex} {self.index_name}"

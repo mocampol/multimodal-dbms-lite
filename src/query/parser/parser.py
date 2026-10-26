@@ -35,9 +35,13 @@ from query.parser.ast_nodes import (
     ColumnDef,
     CreateTableStm,
     CreateIndexStm,
+    DropIndexStm,
     DropTableStm,
     IndexType,
     StorageKind,
+    MatchExp,
+    ScoreSpec,
+    RankingAlgorithm,
 )
 
 
@@ -78,11 +82,18 @@ _INDEX_TYPE_MAP = {
     TokenType.BTREE: IndexType.BTREE,
     TokenType.HASH: IndexType.HASH,
     TokenType.RTREE: IndexType.RTREE,
+    TokenType.GIN: IndexType.GIN,
+    TokenType.SPIMI: IndexType.SPIMI,
 }
 
 _STORAGE_TYPE_MAP = {
     TokenType.HEAP: StorageKind.HEAP,
     TokenType.SEQUENTIAL: StorageKind.SEQUENTIAL,
+}
+
+_RANKING_MAP = {
+    TokenType.BM25: RankingAlgorithm.BM25,
+    TokenType.TF_IDF: RankingAlgorithm.TF_IDF,
 }
 
 
@@ -182,10 +193,12 @@ class Parser:
             stm = self.parse_create_index()
         elif self.check(TokenType.DROP_TABLE):
             stm = self.parse_drop_table()
+        elif self.check(TokenType.DROP_INDEX):
+            stm = self.parse_drop_index()
         else:
             self.error(
                 "'EXPLAIN', 'SELECT', 'INSERT INTO', 'DELETE', 'CREATE TABLE', "
-                "'CREATE INDEX' o 'DROP TABLE'"
+                "'CREATE INDEX', 'DROP TABLE' o 'DROP INDEX'"
             )
 
         self.expect(TokenType.SEMICOL)
@@ -221,6 +234,13 @@ class Parser:
         if self.check(TokenType.WHERE):
             where_cond = self.parse_where_clause()
 
+        # SCORE() without arguments ranks with the MATCH of this same SELECT;
+        # an unbound SCORE() (no MATCH) is left for the semantic visitor
+        if isinstance(where_cond, MatchExp):
+            for item in columns:
+                if isinstance(item, ScoreSpec) and not item.is_bound:
+                    item.bind(where_cond)
+
         order_by, group_by = self.parse_group_or_order()
         limit = self.parse_limit_clause() if self.check(TokenType.LIMIT) else None
 
@@ -229,7 +249,12 @@ class Parser:
     def parse_select_list(self) -> List[str]:
         """<SelectList> ::= MUL | ID { COMA ID }"""
         if self.match(TokenType.MUL):
-            return ["*"]
+            columns = ["*"]
+            # SELECT *, SCORE(...) AS alias: extras after '*' are validated
+            # semantically (only SCORE is accepted there)
+            while self.match(TokenType.COMA):
+                columns.append(self.parse_select_item())
+            return columns
 
         columns = [self.parse_select_item()]
         while self.match(TokenType.COMA):
@@ -243,6 +268,8 @@ class Parser:
                 name += "." + self.expect(TokenType.ID).text
             return name
         function = name.upper()
+        if function == "SCORE":
+            return self.parse_score_spec()
         if function not in {"COUNT", "SUM", "AVG", "MIN", "MAX"}:
             self.error("una función agregada válida")
         if self.match(TokenType.MUL):
@@ -251,6 +278,39 @@ class Parser:
             column = self.parse_qualified_name()
         self.expect(TokenType.RPAREN)
         return AggregateSpec(function, column)
+
+    def _check_word(self, word: str) -> bool:
+        """True if the current token is the identifier `word` (case-insensitive).
+        MATCH / AS / ASC / DESC are contextual words, not reserved tokens,
+        so existing columns with those names keep working."""
+        return self.check(TokenType.ID) and self.current.text.upper() == word
+
+    def parse_score_spec(self) -> ScoreSpec:
+        """SCORE ( [ <QualifiedName> COMA STRING ] ) [ [ AS ] ID ]  (SCORE and '(' already consumed)"""
+        column = query = None
+        if not self.match(TokenType.RPAREN):
+            column = self.parse_qualified_name()
+            if not self.check(TokenType.COMA):
+                self.error("',' y la consulta (o SCORE() sin argumentos para usar la de MATCH)")
+            self.advance()
+            query = self.parse_search_query("SCORE")
+            self.expect(TokenType.RPAREN)
+        alias = "score"
+        if self._check_word("AS"):
+            self.advance()
+            alias = self.expect(TokenType.ID).text
+        elif self.check(TokenType.ID):
+            alias = self.expect(TokenType.ID).text
+        return ScoreSpec(column, query, alias)
+
+    def _parse_direction(self) -> bool:
+        """[ ASC | DESC ] -> True when DESC."""
+        if self._check_word("DESC"):
+            self.advance()
+            return True
+        if self._check_word("ASC"):
+            self.advance()
+        return False
 
     def parse_qualified_name(self) -> str:
         name = self.expect(TokenType.ID).text
@@ -264,7 +324,9 @@ class Parser:
         return self.parse_condition()
 
     def parse_condition(self) -> Exp:
-        """<Condition> ::= distancia(...) <Operator> <Value> | dentro_de(...) | QualifiedName <Operator> <Value>"""
+        """<Condition> ::= distancia(...) <Operator> <Value> | dentro_de(...)
+                         | MATCH(...) [ USING <RankingAlgorithm> ]
+                         | QualifiedName MATCH STRING | QualifiedName <Operator> <Value>"""
         if self.check(TokenType.WITHIN):
             return self.parse_within_exp()
 
@@ -273,6 +335,12 @@ class Parser:
             left = self.parse_distance_exp()
         else:
             left = IdExp(self.parse_qualified_name())
+            # MATCH is contextual: only MATCH followed by '(' is the function
+            if left.value.upper() == "MATCH" and self.match(TokenType.LPAREN):
+                return self.parse_match_function()
+            if self._check_word("MATCH"):
+                self.advance()
+                return MatchExp(left, self.parse_search_query("MATCH"))
 
         op = self.parse_operator()
         right = self.parse_value()
@@ -280,6 +348,32 @@ class Parser:
         if spatial_comparison:
             return SpatialPredicate(left, op, right)
         return BinaryExp(left, right, op)
+
+    def parse_match_function(self) -> MatchExp:
+        """MATCH ( <QualifiedName> COMA STRING ) [ USING <RankingAlgorithm> ]  (MATCH and '(' already consumed)"""
+        column = IdExp(self.parse_qualified_name())
+        if not self.check(TokenType.COMA):
+            self.error("',' y la consulta: MATCH(columna, 'consulta')")
+        self.advance()
+        query = self.parse_search_query("MATCH")
+        self.expect(TokenType.RPAREN)
+        ranking = RankingAlgorithm.BM25
+        if self.match(TokenType.USING):
+            ranking = self.parse_ranking_algorithm()
+        return MatchExp(column, query, ranking)
+
+    def parse_search_query(self, function_name: str) -> str:
+        """STRING holding the full-text query of MATCH / SCORE."""
+        if not self.check(TokenType.STRING):
+            self.error(f"la consulta de {function_name} entre comillas simples (ej. 'bases de datos')")
+        return self.expect(TokenType.STRING).text
+
+    def parse_ranking_algorithm(self) -> RankingAlgorithm:
+        """<RankingAlgorithm> ::= BM25 | TF_IDF"""
+        for ttype, ranking in _RANKING_MAP.items():
+            if self.match(ttype):
+                return ranking
+        self.error("un algoritmo de ranking ('BM25' o 'TF_IDF')")
 
     def parse_operator(self) -> BinaryOp:
         """<Operator> ::= EQ | NEQ | LE | LEQ | GT | GEQ"""
@@ -385,9 +479,11 @@ class Parser:
         while self.check(TokenType.ORDER_BY) or self.check(TokenType.GROUP_BY):
             if self.match(TokenType.ORDER_BY):
                 columns = [self.parse_order_by_item()]
+                descending = [self._parse_direction()]
                 while self.match(TokenType.COMA):
                     columns.append(self.parse_order_by_item())
-                order_by = OrderByClause(columns)
+                    descending.append(self._parse_direction())
+                order_by = OrderByClause(columns, descending)
             else:
                 self.expect(TokenType.GROUP_BY)
                 columns = [self.parse_qualified_name()]
@@ -540,22 +636,45 @@ class Parser:
     # =========================================================================
 
     def parse_create_index(self) -> CreateIndexStm:
-        """<CreateIndexStmt> ::= CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>"""
+        """
+        <CreateIndexStmt> ::=
+            CREATE_INDEX ID ON ID USING <IndexType> LPAREN ID RPAREN
+            | CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>
+        """
         self.expect(TokenType.CREATE_INDEX)
         index_name_tok = self.expect(TokenType.ID)
         self.expect(TokenType.ON)
         table_tok = self.expect(TokenType.ID)
-        self.expect(TokenType.LPAREN)
-        column_tok = self.expect(TokenType.ID)
-        self.expect(TokenType.RPAREN)
-        self.expect(TokenType.USING)
-        index_type = self.parse_index_type()
+
+        if self.match(TokenType.USING):
+            # PostgreSQL standard: USING <IndexType> (column)
+            index_type = self.parse_index_type()
+            self.expect(TokenType.LPAREN)
+            column_tok = self.expect(TokenType.ID)
+            self.expect(TokenType.RPAREN)
+        else:
+            # Legacy: (column) USING <IndexType>
+            self.expect(TokenType.LPAREN)
+            column_tok = self.expect(TokenType.ID)
+            self.expect(TokenType.RPAREN)
+            self.expect(TokenType.USING)
+            index_type = self.parse_index_type()
 
         return CreateIndexStm(index_name_tok.text, table_tok.text, column_tok.text, index_type)
 
+    def parse_drop_index(self) -> DropIndexStm:
+        """<DropIndexStmt> ::= DROP_INDEX [ IF EXISTS ] ID"""
+        self.expect(TokenType.DROP_INDEX)
+        if_exists = False
+        if self.match(TokenType.IF):
+            self.expect(TokenType.EXISTS)
+            if_exists = True
+        index_name_tok = self.expect(TokenType.ID)
+        return DropIndexStm(index_name_tok.text, if_exists=if_exists)
+
     def parse_index_type(self) -> IndexType:
-        """<IndexType> ::= BTREE | HASH | RTREE"""
+        """<IndexType> ::= BTREE | HASH | RTREE | GIN | SPIMI"""
         for ttype, index_type in _INDEX_TYPE_MAP.items():
             if self.match(ttype):
                 return index_type
-        self.error("'BTREE', 'HASH' o 'RTREE'")
+        self.error("'BTREE', 'HASH', 'RTREE', 'GIN' o 'SPIMI'")

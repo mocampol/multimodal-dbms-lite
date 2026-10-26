@@ -9,6 +9,7 @@ Sequential Scan.
 from query.parser.ast_nodes import (
     SelectStm, InsertStm, DeleteStm, UpdateStm, IdExp, BinaryExp,
     AggregateSpec, PointExp, NullExp, DistanceExp, SpatialPredicate, WithinExp,
+    MatchExp, ScoreSpec,
 )
 from common.value import DataType, Value
 from common.record import Record
@@ -18,6 +19,8 @@ from storage.latch import latched_scan, table_latch
 
 from query.executor.access.seq_scan import SeqScan
 from query.executor.access.index_scan import IndexScan
+from query.executor.access.text_index_scan import TextIndexScan
+from storage.heap.heap_file import HeapFile
 from query.executor.access.spatial_scan import (
     KNNScan,
     SpatialIndexScan,
@@ -29,6 +32,7 @@ from query.executor.processing.limit import Limit
 from query.executor.processing.projection import Projection
 from query.executor.processing.spatial_filter import SpatialFilter
 from query.executor.processing.sort import Sort
+from query.executor.processing.text_search import TextSearch
 from query.executor.aggregate.group_aggregate import GroupAggregate
 from query.executor.aggregate.hash_aggregate import HashAggregate
 from query.executor.join.hash_join import HashJoin
@@ -37,9 +41,16 @@ from query.executor.join.hash_join import HashJoin
 def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
     """
     Builds the physical plan for a SELECT statement:
-    source -> Filter -> Group/Aggregate -> Sort -> Projection.
+    source -> Filter -> [TextSearch] -> Group/Aggregate -> Sort -> Limit -> Projection.
+
+    MATCH / SCORE() read from the column's inverted index (TextIndexScan)
+    when it has one; otherwise TextSearch sits right after the source. Either
+    way Sort ranks on the real score and Limit always cuts after ranking.
     """
     input_schema = catalog.get_schema(stm.table)
+    match_condition = stm.where_cond if isinstance(stm.where_cond, MatchExp) else None
+    score_spec = next((c for c in stm.columns if isinstance(c, ScoreSpec)), None)
+    text_scan = None
 
     spatial_condition = isinstance(stm.where_cond, SpatialPredicate)
     distance_order = next(
@@ -118,16 +129,29 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             if stm.where_cond is not None:
                 node = Filter(node, _qualify_condition(stm.where_cond, schema), schema)
         else:
-            node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
-            indexed = _equality_index(catalog, stm.table, stm.where_cond)
-            if indexed is not None:
-                index, key = indexed
-                node = IndexScan(
-                    index, catalog.get_storage(stm.table), key,
-                    lock_rid=table_lock_rid, latch=table_latch(catalog, stm.table),
-                )
-            if stm.where_cond is not None and indexed is None:
-                node = Filter(node, _qualify_condition(stm.where_cond, schema), schema)
+            text_scan = _text_index_scan(
+                catalog, stm.table, schema, match_condition, score_spec, table_lock_rid,
+            )
+            if text_scan is not None:
+                node, schema = text_scan
+            else:
+                node = SeqScan(stm.table, catalog, lock_rid=table_lock_rid)
+                indexed = _equality_index(catalog, stm.table, stm.where_cond)
+                if indexed is not None:
+                    index, key = indexed
+                    node = IndexScan(
+                        index, catalog.get_storage(stm.table), key,
+                        lock_rid=table_lock_rid, latch=table_latch(catalog, stm.table),
+                    )
+                if stm.where_cond is not None and indexed is None and match_condition is None:
+                    node = Filter(node, _qualify_condition(stm.where_cond, schema), schema)
+
+    if (match_condition is not None or score_spec is not None) and text_scan is None:
+        if stm.join is not None:
+            raise ValueError("SCORE/MATCH no se admiten junto con JOIN")
+        node, schema = _text_search_node(
+            node, schema, match_condition, score_spec, getattr(catalog, "text_processor", None),
+        )
 
     aggregate_items = [item for item in stm.columns if isinstance(item, AggregateSpec)]
     if aggregate_items:
@@ -151,9 +175,7 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             for item in physical_items
         ]
     else:
-        projection_columns = [
-            _resolve_column_name(schema, name) for name in stm.columns
-        ] if stm.columns != ["*"] else ["*"]
+        projection_columns = _projection_columns(schema, stm.columns)
         if stm.group_by is not None:
             group_columns = [_resolve_column_name(schema, name) for name in stm.group_by.columns]
             node = Sort(node, group_columns, schema)
@@ -169,12 +191,92 @@ def build_select_plan(stm: SelectStm, catalog, lock_rid=None):
             )
         else:
             order_columns = [_resolve_column_name(schema, name) for name in stm.order_by.columns]
-            node = Sort(node, order_columns, schema)
+            node = Sort(node, order_columns, schema, descending=stm.order_by.descending)
 
     if stm.limit is not None:
         node = Limit(node, stm.limit.value)
 
     return Projection(node, projection_columns, schema)
+
+
+def _text_index_scan(catalog, table_name, schema, match, score, lock_rid):
+    """TextIndexScan and its output schema when MATCH / SCORE() can be answered
+    by the inverted index of the searched column; None to fall back to
+    SeqScan + TextSearch (no text index, a non-heap table, or a SCORE over a
+    different column or query than MATCH)."""
+    if match is not None:
+        column, query = _resolve_column_name(schema, match.left.value), match.query
+        if score is not None and (
+            _resolve_column_name(schema, score.column) != column or score.query != query
+        ):
+            return None
+    elif score is not None:
+        column, query = _resolve_column_name(schema, score.column), score.query
+    else:
+        return None
+
+    get_text_index = getattr(catalog, "get_text_index", None)
+    index = get_text_index(table_name, column) if get_text_index is not None else None
+    storage = catalog.get_storage(table_name)
+    if index is None or not isinstance(storage, HeapFile):
+        return None
+
+    node = TextIndexScan(
+        index,
+        storage,
+        catalog.text_processor,
+        query,
+        match=match is not None,
+        score=score is not None,
+        ranking=_ranking_name(score if score is not None else match),
+        lock_rid=lock_rid,
+        latch=table_latch(catalog, table_name),
+        table_name=table_name,
+        column_name=column,
+    )
+    output_schema = _with_score_column(schema, score.alias) if score is not None else schema
+    return node, output_schema
+
+
+def _text_search_node(node, schema, match, score, processor):
+    """Wraps `node` in a TextSearch and returns it with the schema its
+    records now have (the original columns plus the SCORE alias)."""
+    match_args = None
+    if match is not None:
+        match_args = (_resolve_column_name(schema, match.left.value), match.query)
+    score_args = None
+    output_schema = schema
+    if score is not None:
+        score_args = (_resolve_column_name(schema, score.column), score.query, score.alias)
+        output_schema = _with_score_column(schema, score.alias)
+    text_search = TextSearch(
+        node, schema, output_schema, match=match_args, score=score_args, processor=processor,
+        ranking=_ranking_name(score) if score is not None else "bm25",
+    )
+    return text_search, output_schema
+
+
+def _ranking_name(spec):
+    """'bm25' / 'tf_idf' from the RankingAlgorithm of a MatchExp or ScoreSpec."""
+    return spec.ranking.name.lower()
+
+
+def _with_score_column(schema, alias):
+    return Schema(
+        schema.table_name,
+        list(schema.columns) + [Column(alias, DataType.DOUBLE_PRECISION, nullable=False)],
+    )
+
+
+def _projection_columns(schema, columns):
+    """Column names for Projection. `*` (optionally followed by SCORE) keeps
+    every column of `schema`, which already includes the SCORE alias."""
+    if "*" in columns:
+        return ["*"]
+    return [
+        item.alias if isinstance(item, ScoreSpec) else _resolve_column_name(schema, item)
+        for item in columns
+    ]
 
 
 def _spatial_geometry(predicate):
@@ -286,10 +388,10 @@ def execute_insert(stm: InsertStm, catalog, lock_rid=None, after_insert=None) ->
                 raise ValueError(f"Valor duplicado en columna UNIQUE '{violated}' de '{stm.table}'")
 
             rid = storage.insert(record)
-            catalog.register_insert(stm.table, record, rid)
-            catalog.register_insert_uniques(stm.table, record)
             if after_insert is not None:
                 after_insert(rid, record)
+            catalog.register_insert(stm.table, record, rid)
+            catalog.register_insert_uniques(stm.table, record)
             locked = _try_lock_new_rid(lock_rid, stm.table, rid)
         if not locked:
             lock_rid(stm.table, rid, LockMode.EXCLUSIVE)
