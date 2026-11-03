@@ -654,9 +654,22 @@ class Catalog:
             raise ValueError("Los índices secundarios requieren HeapFile con RIDs")
         return storage.scan_with_rid()
 
-    def get_physical_index(self, table_name: str, column_name: str):
+    def get_physical_index(
+        self,
+        table_name: str,
+        column_name: str,
+        index_type: IndexType | str | None = None,
+    ):
+        requested_type = (
+            index_type.value if isinstance(index_type, IndexType)
+            else index_type.lower() if index_type is not None
+            else None
+        )
         for entry in self.indexes.get(table_name, []):
-            if entry["column_name"] == column_name:
+            if (
+                entry["column_name"] == column_name
+                and (requested_type is None or entry["index_type"] == requested_type)
+            ):
                 return self._physical_indexes.get(entry["index_id"])
         return None
 

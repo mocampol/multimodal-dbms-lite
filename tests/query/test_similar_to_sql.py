@@ -4,6 +4,7 @@ import pytest
 
 from catalog.catalog import Catalog
 from catalog.table_metadata import StorageType, IndexType
+from index.vector import VectorMetric
 from main import make_heap_factory, make_index_buffer_factory, make_sequential_factory
 from query.parser.ast_nodes import (
     SelectStm,
@@ -179,7 +180,16 @@ class TestExecutionVector:
         assert scores[0] >= scores[1]
         assert result[0].values[0].data == 1
 
-    def test_execute_similar_to_with_physical_hnsw_index(self, tmp_path):
+    @pytest.mark.parametrize(
+        "index_type,sql_index_kind",
+        [
+            (IndexType.IVF, "IVF"),
+            (IndexType.HNSW, "HNSW"),
+        ],
+    )
+    def test_execute_similar_to_uses_requested_index_kind(
+        self, tmp_path, monkeypatch, index_type, sql_index_kind
+    ):
         img1 = str(tmp_path / "idx_img1.png")
         img2 = str(tmp_path / "idx_img2.png")
         query_img = str(tmp_path / "idx_query.png")
@@ -200,13 +210,27 @@ class TestExecutionVector:
         execute("CREATE TABLE fotos (id INTEGER PRIMARY KEY, ruta VARCHAR(200));", cat)
         execute(f"INSERT INTO fotos VALUES (1, '{img1}'), (2, '{img2}');", cat)
 
-        # Crear índice vectorial HNSW en catálogo
+        # Both index kinds can exist for one column; USING chooses which one runs.
         cat.create_index("fotos", "ruta", IndexType.HNSW, "idx_fotos_hnsw")
+        cat.create_index("fotos", "ruta", IndexType.IVF, "idx_fotos_ivf")
+        selected_index = cat.get_physical_index(
+            "fotos", "ruta", index_type=index_type.value
+        )
+        calls = []
+        original_search = selected_index.search
+
+        def capture_search(query_vector, k=10, metric=None):
+            calls.append(metric)
+            return original_search(query_vector, k=k, metric=metric)
+
+        monkeypatch.setattr(selected_index, "search", capture_search)
 
         sql = (
             f"SELECT id, SIMILARITY_SCORE() AS score FROM fotos "
-            f"WHERE SIMILAR_TO(ruta, '{query_img}', k=1) USING HNSW WITH METRIC=cosine;"
+            f"WHERE SIMILAR_TO(ruta, '{query_img}', k=1) "
+            f"USING {sql_index_kind} WITH METRIC=euclidean;"
         )
         result = execute(sql, cat)
         assert len(result) == 1
         assert result[0].values[0].data == 1
+        assert calls == [VectorMetric.EUCLIDEAN]

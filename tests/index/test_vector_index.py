@@ -72,6 +72,56 @@ class TestIVFIndex:
         distances = [r.distance for r in results]
         assert distances == sorted(distances)
 
+    @pytest.mark.parametrize(
+        "metric",
+        [VectorMetric.EUCLIDEAN, VectorMetric.DOT_PRODUCT, VectorMetric.COSINE],
+    )
+    def test_ivf_search_can_override_metric(self, metric):
+        vectors = [
+            np.array([1.0, 0.0], dtype=np.float32),
+            np.array([4.0, 1.0], dtype=np.float32),
+            np.array([-2.0, 3.0], dtype=np.float32),
+            np.array([0.5, -1.0], dtype=np.float32),
+        ]
+        rids = ["a", "b", "c", "d"]
+        index = IVFIndex(
+            dim=2,
+            metric=VectorMetric.EUCLIDEAN,
+            n_lists=2,
+            n_probe=2,
+        )
+        index.build(vectors, rids)
+
+        results = index.search(np.array([1.0, 1.0]), k=len(vectors), metric=metric)
+
+        expected = sorted(
+            zip(rids, vectors),
+            key=lambda item: compute_distance(
+                np.array([1.0, 1.0]), item[1], metric
+            ),
+        )
+        assert [result.rid for result in results] == [rid for rid, _ in expected]
+        assert [result.distance for result in results] == sorted(
+            result.distance for result in results
+        )
+
+    def test_ivf_probes_lists_using_overridden_metric(self):
+        index = IVFIndex(dim=2, metric=VectorMetric.EUCLIDEAN, n_lists=2, n_probe=1)
+        index.centroids = np.array([[10.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+        index.inverted_lists = {
+            0: [("high-dot", np.array([10.0, 0.0], dtype=np.float32))],
+            1: [("near-euclidean", np.array([1.0, 0.0], dtype=np.float32))],
+        }
+        index._count = 2
+
+        results = index.search(
+            np.array([1.0, 0.0]),
+            k=1,
+            metric=VectorMetric.DOT_PRODUCT,
+        )
+
+        assert results[0].rid == "high-dot"
+
     def test_ivf_add_incrementally(self):
         ivf = IVFIndex(dim=4, metric=VectorMetric.EUCLIDEAN, n_lists=2, n_probe=2)
         ivf.add(np.array([1, 0, 0, 0]), rid="doc1")
@@ -127,6 +177,31 @@ class TestHNSWIndex:
         # Verificar orden ascendente de distancia
         distances = [r.distance for r in results]
         assert distances == sorted(distances)
+
+    @pytest.mark.parametrize(
+        "metric",
+        [VectorMetric.EUCLIDEAN, VectorMetric.COSINE],
+    )
+    def test_hnsw_search_with_overridden_metric_ranks_all_vectors(self, metric):
+        vectors = [
+            np.array([float(x), 0.0], dtype=np.float32)
+            for x in range(1, 31)
+        ]
+        rids = [str(x) for x in range(1, 31)]
+        index = HNSWIndex(dim=2, metric=VectorMetric.DOT_PRODUCT, max_elements=64)
+        index.build(vectors, rids)
+        query = np.array([10.0, 0.0], dtype=np.float32)
+
+        results = index.search(query, k=5, metric=metric)
+
+        expected = sorted(
+            zip(rids, vectors),
+            key=lambda item: compute_distance(query, item[1], metric),
+        )[:5]
+        assert [result.rid for result in results] == [rid for rid, _ in expected]
+        assert [result.distance for result in results] == sorted(
+            result.distance for result in results
+        )
 
     def test_hnsw_add_incrementally(self):
         hnsw = HNSWIndex(dim=3, metric=VectorMetric.EUCLIDEAN, max_elements=10)

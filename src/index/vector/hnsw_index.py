@@ -126,7 +126,7 @@ class HNSWIndex(BaseVectorIndex):
         target_metric = VectorMetric.from_str(metric) if metric is not None else self.metric
         actual_k = min(k, len(self.label_to_rid))
 
-        # Si la métrica coincide con la construcción de HNSW, usamos directamente el grafo HNSW
+        # HNSW can only navigate according to the metric used to build its graph.
         if target_metric == self.metric:
             labels, distances = self._index.knn_query(q.reshape(1, self.dim), k=actual_k)
             labels = labels[0]
@@ -155,15 +155,11 @@ class HNSWIndex(BaseVectorIndex):
             results.sort(key=lambda r: r.distance)
             return results
 
-        # Si se consulta con una métrica distinta a la nativa del grafo HNSW, recalculamos
-        # de forma transparente preservando compatibilidad de API independiente de métrica
-        fetch_k = min(max(actual_k * 3, 20), len(self.label_to_rid))
-        labels, _ = self._index.knn_query(q.reshape(1, self.dim), k=fetch_k)
+        # A graph built for another metric cannot safely prune candidates for
+        # this query metric, so rank the stored vectors directly.
         candidates: list[SearchResult] = []
-        for lbl in labels[0]:
-            lbl = int(lbl)
+        for lbl, vec in self._raw_vectors.items():
             rid = self.label_to_rid[lbl]
-            vec = self._raw_vectors[lbl]
             dist = compute_distance(q, vec, target_metric)
             score = distance_to_score(dist, target_metric)
             candidates.append(SearchResult(rid=rid, distance=dist, score=score))

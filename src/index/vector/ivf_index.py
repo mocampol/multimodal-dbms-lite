@@ -117,8 +117,12 @@ class IVFIndex(BaseVectorIndex):
 
         target_metric = VectorMetric.from_str(metric) if metric is not None else self.metric
 
-        # Identificar los n_probe centroides más cercanos a la consulta
-        centroid_dists = np.linalg.norm(self.centroids - q, axis=1)
+        # Probe lists using the requested metric, which may differ from the
+        # metric configured when the index was built.
+        centroid_dists = np.asarray(
+            [compute_distance(q, centroid, target_metric) for centroid in self.centroids],
+            dtype=np.float32,
+        )
         probe_count = min(self.n_probe, len(self.centroids))
         probed_clusters = np.argsort(centroid_dists)[:probe_count]
 

@@ -53,7 +53,9 @@ class VectorSearch(PlanNode):
         target_obj = self.similar_to.target if self.similar_to else self.score.target
         k_val = self.similar_to.k if self.similar_to else (self.score.k if self.score else 10)
         metric_kind = self.similar_to.metric if self.similar_to else self.score.metric
+        index_kind = self.similar_to.index_kind if self.similar_to else self.score.index_kind
         metric = self.METRIC_MAP.get(metric_kind, VectorMetric.COSINE)
+        index_type = "ivf" if index_kind == VectorIndexKind.IVF else "hnsw"
 
         column_name = None
         if self.similar_to and self.similar_to.column:
@@ -66,9 +68,11 @@ class VectorSearch(PlanNode):
                 column_name = column_name.rsplit(".", 1)[-1]
 
         if column_name is None:
-            # Buscar columna con índice vectorial en el catálogo
+            # Prefer a column with an index of the requested kind.
             for col in self.schema.columns:
-                idx = self.catalog.get_physical_index(self.table_name, col.name)
+                idx = self.catalog.get_physical_index(
+                    self.table_name, col.name, index_type=index_type
+                )
                 if idx is not None and isinstance(idx, (IVFIndex, HNSWIndex)):
                     column_name = col.name
                     break
@@ -84,7 +88,13 @@ class VectorSearch(PlanNode):
             column_name = self.schema.columns[0].name
 
         # Verificar si hay índice vectorial aplicable
-        index = self.catalog.get_physical_index(self.table_name, column_name) if column_name else None
+        index = (
+            self.catalog.get_physical_index(
+                self.table_name, column_name, index_type=index_type
+            )
+            if column_name
+            else None
+        )
         feature_dimension = index.dim if isinstance(index, (IVFIndex, HNSWIndex)) else 64
         extractor = ExtractFeatures(k=feature_dimension)
         column_idx = self.schema.column_index(column_name) if column_name else 0
