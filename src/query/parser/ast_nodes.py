@@ -35,6 +35,8 @@ class IndexType(Enum):
     RTREE = auto()
     GIN = auto()
     SPIMI = auto()
+    IVF = auto()
+    HNSW = auto()
 
 class StorageKind(Enum):
     HEAP = auto()
@@ -45,6 +47,17 @@ class StorageKind(Enum):
 class RankingAlgorithm(Enum):
     BM25 = auto()
     TF_IDF = auto()
+
+
+class VectorIndexKind(Enum):
+    IVF = auto()
+    HNSW = auto()
+
+
+class VectorMetricKind(Enum):
+    EUCLIDEAN = auto()
+    DOT_PRODUCT = auto()
+    COSINE = auto()
 
 
 # Visitor — interface for traversing the AST (Visitor pattern)
@@ -96,6 +109,9 @@ class Visitor(ABC):
 
     def visit_match_exp(self, exp: "MatchExp"):
         raise NotImplementedError("Este visitor no soporta MATCH")
+
+    def visit_similar_to_exp(self, exp: "SimilarToExp"):
+        raise NotImplementedError("Este visitor no soporta SIMILAR_TO")
 
     @abstractmethod
     def visit_select_stm(self, stm: "SelectStm"):
@@ -399,6 +415,77 @@ class ScoreSpec:
         if not self.is_bound:
             return f"SCORE() AS {self.alias}"
         return f"SCORE({self.column}, {self.query!r}) AS {self.alias}"
+
+
+class SimilarToExp(Exp):
+    """
+    <Condition> ::= SIMILAR_TO ( [ <QualifiedName> COMA ] STRING COMA ID EQ NUM ) [ USING ( IVF | HNSW ) ] [ WITH METRIC EQ ( COSINE | EUCLIDEAN | DOT_PRODUCT ) ]
+                 | <QualifiedName> SIMILAR_TO STRING COMA ID EQ NUM ...
+    """
+
+    def __init__(
+        self,
+        target: str,
+        k: int = 10,
+        column: Optional["IdExp"] = None,
+        index_kind: VectorIndexKind = VectorIndexKind.HNSW,
+        metric: VectorMetricKind = VectorMetricKind.COSINE,
+    ):
+        self.target = target
+        self.k = k
+        self.column = column
+        self.index_kind = index_kind
+        self.metric = metric
+
+    def accept(self, visitor: Visitor):
+        return visitor.visit_similar_to_exp(self)
+
+    def __repr__(self):
+        col_str = f"{self.column!r}, " if self.column else ""
+        return f"SIMILAR_TO({col_str}{self.target!r}, k={self.k}) USING {self.index_kind.name} WITH METRIC={self.metric.name}"
+
+
+class SimilarityScoreSpec:
+    """
+    <SelectItem> ::= SIMILARITY_SCORE ( ) [ [ AS ] ID ]
+    """
+
+    def __init__(
+        self,
+        alias: str = "similarity_score",
+        column: Optional[str] = None,
+        target: Optional[str] = None,
+        k: int = 10,
+        index_kind: VectorIndexKind = VectorIndexKind.HNSW,
+        metric: VectorMetricKind = VectorMetricKind.COSINE,
+    ):
+        self.alias = alias
+        self.column = column
+        self.target = target
+        self.k = k
+        self.index_kind = index_kind
+        self.metric = metric
+
+    @property
+    def name(self) -> str:
+        return self.alias
+
+    @property
+    def is_bound(self) -> bool:
+        return self.target is not None
+
+    def bind(self, similar_to: SimilarToExp) -> None:
+        self.target = similar_to.target
+        self.column = similar_to.column.value if similar_to.column else None
+        self.k = similar_to.k
+        self.index_kind = similar_to.index_kind
+        self.metric = similar_to.metric
+
+    def __repr__(self):
+        if not self.is_bound:
+            return f"SIMILARITY_SCORE() AS {self.alias}"
+        col_str = f"{self.column}, " if self.column else ""
+        return f"SIMILARITY_SCORE({col_str}{self.target!r}) AS {self.alias}"
 
 
 class AggregateSpec:

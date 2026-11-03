@@ -72,6 +72,11 @@ class Scanner:
                 "HEAP": TokenType.HEAP,
                 "SEQUENTIAL": TokenType.SEQUENTIAL,
                 "BM25": TokenType.BM25, "TF_IDF": TokenType.TF_IDF,
+                "IVF": TokenType.IVF, "HNSW": TokenType.HNSW,
+                "SIMILAR_TO": TokenType.SIMILAR_TO,
+                "SIMILARITY_SCORE": TokenType.SIMILARITY_SCORE,
+                "WITH": TokenType.WITH, "METRIC": TokenType.METRIC,
+                "EUCLIDEAN": TokenType.EUCLIDEAN, "DOT_PRODUCT": TokenType.DOT_PRODUCT, "COSINE": TokenType.COSINE,
             }
             if upper in words:
                 return Token(words[upper], lexeme)
@@ -83,6 +88,8 @@ class Scanner:
                 "DROP": ("TABLE", TokenType.DROP_TABLE),
                 "PRIMARY": ("KEY", TokenType.PRIMARY_KEY), "NOT": ("NULL", TokenType.NOT_NULL),
                 "DOUBLE": ("PRECISION", TokenType.T_DOUBLE_PRECISION),
+                "SIMILAR": ("TO", TokenType.SIMILAR_TO),
+                "DOT": ("PRODUCT", TokenType.DOT_PRODUCT),
             }
             if upper in compounds:
                 expected, token_type = compounds[upper]

@@ -109,7 +109,10 @@ multimodal-dbms-lite/
 │   ├── index/                    # estructuras de indexación
 │   │   ├── btree/                # árbol B/B+ y variante clustered
 │   │   ├── extendible_hash/      # hashing extensible
-│   │   └── rtree/                # índice espacial R-tree
+│   │   ├── rtree/                # índice espacial R-tree
+│   │   ├── text/                 # índices de texto invertido y SPIMI
+│   │   ├── multimedia/           # extracción de características (SIFT, MFCC, BoW, TF-IDF)
+│   │   └── vector/               # índices vectoriales de similitud (IVF, HNSW)
 │   ├── loader/                   # lectura de CSV e inferencia de tipos
 │   │   ├── csv_loader.py
 │   │   ├── csv_reader.py
