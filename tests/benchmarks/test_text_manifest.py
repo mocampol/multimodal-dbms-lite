@@ -221,3 +221,23 @@ def test_an_unknown_format_version_is_reported(tmp_path):
     def edit(manifest):
         manifest["format_version"] = 99
     assert_problem(validate_workload_files(*write_pair(tmp_path, edit=edit)), "format_version 99")
+
+
+def test_crlf_line_endings_are_diagnosed_with_their_cause(tmp_path):
+    """git with core.autocrlf rewrites LF as CRLF on checkout: the files then fail
+    their SHA-256 for a reason that is not obvious. The validation names it."""
+    queries_file, qrels_file = write_pair(tmp_path)
+    qrels_file.write_bytes(qrels_file.read_bytes().replace(b"\n", b"\r\n"))
+
+    problems = validate_workload_files(queries_file, qrels_file)
+
+    assert_problem(problems, "qrels.tsv tiene saltos de línea CRLF")
+    assert_problem(problems, ".gitattributes")
+    assert_problem(problems, "SHA-256 del archivo es distinto")  # the symptom is still reported
+
+
+def test_a_manifest_with_crlf_line_endings_is_diagnosed_too(tmp_path):
+    queries_file, qrels_file = write_pair(tmp_path)
+    queries_file.write_bytes(queries_file.read_bytes().replace(b"\n", b"\r\n"))
+
+    assert_problem(validate_workload_files(queries_file, qrels_file), "queries.json tiene saltos de línea CRLF")

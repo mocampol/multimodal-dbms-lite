@@ -1,0 +1,5 @@
+# La carga de trabajo congelada del benchmark de texto se verifica por SHA-256 de sus bytes:
+# git no debe convertir sus saltos de línea (core.autocrlf en Windows los volvería CRLF).
+benchmarks/workload/*.tsv  text eol=lf
+benchmarks/workload/*.json text eol=lf
+ 

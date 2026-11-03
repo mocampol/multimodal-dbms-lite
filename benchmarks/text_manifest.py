@@ -119,6 +119,14 @@ def validate_workload_files(queries_file: Path, qrels_file: Path) -> list[str]:
     if problems:
         return problems
 
+    for path in (queries_file, qrels_file):
+        if b"\r" in Path(path).read_bytes():
+            problems.append(
+                f"{Path(path).name} tiene saltos de línea CRLF: git los convirtió al clonar (core.autocrlf). "
+                "Los archivos se escriben con LF y su SHA-256 depende de ello; fija 'eol=lf' en .gitattributes "
+                "y vuelve a clonar o ejecuta: git add --renormalize ."
+            )
+
     manifest = read_manifest(queries_file)
     if manifest.get("format_version") != FORMAT_VERSION:
         problems.append(f"format_version {manifest.get('format_version')!r}, se esperaba {FORMAT_VERSION}")
