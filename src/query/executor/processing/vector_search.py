@@ -55,9 +55,6 @@ class VectorSearch(PlanNode):
         metric_kind = self.similar_to.metric if self.similar_to else self.score.metric
         metric = self.METRIC_MAP.get(metric_kind, VectorMetric.COSINE)
 
-        extractor = ExtractFeatures(k=64)
-        query_fv = extractor.extract(target_obj)
-
         column_name = None
         if self.similar_to and self.similar_to.column:
             column_name = self.similar_to.column.value
@@ -88,12 +85,24 @@ class VectorSearch(PlanNode):
 
         # Verificar si hay índice vectorial aplicable
         index = self.catalog.get_physical_index(self.table_name, column_name) if column_name else None
+        feature_dimension = index.dim if isinstance(index, (IVFIndex, HNSWIndex)) else 64
+        extractor = ExtractFeatures(k=feature_dimension)
+        column_idx = self.schema.column_index(column_name) if column_name else 0
+        storage = self.catalog.get_storage(self.table_name)
+        corpus = [
+            record[column_idx].data
+            for record in storage.scan()
+            if record[column_idx].data is not None
+        ]
+        if corpus:
+            extractor.fit(corpus)
+        query_fv = extractor.extract(target_obj)
+
         used_index = False
 
         if index is not None and isinstance(index, (IVFIndex, HNSWIndex)) and len(index) > 0:
             try:
                 results = index.search(query_fv.data, k=k_val, metric=metric)
-                storage = self.catalog.get_storage(self.table_name)
                 for res in results:
                     rec = storage.get(res.rid)
                     if rec is not None:
@@ -115,11 +124,10 @@ class VectorSearch(PlanNode):
                 rows.append(rec)
             self.child.close()
 
-            col_idx = self.schema.column_index(column_name) if column_name else 0
             scored_rows: list[tuple[float, float, Record]] = []
 
             for rec in rows:
-                val = rec[col_idx].data
+                val = rec[column_idx].data
                 if val is None:
                     continue
                 try:

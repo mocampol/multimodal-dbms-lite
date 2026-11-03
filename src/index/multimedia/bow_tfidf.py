@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from typing import Sequence
 import numpy as np
 
@@ -36,10 +35,13 @@ class BoWTFIDF:
         df = np.zeros(self.k, dtype=np.float32)
         for assignments in assignments_list:
             if assignments is not None and len(assignments) > 0:
+                assignments = np.asarray(assignments)
+                if assignments.ndim != 1 or not np.issubdtype(assignments.dtype, np.integer):
+                    raise ValueError("Las asignaciones deben ser un array unidimensional de enteros")
+                if np.any(assignments < 0) or np.any(assignments >= self.k):
+                    raise ValueError("Las asignaciones deben estar entre 0 y k - 1")
                 unique_words = np.unique(assignments)
-                for word in unique_words:
-                    if 0 <= word < self.k:
-                        df[word] += 1.0
+                df[unique_words] += 1.0
 
         # Fórmula estándar de smooth IDF: log((N + 1) / (DF + 1)) + 1
         self.idf_ = np.log((n_docs + 1.0) / (df + 1.0)) + 1.0
@@ -57,8 +59,16 @@ class BoWTFIDF:
         Returns:
             np.ndarray: vector 1D de dimensión K, normalizado L2 (norma euclidiana = 1).
         """
-        if assignments is None or len(assignments) == 0:
+        if assignments is None:
             raise ValueError("Las asignaciones de palabras no pueden estar vacías")
+
+        assignments = np.asarray(assignments)
+        if assignments.ndim != 1 or not np.issubdtype(assignments.dtype, np.integer):
+            raise ValueError("Las asignaciones deben ser un array unidimensional de enteros")
+        if assignments.size == 0:
+            raise ValueError("Las asignaciones de palabras no pueden estar vacías")
+        if np.any(assignments < 0) or np.any(assignments >= self.k):
+            raise ValueError("Las asignaciones deben estar entre 0 y k - 1")
 
         counts = np.bincount(assignments, minlength=self.k)[: self.k].astype(np.float32)
         total = float(len(assignments))

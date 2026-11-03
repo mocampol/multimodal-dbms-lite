@@ -561,14 +561,18 @@ class Catalog:
     def _build_vector_index(self, index_type, index, storage, table_metadata, column_name):
         column_index = table_metadata.schema.column_index(column_name)
         extractor = ExtractFeatures(k=index.dim)
-        vectors = []
-        rids = []
+        samples = []
         for rid, record in self._scan_with_rids(storage):
             val = record[column_index].data
             if val is not None:
-                fv = extractor.extract(val)
-                vectors.append(fv.data)
-                rids.append(rid)
+                samples.append((rid, val))
+
+        if not samples:
+            raise ValueError(f"No hay valores para construir el índice vectorial de {column_name}")
+
+        extractor.fit([value for _, value in samples])
+        vectors = [extractor.extract(value).data for _, value in samples]
+        rids = [rid for rid, _ in samples]
         index.build(vectors, rids)
         index.save(index._storage_path)
         return index

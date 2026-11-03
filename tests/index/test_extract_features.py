@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import pytest
 import soundfile as sf
+from sklearn.datasets import load_sample_image
 
 from index.multimedia import (
     SIFTExtractor,
@@ -137,6 +138,22 @@ class TestQuantizerAndBoW:
         assert vec2.shape == (32,)
         assert np.isclose(np.linalg.norm(vec2), 1.0, atol=1e-5)
 
+    def test_quantizer_rejects_invalid_descriptors(self):
+        quantizer = Quantizer(k=2)
+        with pytest.raises(ValueError, match="valores no finitos"):
+            quantizer.fit(np.array([[1.0], [np.nan]], dtype=np.float32))
+
+        quantizer.fit(np.array([[0.0], [1.0]], dtype=np.float32))
+        with pytest.raises(ValueError, match="espera 1"):
+            quantizer.predict(np.ones((1, 2), dtype=np.float32))
+
+    def test_bow_rejects_invalid_assignments(self):
+        bow = BoWTFIDF(k=4)
+        with pytest.raises(ValueError, match="entre 0 y k - 1"):
+            bow.compute(np.array([-1, 1]))
+        with pytest.raises(ValueError, match="unidimensional de enteros"):
+            bow.fit([np.array([[0, 1]])])
+
 
 class TestExtractFeatures:
     def test_extract_numeric_vector(self):
@@ -149,6 +166,9 @@ class TestExtractFeatures:
         assert fv.k == 64
         assert len(fv.data) == 64
         assert np.isclose(np.linalg.norm(fv.data), 1.0, atol=1e-5)
+        assert extractor.is_fitted
+        assert extractor.quantizer.centroids.shape[1] == 1
+        assert extractor.bow_tfidf.idf_.shape == (64,)
 
     def test_extract_image_end_to_end(self, tmp_path):
         img_path = str(tmp_path / "img1.png")
@@ -162,6 +182,16 @@ class TestExtractFeatures:
         assert fv.k == 32
         assert len(fv.data) == 32
         assert np.isclose(np.linalg.norm(fv.data), 1.0, atol=1e-5)
+
+    def test_extract_real_sample_image(self):
+        image = load_sample_image("china.jpg")
+        extractor = ExtractFeatures(k=32)
+
+        feature_vector = extractor.extract(image)
+
+        assert feature_vector.source_type == "image"
+        assert feature_vector.data.shape == (32,)
+        assert extractor.quantizer.centroids.shape[1] == 128
 
     def test_extract_audio_end_to_end(self, tmp_path):
         audio_path = str(tmp_path / "audio1.wav")
@@ -187,16 +217,43 @@ class TestExtractFeatures:
     def test_fit_corpus_multimodal(self, tmp_path):
         img1 = str(tmp_path / "c_img1.png")
         img2 = str(tmp_path / "c_img2.png")
+        audio1 = str(tmp_path / "c_audio1.wav")
+        audio2 = str(tmp_path / "c_audio2.wav")
         _create_synthetic_image(img1)
         _create_synthetic_image(img2)
+        _create_synthetic_audio(audio1)
+        _create_synthetic_audio(audio2)
 
         extractor = ExtractFeatures(k=16)
-        extractor.fit([img1, img2])
+        extractor.fit([img1, img2, audio1, audio2, [1.0, 2.0], [3.0, 4.0]])
         assert extractor.is_fitted
 
-        fv1 = extractor.extract(img1)
-        assert fv1.k == 16
-        assert np.isclose(np.linalg.norm(fv1.data), 1.0, atol=1e-5)
+        image_vector = extractor.extract(img1)
+        audio_vector = extractor.extract(audio1)
+        numeric_vector = extractor.extract([1.0, 2.0])
+        assert image_vector.data.shape == audio_vector.data.shape == numeric_vector.data.shape == (16,)
+        assert extractor._quantizers["image"].centroids.shape[1] == 128
+        assert extractor._quantizers["audio"].centroids.shape[1] == 20
+        assert extractor._quantizers["numeric"].centroids.shape[1] == 1
+        for feature_vector in (image_vector, audio_vector, numeric_vector):
+            assert np.isclose(np.linalg.norm(feature_vector.data), 1.0, atol=1e-5)
+        assert extractor._bow_tfidf_by_modality["numeric"].idf_.shape == (16,)
+
+    def test_numeric_feature_vector_uses_corpus_idf(self):
+        extractor = ExtractFeatures(k=2)
+        extractor.fit([[0.0, 1.0], [0.0, 0.0]])
+
+        assignments = extractor._quantizers["numeric"].predict(np.array([[0.0], [1.0]]))
+        common_word, rare_word = assignments
+        idf = extractor._bow_tfidf_by_modality["numeric"].idf_
+        assert idf[rare_word] > idf[common_word]
+        feature_vector = extractor.extract([0.0, 1.0])
+        assert feature_vector.data[rare_word] > feature_vector.data[common_word]
+
+    def test_numeric_vector_rejects_non_finite_values(self):
+        extractor = ExtractFeatures(k=8)
+        with pytest.raises(ValueError, match="valores no finitos"):
+            extractor.extract([1.0, np.inf])
 
     def test_invalid_and_empty_inputs(self):
         extractor = ExtractFeatures(k=32)

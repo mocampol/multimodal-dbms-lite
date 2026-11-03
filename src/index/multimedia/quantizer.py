@@ -41,12 +41,18 @@ class Quantizer:
         Returns:
             self
         """
-        if descriptors is None or len(descriptors) == 0:
+        if descriptors is None:
             raise ValueError("No se proporcionaron descriptores para entrenar el cuantizador")
 
         descriptors = np.asarray(descriptors, dtype=np.float32)
         if descriptors.ndim != 2:
             raise ValueError(f"Los descriptores deben tener 2 dimensiones (N, D), forma recibida: {descriptors.shape}")
+        if descriptors.shape[0] == 0:
+            raise ValueError("No se proporcionaron descriptores para entrenar el cuantizador")
+        if descriptors.shape[1] == 0:
+            raise ValueError("Los descriptores deben tener al menos una característica")
+        if not np.all(np.isfinite(descriptors)):
+            raise ValueError("Los descriptores contienen valores no finitos")
 
         n_samples = descriptors.shape[0]
         # Si hay menos muestras que clusters, ajustamos el número de clusters al número de muestras
@@ -80,11 +86,20 @@ class Quantizer:
         if not self._is_fitted or self._model is None:
             raise ValueError("El cuantizador no está entrenado. Llame a fit() primero.")
 
-        if descriptors is None or len(descriptors) == 0:
+        if descriptors is None:
             raise ValueError("No se proporcionaron descriptores para cuantizar")
 
         descriptors = np.asarray(descriptors, dtype=np.float32)
         if descriptors.ndim != 2:
             raise ValueError(f"Los descriptores deben tener 2 dimensiones (N, D), forma recibida: {descriptors.shape}")
+        if descriptors.shape[0] == 0:
+            raise ValueError("No se proporcionaron descriptores para cuantizar")
+        if descriptors.shape[1] != self.centroids.shape[1]:
+            raise ValueError(
+                f"Los descriptores tienen dimensión {descriptors.shape[1]}, "
+                f"pero el cuantizador espera {self.centroids.shape[1]}"
+            )
+        if not np.all(np.isfinite(descriptors)):
+            raise ValueError("Los descriptores contienen valores no finitos")
 
         return self._model.predict(descriptors).astype(np.int64)

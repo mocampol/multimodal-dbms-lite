@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from typing import Any, Sequence, Union
+from typing import Any, Sequence
 import numpy as np
 
 from .sift_extractor import SIFTExtractor
@@ -37,8 +37,8 @@ class FeatureVector:
 
 class ExtractFeatures:
     """
-    Extractor de características multimedia unificado para imágenes, audio y vectores numéricos.
-    Produce representaciones comparables de dimensión K ponderadas por TF-IDF.
+    Extractor multimedia con codebooks e IDF independientes para cada modalidad.
+    Produce vectores de dimensión K compatibles con índices de similitud.
     """
 
     IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
@@ -65,12 +65,42 @@ class ExtractFeatures:
         self.mfcc = MFCCExtractor()
         self.quantizer = Quantizer(k=k)
         self.bow_tfidf = BoWTFIDF(k=k)
+        self._quantizers: dict[str, Quantizer] = {}
+        self._bow_tfidf_by_modality: dict[str, BoWTFIDF] = {}
         self._is_fitted = False
         self._initialized = True
 
     @property
     def is_fitted(self) -> bool:
         return self._is_fitted
+
+    def _extract_descriptors(self, obj: Any, modality: str) -> np.ndarray:
+        if modality == "image":
+            return self.sift.extract(obj)
+        if modality == "audio":
+            return self.mfcc.extract(obj)
+        if modality == "numeric":
+            values = np.asarray(obj, dtype=np.float32).reshape(-1)
+            if values.size == 0:
+                raise ValueError("El vector numérico está vacío")
+            if not np.all(np.isfinite(values)):
+                raise ValueError("El vector numérico contiene valores no finitos")
+            return values.reshape(-1, 1)
+        raise ValueError(f"Modalidad desconocida: {modality}")
+
+    def _train_modality(self, documents: Sequence[np.ndarray]) -> tuple[Quantizer, BoWTFIDF]:
+        quantizer = Quantizer(k=self.k)
+        quantizer.fit(np.vstack(documents))
+        assignments = [quantizer.predict(descriptors) for descriptors in documents]
+        bow_tfidf = BoWTFIDF(k=self.k).fit(assignments)
+        return quantizer, bow_tfidf
+
+    def _fit_modality(self, modality: str, documents: Sequence[np.ndarray]) -> None:
+        quantizer, bow_tfidf = self._train_modality(documents)
+        self._quantizers[modality] = quantizer
+        self._bow_tfidf_by_modality[modality] = bow_tfidf
+        self.quantizer = quantizer
+        self.bow_tfidf = bow_tfidf
 
     def detect_type(self, obj: Any) -> str:
         """Detecta el tipo de entrada: 'image', 'audio' o 'numeric'."""
@@ -112,40 +142,30 @@ class ExtractFeatures:
         """
         Entrena el cuantizador y las frecuencias de documentos TF-IDF sobre una colección de objetos.
         """
-        if not corpus:
+        if len(corpus) == 0:
             raise ValueError("El corpus para fit() no puede estar vacío")
 
-        all_descriptors: list[np.ndarray] = []
-        assignments_per_doc: list[np.ndarray] = []
-        docs_descriptors: list[np.ndarray] = []
+        descriptors_by_modality: dict[str, list[np.ndarray]] = {}
 
         for item in corpus:
             modality = self.detect_type(item)
-            if modality == "image":
-                desc = self.sift.extract(item)
-            elif modality == "audio":
-                desc = self.mfcc.extract(item)
-            elif modality == "numeric":
-                vec = np.asarray(item, dtype=np.float32).flatten()
-                # Expandir como descriptor 2D para cuantización
-                desc = vec.reshape(-1, 1)
-            else:
-                continue
+            descriptors = self._extract_descriptors(item, modality)
+            descriptors_by_modality.setdefault(modality, []).append(descriptors)
 
-            all_descriptors.append(desc)
-            docs_descriptors.append(desc)
-
-        if not all_descriptors:
+        if not descriptors_by_modality:
             raise ValueError("No se pudieron extraer descriptores válidos del corpus")
 
-        combined = np.vstack(all_descriptors)
-        self.quantizer.fit(combined)
-
-        for desc in docs_descriptors:
-            assigned = self.quantizer.predict(desc)
-            assignments_per_doc.append(assigned)
-
-        self.bow_tfidf.fit(assignments_per_doc)
+        quantizers: dict[str, Quantizer] = {}
+        bow_tfidf_by_modality: dict[str, BoWTFIDF] = {}
+        for modality, documents in descriptors_by_modality.items():
+            quantizer, bow_tfidf = self._train_modality(documents)
+            quantizers[modality] = quantizer
+            bow_tfidf_by_modality[modality] = bow_tfidf
+        self._quantizers = quantizers
+        self._bow_tfidf_by_modality = bow_tfidf_by_modality
+        first_modality = next(iter(quantizers))
+        self.quantizer = quantizers[first_modality]
+        self.bow_tfidf = bow_tfidf_by_modality[first_modality]
         self._is_fitted = True
         return self
 
@@ -153,61 +173,15 @@ class ExtractFeatures:
         """
         Extrae y cuantiza las características de un objeto multimedia, generando un FeatureVector de dimensión K.
         """
-        if obj is None:
-            raise ValueError("El objeto de entrada no puede ser None")
-
         modality = source_type or self.detect_type(obj)
+        descriptors = self._extract_descriptors(obj, modality)
+        if modality not in self._quantizers:
+            self._fit_modality(modality, [descriptors])
+            self._is_fitted = True
 
-        if modality == "image":
-            descriptors = self.sift.extract(obj)
-            if not self.quantizer.is_fitted:
-                self.quantizer.fit(descriptors)
-                self.bow_tfidf.fit([self.quantizer.predict(descriptors)])
-                self._is_fitted = True
-
-            assignments = self.quantizer.predict(descriptors)
-            vec = self.bow_tfidf.compute(assignments)
-            return FeatureVector(data=vec, source_type="image", k=self.k)
-
-        elif modality == "audio":
-            frames = self.mfcc.extract(obj)
-            if not self.quantizer.is_fitted:
-                self.quantizer.fit(frames)
-                self.bow_tfidf.fit([self.quantizer.predict(frames)])
-                self._is_fitted = True
-
-            assignments = self.quantizer.predict(frames)
-            vec = self.bow_tfidf.compute(assignments)
-            return FeatureVector(data=vec, source_type="audio", k=self.k)
-
-        elif modality == "numeric":
-            raw = np.asarray(obj, dtype=np.float32).flatten()
-            if len(raw) == 0:
-                raise ValueError("El vector numérico está vacío")
-
-            # Adaptar a dimensión K
-            if len(raw) == self.k:
-                vec = raw.copy()
-            elif len(raw) > 1:
-                # Interpolación suave para preservar la curva de frecuencias
-                x_old = np.linspace(0.0, 1.0, len(raw))
-                x_new = np.linspace(0.0, 1.0, self.k)
-                vec = np.interp(x_new, x_old, raw).astype(np.float32)
-            else:
-                # Vector de 1 solo elemento -> expandir
-                vec = np.full(self.k, raw[0], dtype=np.float32)
-
-            # Normalización L2
-            norm = np.linalg.norm(vec)
-            if norm > 1e-12:
-                vec = vec / norm
-            else:
-                vec = np.zeros(self.k, dtype=np.float32)
-
-            return FeatureVector(data=vec.astype(np.float32), source_type="numeric", k=self.k)
-
-        else:
-            raise ValueError(f"Modalidad desconocida: {modality}")
+        assignments = self._quantizers[modality].predict(descriptors)
+        vec = self._bow_tfidf_by_modality[modality].compute(assignments)
+        return FeatureVector(data=vec, source_type=modality, k=self.k)
 
     def __call__(self, obj: Any, source_type: str | None = None) -> FeatureVector:
         return self.extract(obj, source_type=source_type)
