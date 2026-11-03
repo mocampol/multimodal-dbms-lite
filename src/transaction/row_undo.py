@@ -20,8 +20,10 @@ def undo_insert(manager, catalog, table_name, storage, rid):
         storage.delete(rid)
 
 
-def undo_delete(manager, catalog, table_name, storage, record):
+def undo_delete(manager, catalog, table_name, storage, record, deleted_rid):
     with table_latch(catalog, table_name):
+        if storage.get(deleted_rid) is not None:
+            return
         rid = storage.insert(record)
         manager.log_data_change("INSERT", table_name, rid, None, record)
         catalog.register_insert(table_name, record, rid)

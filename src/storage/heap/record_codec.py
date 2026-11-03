@@ -233,7 +233,7 @@ def decode_record(buf: bytes, schema: Schema) -> Record:
     for i, column in enumerate(schema.columns):
         is_null = (null_bitmap[i // 8] >> (i % 8)) & 1
 
-        if is_null:
+        if is_null or offset >= len(buf):
             values.append(Value(column.data_type, None))
             continue
 

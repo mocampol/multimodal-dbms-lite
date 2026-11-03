@@ -84,6 +84,35 @@ def test_recovery_undoes_uncommitted_insert_update_and_delete(tmp_path, reopen):
     assert execute("SELECT * FROM accounts WHERE balance = 999;", restarted) == []
 
 
+def test_recovery_rebuilds_text_index_after_uncommitted_dml(tmp_path, reopen):
+    catalog = reopen(tmp_path)
+    execute("CREATE TABLE docs (id INTEGER PRIMARY KEY, texto TEXT);", catalog)
+    execute("INSERT INTO docs VALUES (1, 'Documento original persistente');", catalog)
+    execute("INSERT INTO docs VALUES (2, 'Documento que sera eliminado');", catalog)
+    execute("CREATE INDEX docs_texto_spimi ON docs USING spimi (texto);", catalog)
+
+    manager = catalog._transaction_manager
+    loser = manager.begin()
+    execute("INSERT INTO docs VALUES (3, 'Documento insertado temporal');", catalog)
+    execute("UPDATE docs SET texto = 'Documento modificado temporal' WHERE id = 1;", catalog)
+    execute("DELETE FROM docs WHERE id = 2;", catalog)
+    _crash_with_pages_on_disk(catalog, "docs")
+
+    restarted, result = _restart(reopen, tmp_path)
+
+    assert result["undone"] == {loser}
+    assert _rows(restarted, "docs") == [
+        (1, "Documento original persistente"),
+        (2, "Documento que sera eliminado"),
+    ]
+    index = restarted.get_physical_index("docs", "texto")
+    assert index.total_docs == 2
+    assert len(index.bm25_search(restarted.text_processor.process("original"))) == 1
+    assert index.bm25_search(restarted.text_processor.process("modificado")) == []
+    assert index.bm25_search(restarted.text_processor.process("insertado")) == []
+    assert len(index.bm25_search(restarted.text_processor.process("eliminado"))) == 1
+
+
 def test_recovery_is_not_repeated_on_the_next_restart(reopen, tmp_path):
     catalog = reopen(tmp_path)
     execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER);", catalog)

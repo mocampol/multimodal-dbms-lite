@@ -6,14 +6,16 @@
 					   | <CreateTableStmt> SEMICOL
 					   | <CreateIndexStmt> SEMICOL
 					   | <DropTableStmt> SEMICOL
+					   | <DropIndexStmt> SEMICOL
 					   | BEGIN_TRANSACTION SEMICOL
 					   | END_TRANSACTION SEMICOL
 					   | EXPLAIN [ ANALYZE ] <SelectStmt> SEMICOL
 
 <SelectStmt>         ::= SELECT <SelectList> FROM ID [ <JoinClause> ]
 						 [ <WhereClause> ] [ <GroupOrOrder> ] [ <LimitClause> ]
-<SelectList>         ::= MUL | <SelectItem> { COMA <SelectItem> }
-<SelectItem>         ::= <QualifiedName> | <Aggregate>
+<SelectList>         ::= MUL { COMA <ScoreItem> } | <SelectItem> { COMA <SelectItem> }
+<SelectItem>         ::= <QualifiedName> | <Aggregate> | <ScoreItem>
+<ScoreItem>          ::= SCORE LPAREN [ <QualifiedName> COMA STRING ] RPAREN [ [ AS ] ID ]
 <Aggregate>          ::= COUNT ( MUL | <QualifiedName> )
 					   | SUM ( <QualifiedName> )
 					   | AVG ( <QualifiedName> )
@@ -24,13 +26,18 @@
 <Condition>          ::= <QualifiedName> <Operator> <Value>
 					   | <DistanceExp> <Operator> <Value>
 					   | <WithinExp>
+					   | <MatchExp>
+<MatchExp>           ::= MATCH LPAREN <QualifiedName> COMA STRING RPAREN
+						 [ USING <RankingAlgorithm> ]
+					   | <QualifiedName> MATCH STRING
+<RankingAlgorithm>   ::= BM25 | TF_IDF
 <Operator>           ::= EQ | NEQ | LE | LEQ | GT | GEQ
 <Value>              ::= NUM | STRING | <QualifiedName> | NULL | <Point> | <Polygon>
 <QualifiedName>      ::= ID [ DOT ID ]
 <GroupOrOrder>       ::= { <GroupByClause> | <OrderByClause> }
 <GroupByClause>      ::= GROUP_BY <QualifiedName> { COMA <QualifiedName> }
 <OrderByClause>      ::= ORDER_BY <OrderByItem> { COMA <OrderByItem> }
-<OrderByItem>        ::= <QualifiedName> | <DistanceExp>
+<OrderByItem>        ::= ( <QualifiedName> | <DistanceExp> ) [ ASC | DESC ]
 <LimitClause>        ::= LIMIT NUM
 
 <InsertStmt>         ::= INSERT_INTO ID [ LPAREN <ColumnNameList> RPAREN ]
@@ -50,9 +57,11 @@
 					   | DOUBLE_PRECISION | CHAR | VARCHAR | TEXT | BOOLEAN
 					   | DATE | TIME | TIMESTAMP | BYTEA | POINT
 <StorageType>        ::= HEAP | SEQUENTIAL
-<CreateIndexStmt>    ::= CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>
+<CreateIndexStmt>    ::= CREATE_INDEX ID ON ID USING <IndexType> LPAREN ID RPAREN
+					   | CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>
 <DropTableStmt>      ::= DROP_TABLE ID
-<IndexType>          ::= BTREE | HASH | RTREE
+<DropIndexStmt>      ::= DROP_INDEX [ IF EXISTS ] ID
+<IndexType>          ::= BTREE | HASH | RTREE | GIN | SPIMI
 
 <Point>              ::= POINT LPAREN NUM COMA NUM RPAREN
 <PointList>          ::= <Point> { COMA <Point> }

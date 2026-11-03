@@ -67,8 +67,11 @@ class Scanner:
                 "DISTANCIA": TokenType.DISTANCE, "DENTRO_DE": TokenType.WITHIN,
                 "POLYGON": TokenType.POLYGON, "RECTANGLE": TokenType.RECTANGLE, "GEOMETRY": TokenType.T_GEOMETRY, "CENTROIDE": TokenType.CENTROID, "LIMIT": TokenType.LIMIT,
                 "BTREE": TokenType.BTREE, "HASH": TokenType.HASH, "RTREE": TokenType.RTREE,
+                "GIN": TokenType.GIN, "SPIMI": TokenType.SPIMI,
+                "IF": TokenType.IF, "EXISTS": TokenType.EXISTS,
                 "HEAP": TokenType.HEAP,
                 "SEQUENTIAL": TokenType.SEQUENTIAL,
+                "BM25": TokenType.BM25, "TF_IDF": TokenType.TF_IDF,
             }
             if upper in words:
                 return Token(words[upper], lexeme)
@@ -102,6 +105,16 @@ class Scanner:
                 if self.input[probe:end].upper() == "INDEX":
                     self.current = end
                     return Token(TokenType.CREATE_INDEX, self.input[self.first:self.current])
+            if upper == "DROP":
+                probe = self.current
+                while probe < len(self.input) and _is_white_space(self.input[probe]):
+                    probe += 1
+                end = probe
+                while end < len(self.input) and self.input[end].isalpha():
+                    end += 1
+                if self.input[probe:end].upper() == "INDEX":
+                    self.current = end
+                    return Token(TokenType.DROP_INDEX, self.input[self.first:self.current])
             return Token(TokenType.ID, lexeme)
 
         if c == "'":

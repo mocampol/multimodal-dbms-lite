@@ -15,6 +15,8 @@ class IndexType(Enum):
     BTREE = "btree"
     HASH = "hash"
     RTREE = "rtree"
+    GIN = "gin"
+    SPIMI = "spimi"
 
 
 class TableMetadata:

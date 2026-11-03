@@ -3,6 +3,7 @@ from typing import Optional, Protocol, Tuple, Union
 from catalog.table_metadata import StorageType
 from common import DataType, Point, Value, Column, Schema
 from query.parser.exceptions import SemanticError
+from index.text import default_text_processor
 
 from query.parser.ast_nodes import (
     Visitor,
@@ -28,11 +29,14 @@ from query.parser.ast_nodes import (
     GroupByClause,
     JoinClause,
     AggregateSpec,
+    MatchExp,
+    ScoreSpec,
     BeginTransactionStm,
     EndTransactionStm,
     UpdateStm,
     CreateTableStm,
     CreateIndexStm,
+    DropIndexStm,
     DropTableStm,
     IndexType,
     StorageKind,
@@ -59,7 +63,9 @@ class CatalogProtocol(Protocol):
     def table_exists(self, table_name: str) -> bool: ...
     def get_schema(self, table_name: str) -> Schema: ...
     def create_table(self, schema: Schema, storage_type: StorageType = StorageType.HEAP) -> None: ...
-    def create_index(self, table_name: str, column_name: str, index_type: str) -> None: ...
+    def create_index(self, table_name: str, column_name: str, index_type: str, index_name: str | None = None) -> None: ...
+    def drop_index(self, index_name: str) -> None: ...
+    def index_exists(self, index_name: str) -> bool: ...
     def drop_table(self, table_name: str) -> None: ...
     def get_indexes(self, table_name: str) -> list[dict]: ...
 
@@ -89,16 +95,29 @@ class InMemoryCatalog:
         if schema.table_name in self._schemas:
             raise SemanticError(f"La tabla '{schema.table_name}' ya existe")
         self._schemas[schema.table_name] = schema
-        # NOTE: InMemoryCatalog no tiene storage físico real detrás, así
-        # que storage_type se acepta solo para cumplir la firma del
-        # Protocol — no tiene ningún efecto aquí.
 
-    def create_index(self, table_name: str, column_name: str, index_type: str) -> None:
+    def create_index(self, table_name: str, column_name: str, index_type: str, index_name: str | None = None) -> None:
         self.get_schema(table_name)  # raises if the table doesn't exist
         self._indexes.setdefault(table_name, []).append({
+            "index_name": index_name or f"{table_name}_{column_name}_idx",
             "column_name": column_name,
             "index_type": index_type,
         })
+
+    def index_exists(self, index_name: str) -> bool:
+        for entries in self._indexes.values():
+            for entry in entries:
+                if entry.get("index_name") == index_name:
+                    return True
+        return False
+
+    def drop_index(self, index_name: str) -> None:
+        for table_name, entries in list(self._indexes.items()):
+            for entry in list(entries):
+                if entry.get("index_name") == index_name:
+                    entries.remove(entry)
+                    return
+        raise SemanticError(f"El índice '{index_name}' no existe")
 
     def get_indexes(self, table_name: str) -> list[dict]:
         return self._indexes.get(table_name, [])
@@ -142,15 +161,20 @@ class SemanticVisitor(Visitor):
                 if not self.catalog.table_exists(stm.join.table):
                     raise SemanticError(f"La tabla '{stm.join.table}' no existe")
                 self._validate_join(stm, schema, self.catalog.get_schema(stm.join.table))
+            score_aliases = self._validate_text_search(stm)
             if stm.columns != ["*"]:
                 for col in stm.columns:
+                    if isinstance(col, ScoreSpec) or col == "*":
+                        continue  # validated by _validate_text_search
                     if isinstance(col, AggregateSpec):
                         self._validate_aggregate(stm, col)
                     else:
                         self._require_select_column(stm, col)
 
             if stm.where_cond is not None:
-                if isinstance(stm.where_cond, SpatialPredicate):
+                if isinstance(stm.where_cond, MatchExp):
+                    pass  # validated by _validate_text_search
+                elif isinstance(stm.where_cond, SpatialPredicate):
                     self._validate_spatial_predicate(stm, stm.where_cond)
                 else:
                     self._validate_select_condition(stm, stm.where_cond)
@@ -159,6 +183,8 @@ class SemanticVisitor(Visitor):
                 for column in stm.order_by.columns:
                     if isinstance(column, DistanceExp):
                         self._validate_distance(stm, column)
+                    elif column in score_aliases:
+                        continue  # ORDER BY <alias de SCORE>
                     else:
                         self._require_select_column(stm, column)
 
@@ -175,6 +201,70 @@ class SemanticVisitor(Visitor):
         # explica es el mismo que se ejecutaría, así que basta con que
         # la sentencia interna sea válida.
         return stm.inner.accept(self)
+
+    def visit_match_exp(self, exp: MatchExp):
+        # reached only from DELETE / UPDATE; SELECT validates MATCH itself
+        raise SemanticError("MATCH solo se admite en el WHERE de un SELECT")
+
+    def _validate_text_search(self, stm) -> set:
+        """Validates SCORE(...) items and a MATCH condition; returns the set
+        of SCORE aliases (usable in ORDER BY)."""
+        scores = [c for c in stm.columns if isinstance(c, ScoreSpec)]
+        match = stm.where_cond if isinstance(stm.where_cond, MatchExp) else None
+        if "*" in stm.columns:
+            if stm.columns[0] != "*" or any(
+                c != "*" and not isinstance(c, ScoreSpec) for c in stm.columns
+            ):
+                raise SemanticError("Después de '*' solo se admite SCORE(...)")
+        if not scores and match is None:
+            return set()
+
+        if stm.join is not None:
+            raise SemanticError("SCORE/MATCH no se admiten junto con JOIN")
+        if stm.group_by is not None or any(isinstance(c, AggregateSpec) for c in stm.columns):
+            raise SemanticError("SCORE/MATCH no se admiten junto con GROUP BY ni agregados")
+        if stm.order_by is not None and any(isinstance(c, DistanceExp) for c in stm.order_by.columns):
+            raise SemanticError("SCORE/MATCH no se admiten junto con ORDER BY DISTANCIA")
+        if len(scores) > 1:
+            raise SemanticError("Solo se admite un SCORE(...) por consulta")
+
+        if match is not None:
+            self._require_text_column(stm, match.left.value, "MATCH")
+            if not default_text_processor().process(match.query):
+                raise SemanticError("MATCH requiere al menos un término de búsqueda")
+
+        aliases = set()
+        for spec in scores:
+            if not spec.is_bound:
+                # the parser binds SCORE() only to a MATCH of the same SELECT
+                raise SemanticError(
+                    "SCORE() sin argumentos requiere un MATCH(columna, 'consulta') en el WHERE; "
+                    "sin MATCH usa SCORE(columna, 'consulta')"
+                )
+            if match is not None and spec.ranking != match.ranking:
+                # SCORE() inherits USING; an explicit SCORE(...) is always BM25
+                raise SemanticError(
+                    f"SCORE(columna, 'consulta') siempre usa BM25 y el MATCH pide USING "
+                    f"{match.ranking.name}; usa SCORE() para rankear con el algoritmo de USING"
+                )
+            self._require_text_column(stm, spec.column, "SCORE")
+            if not default_text_processor().process(spec.query):
+                raise SemanticError("SCORE requiere al menos un término de búsqueda")
+            if self._current_schema.get_column(spec.alias) is not None:
+                raise SemanticError(
+                    f"El alias '{spec.alias}' de SCORE choca con una columna de '{stm.table}'"
+                )
+            aliases.add(spec.alias)
+        return aliases
+
+    def _require_text_column(self, stm, name, function_name):
+        column = self._require_select_column(stm, name)
+        if column.data_type not in _STRING_TYPES:
+            raise SemanticError(
+                f"{function_name} requiere una columna de texto (CHAR, VARCHAR o TEXT); "
+                f"'{column.name}' es {column.data_type.value}"
+            )
+        return column
 
     def _validate_join(self, stm, left_schema, right_schema):
         left_table, left_column = stm.join.left.split(".", 1)
@@ -453,8 +543,23 @@ class SemanticVisitor(Visitor):
         column = self._require_column(schema, stm.column)
         if stm.index_type == IndexType.RTREE and column.data_type not in (DataType.POINT, DataType.POLYGON, DataType.RECTANGLE, DataType.GEOMETRY):
             raise SemanticError("RTREE requiere una columna de tipo POINT, POLYGON, RECTANGLE o GEOMETRY")
+        if stm.index_type in (IndexType.GIN, IndexType.SPIMI) and column.data_type not in (DataType.TEXT, DataType.VARCHAR, DataType.CHAR):
+            raise SemanticError(f"GIN y SPIMI requieren una columna de tipo texto (TEXT, VARCHAR o CHAR), no {column.data_type.value}")
 
-        self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower())
+        self.catalog.create_index(stm.table, stm.column, stm.index_type.name.lower(), index_name=stm.index_name)
+        return None
+
+    def visit_drop_index_stm(self, stm: DropIndexStm):
+        exists = False
+        if hasattr(self.catalog, "index_exists"):
+            exists = self.catalog.index_exists(stm.index_name)
+        elif hasattr(self.catalog, "get_indexes"):
+            for table_name in getattr(self.catalog, "_schemas", {}).keys():
+                if any(e.get("index_name") == stm.index_name for e in self.catalog.get_indexes(table_name)):
+                    exists = True
+                    break
+        if not exists and not stm.if_exists:
+            raise SemanticError(f"El índice '{stm.index_name}' no existe")
         return None
 
     def visit_drop_table_stm(self, stm: DropTableStm):
