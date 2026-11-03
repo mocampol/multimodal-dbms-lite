@@ -277,3 +277,28 @@ def test_deterministic_tie_breaking_partial_overlap():
     assert results[0][0] == 100
     assert results[1][0] == 200
     assert math.isclose(results[0][1], results[1][1], rel_tol=1e-7)
+
+
+# ---------------------------------------------------------------------------
+# rank(): single entry point used by the SQL executor
+# ---------------------------------------------------------------------------
+
+def _rank_corpus():
+    idx = InvertedIndex()
+    for doc_id, tokens in {1: ["gato", "perro"], 2: ["gato", "gato", "raton"], 3: ["perro", "leon"]}.items():
+        idx.add_document(doc_id, tokens)
+    return idx
+
+
+def test_rank_dispatches_to_each_algorithm():
+    idx = _rank_corpus()
+    query = ["gato", "perro"]
+    assert idx.rank(query, "tf_idf") == idx.score_tfidf_cosine(query, top_k=None)
+    assert idx.rank(query, "bm25") == idx.score_bm25(query, top_k=None)
+    assert idx.rank(query) == idx.rank(query, "bm25")
+    assert idx.rank(query, "tf_idf", top_k=1) == idx.score_tfidf_cosine(query, top_k=1)
+
+
+def test_rank_rejects_unknown_algorithm():
+    with pytest.raises(ValueError, match="no soportado"):
+        _rank_corpus().rank(["gato"], "coseno")

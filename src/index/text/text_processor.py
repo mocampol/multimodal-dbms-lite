@@ -7,6 +7,7 @@ and query execution according to the text search specification contract.
 
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 from typing import Callable, Iterable
@@ -102,3 +103,12 @@ class TextProcessor:
             tokens = [self.stemmer(t) for t in tokens]
 
         return tokens
+
+
+@functools.lru_cache(maxsize=None)
+def default_text_processor() -> TextProcessor:
+    """The processor fixed by the search contract (docs/text_search_policy.md
+    §1-3): NFKD, no accents, lowercase and PostgreSQL Spanish stopwords.
+    Shared by the catalog's text indexes, full-text queries and validation,
+    so documents and queries are always tokenized the same way."""
+    return TextProcessor(stopwords="spanish")
