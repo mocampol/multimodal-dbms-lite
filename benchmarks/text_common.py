@@ -19,8 +19,14 @@ documento semilla, así que toda consulta tiene al menos un documento que
 contiene todos sus términos.
 
 Relevancia: sin juicios humanos, un documento es relevante para q si
-contiene TODOS los términos de q. Los candidatos (lo que deben devolver
-MATCH y @@) son los documentos con AL MENOS UN término (semántica OR).
+contiene TODOS los términos de q. Esa regla se aplica UNA sola vez, al
+generar la carga de trabajo (text_workload.py), y su resultado se congela en
+benchmarks/workload/ (consultas + qrels en formato TREC). En la medición los
+relevantes se LEEN de esos qrels (query_reference), no se recalculan, y se
+comprueban contra los postings del dataset medido: si el corpus, el recorte
+o el tokenizador cambiaron, la medición falla en vez de usar etiquetas que ya
+no corresponden. Los candidatos (lo que deben devolver MATCH y @@) son los
+documentos con AL MENOS UN término (semántica OR).
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ import platform
 import random
 import statistics
 import sys
+import warnings
 from pathlib import Path
 
 BENCH_DIR = Path(__file__).resolve().parent
@@ -43,6 +50,8 @@ for _path in (SRC_DIR, BENCH_DIR):
 
 from benchmark_text import load_corpus  # descarga el corpus si falta
 from index.text.text_processor import default_text_processor  
+from text_frozen import load_frozen_workload
+from text_manifest import qrels_path, queries_path, read_manifest
 
 CORPORA = ["spanish", "synthetic", "20news"]
 DEFAULT_CORPUS = "spanish"
@@ -150,6 +159,9 @@ def generate_queries(corpus: str, seed: int = SEED + 1) -> list[dict]:
     Cada consulta: {"query_id", "query_group", "query_terms", "terms",
     "text", "seed_doc_id"}. "terms" ya está normalizado, así que volver a
     tokenizar "text" (como hace MATCH en el motor) da los mismos términos.
+
+    Solo la usa text_workload.py para congelar la carga de trabajo; las
+    mediciones leen las consultas congeladas de benchmarks/workload/.
     """
     rng = random.Random(seed)
     pool = [
@@ -199,14 +211,67 @@ def ids_digest(ids) -> str:
     return hashlib.sha1(",".join(map(str, sorted(ids))).encode()).hexdigest()[:16]
 
 
-def query_reference(postings: dict[str, set[int]], query: dict) -> dict:
+# corpus -> {query_id: relevantes del N más grande congelado}, o None si ese
+# corpus no tiene carga congelada. Se carga (y valida) una sola vez por corpus.
+_FROZEN_RELEVANT: dict[str, dict[str, set[int]] | None] = {}
+
+
+def frozen_relevant(corpus: str) -> dict[str, set[int]] | None:
+    """Relevantes congelados de `corpus` (query_id -> doc_ids, para el N más
+    grande), validados contra su manifiesto. None si no hay archivos congelados."""
+    if corpus not in _FROZEN_RELEVANT:
+        if not (queries_path(corpus).exists() and qrels_path(corpus).exists()):
+            _FROZEN_RELEVANT[corpus] = None
+        else:
+            largest = max(read_manifest(queries_path(corpus))["parameters"]["n_values"])
+            _FROZEN_RELEVANT[corpus] = load_frozen_workload(corpus, largest)[1]
+    return _FROZEN_RELEVANT[corpus]
+
+
+def query_reference(postings: dict[str, set[int]], query: dict,
+                    corpus: str = DEFAULT_CORPUS, n: int | None = None) -> dict:
     """Columnas que dependen solo del dataset y la consulta, idénticas para
-    todos los motores: k, candidatos esperados y documentos relevantes."""
+    todos los motores: k, candidatos esperados y documentos relevantes.
+
+    Los relevantes se leen de los qrels congelados de `corpus` (benchmarks/
+    workload/), filtrados por doc_id <= n; si no se da n, se toma el mayor id
+    entre los candidatos de la consulta, que da el mismo resultado porque todo
+    relevante contiene todos sus términos. Se comprueban contra los postings
+    del dataset medido y, si no coinciden, falla: las etiquetas ya no
+    corresponden a estos documentos (o se pasó el corpus equivocado).
+
+    Si `corpus` no tiene carga congelada (p. ej. synthetic o 20news), se calculan
+    con la regla "contiene todos los términos" y se avisa.
+    """
     sets = [postings.get(term, set()) for term in query["terms"]]
-    relevant = set.intersection(*sets) if sets else set()
+    candidates = set().union(*sets)
+    computed = set.intersection(*sets) if sets else set()
+
+    frozen = frozen_relevant(corpus)
+    if frozen is None:
+        warnings.warn(
+            f"'{corpus}' no tiene qrels congelados en benchmarks/workload/: los relevantes se calculan en "
+            f"esta ejecución. Genera con: python benchmarks/text_workload.py --corpus {corpus}",
+            stacklevel=2,
+        )
+        relevant = computed
+    else:
+        labelled = frozen.get(query["query_id"])
+        if labelled is None:
+            raise ValueError(f"{query['query_id']} no está en los qrels congelados de '{corpus}'")
+        limit = n if n is not None else max(candidates, default=0)
+        relevant = {doc_id for doc_id in labelled if doc_id <= limit}
+        if relevant != computed:
+            raise ValueError(
+                f"{query['query_id']} ('{query['text']}'): los qrels congelados de '{corpus}' "
+                f"({len(relevant):,} relevantes) no coinciden con los documentos medidos ({len(computed):,}). "
+                f"Pasa corpus=... y n=... a query_reference, o regenera con: "
+                f"python benchmarks/text_workload.py --corpus {corpus}"
+            )
+
     return {
         "k": TOP_K,
-        "expected_matches": len(set().union(*sets)),
+        "expected_matches": len(candidates),
         "relevant_docs": len(relevant),
         "relevant_digest": ids_digest(relevant),
         "_relevant": relevant,

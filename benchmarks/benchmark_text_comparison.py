@@ -228,7 +228,7 @@ def run_experiment(corpus: str, n: int, queries: list[dict]) -> list[dict]:
             engine_rows = []
             for result in results:
                 query = result["query"]
-                reference = query_reference(postings, query)
+                reference = query_reference(postings, query, corpus=corpus, n=n)
                 engine_rows.append({
                     **base_row(engine, corpus, n, query, reference),
                     **time_stats(result["times_ms"]),
