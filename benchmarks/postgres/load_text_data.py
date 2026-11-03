@@ -267,7 +267,7 @@ def run_experiment(dsn, conn, corpus: str, n: int, named_queries: dict, queries:
     rows = []
     for result in results:
         query = result["query"]
-        reference = query_reference(postings, query)
+        reference = query_reference(postings, query, corpus=corpus, n=n)
         matched = conn.execute(named_queries["matches"], {"tsquery": tsquery(query)}).fetchone()[0]
         rows.append({
             **base_row(ENGINE, corpus, n, query, reference),
