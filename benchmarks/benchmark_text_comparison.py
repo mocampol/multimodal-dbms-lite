@@ -95,12 +95,23 @@ POOL_PAGES = 64  # mismo pool por archivo que src/main.py
 # Catálogo y memoria del proceso
 # =============================================================================
 
-def open_catalog(base_dir: str) -> Catalog:
+class BulkLoadHeap(HeapFile):
+    """Heap solo para la carga, que no se mide. HeapFile.insert recorre todas las
+    páginas cada vez que se llena una; con documentos de ~3 KB y páginas de 4 KB,
+    eso hace la carga cuadrática. Aquí solo se considera la última página."""
+
+    def insert(self, record):
+        self._known_pages = self._known_pages[-1:]
+        self._page_hint = 0
+        return super().insert(record)
+
+
+def open_catalog(base_dir: str, heap_class: type[HeapFile] = HeapFile) -> Catalog:
     """Catálogo sobre base_dir con la misma configuración que src/main.py,
     sin abrir el catálogo de data/."""
     def heap_factory(schema):
         file_manager = FileManager(f"{base_dir}/{schema.table_name}.tbl")
-        return HeapFile(schema, BufferManager(file_manager, pool_size=POOL_PAGES))
+        return heap_class(schema, BufferManager(file_manager, pool_size=POOL_PAGES))
 
     def index_buffer_factory(table_name, column_name, index_id):
         file_manager = FileManager(f"{base_dir}/{table_name}.{column_name}.{index_id}.idx")
@@ -147,7 +158,7 @@ def sql_literal(text: str) -> str:
 
 def load_phase(base_dir: str, corpus: str, n: int, terms: set[str]) -> dict:
     """Crea y llena la tabla; devuelve los postings de los términos de consulta."""
-    catalog = open_catalog(base_dir)
+    catalog = open_catalog(base_dir, heap_class=BulkLoadHeap)
     execute(f"CREATE TABLE {TABLE} (id INTEGER, {COLUMN} TEXT);", catalog)
     documents = load_documents(corpus, n)
     for start in range(0, n, INSERT_BATCH):
