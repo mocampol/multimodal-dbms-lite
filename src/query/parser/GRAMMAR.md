@@ -69,7 +69,7 @@
 					   | CREATE_INDEX ID ON ID LPAREN ID RPAREN USING <IndexType>
 <DropTableStmt>      ::= DROP_TABLE ID
 <DropIndexStmt>      ::= DROP_INDEX [ IF EXISTS ] ID
-<IndexType>          ::= BTREE | HASH | RTREE | GIN | SPIMI
+<IndexType>          ::= BTREE | HASH | RTREE | GIN | SPIMI | IVF | HNSW
 
 <Point>              ::= POINT LPAREN NUM COMA NUM RPAREN
 <PointList>          ::= <Point> { COMA <Point> }

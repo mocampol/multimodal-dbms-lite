@@ -89,10 +89,13 @@ La carpeta `src/index` encapsula las estructuras de indexación, como:
 
 - B+ tree
 - extendible hashing
+- índices vectoriales IVF y HNSW para búsquedas k-NN
 - acceso por columnas e índices secundarios
 
 Estas estructuras permiten acelerar búsquedas y mejorar la ejecución de consultas.
 El R-Tree se encuentra en `src/index/rtree/` y se utiliza para consultas espaciales.
+IVF y HNSW indexan vectores de características generados a partir de rutas de
+imagen/audio o vectores numéricos almacenados en la columna.
 
 ### 4. Query engine
 
@@ -221,6 +224,65 @@ Se incluye una suite de pruebas con pytest. Para ejecutarlas:
 source .venv/bin/activate
 pytest -q
 ```
+
+## Búsqueda multimedia por similitud
+
+`SIMILAR_TO` busca los `k` registros más parecidos al objeto indicado. La columna
+consultada debe contener rutas de archivos multimedia o vectores numéricos, y
+debe tener un índice IVF o HNSW creado sobre datos existentes. `USING` selecciona
+el índice para esa consulta; `WITH METRIC` acepta `cosine`, `euclidean` o
+`dot_product` (por defecto, `cosine`). `SIMILARITY_SCORE()` agrega el puntaje al
+resultado y se puede ordenar con su alias.
+
+```sql
+CREATE TABLE fotos (
+    id INTEGER PRIMARY KEY,
+    nombre VARCHAR(100),
+    ruta VARCHAR(255)
+);
+
+INSERT INTO fotos (id, nombre, ruta) VALUES
+    (1, 'Costa', '/datos/fotos/costa.jpg'),
+    (2, 'Montaña', '/datos/fotos/montana.jpg');
+
+CREATE INDEX idx_fotos_ruta ON fotos USING HNSW (ruta);
+
+SELECT nombre, SIMILARITY_SCORE() AS score
+FROM fotos
+WHERE SIMILAR_TO(ruta, '/datos/consultas/playa.jpg', k=10)
+      USING HNSW WITH METRIC=cosine
+ORDER BY score DESC;
+```
+
+Para audio se utiliza la misma sintaxis y se puede elegir IVF con distancia
+euclidiana:
+
+```sql
+CREATE TABLE canciones (
+    id INTEGER PRIMARY KEY,
+    nombre VARCHAR(100),
+    artista VARCHAR(100),
+    archivo VARCHAR(255)
+);
+
+INSERT INTO canciones (id, nombre, artista, archivo) VALUES
+    (1, 'Tema uno', 'Artista A', '/datos/audio/tema1.mp3'),
+    (2, 'Tema dos', 'Artista B', '/datos/audio/tema2.mp3');
+
+CREATE INDEX idx_canciones_archivo ON canciones USING IVF (archivo);
+
+SELECT nombre, artista, SIMILARITY_SCORE() AS score
+FROM canciones
+WHERE SIMILAR_TO(archivo, '/datos/consultas/audio_query.mp3', k=5)
+      USING IVF WITH METRIC=euclidean
+ORDER BY score DESC;
+```
+
+Reemplaza las rutas de ejemplo por archivos accesibles desde el proceso del
+motor. El índice se construye al ejecutar `CREATE INDEX`, por lo que la columna
+debe contener al menos un objeto válido de la modalidad correspondiente.
+`k` debe ser un entero positivo y los tipos de índice y métrica deben ser
+`IVF`/`HNSW` y `cosine`/`euclidean`/`dot_product`, respectivamente.
 
 ## Base de datos espacial
 

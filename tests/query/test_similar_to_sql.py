@@ -107,6 +107,31 @@ class TestParserVector:
         with pytest.raises(RuntimeError):
             parse("SELECT * FROM fotos WHERE SIMILAR_TO(query.jpg, k=5) USING HNSW;")
 
+    @pytest.mark.parametrize(
+        "sql, error",
+        [
+            (
+                "SELECT * FROM fotos WHERE SIMILAR_TO('query.jpg', k=5) USING FOO;",
+                "el tipo de índice para USING",
+            ),
+            (
+                "SELECT * FROM fotos WHERE SIMILAR_TO('query.jpg', k=5) WITH METRIC=manhattan;",
+                "una métrica válida",
+            ),
+            (
+                "SELECT * FROM fotos WHERE SIMILAR_TO('query.jpg', k=-1);",
+                "Error sintáctico",
+            ),
+            (
+                "SELECT * FROM fotos WHERE SIMILAR_TO('query.jpg', k=5) USING;",
+                "el tipo de índice para USING",
+            ),
+        ],
+    )
+    def test_invalid_similarity_queries_are_rejected(self, sql, error):
+        with pytest.raises(QueryError, match=error):
+            execute(sql, None)
+
 
 class TestVisitorVector:
     def test_similarity_score_without_similar_to_rejected(self, tmp_path):
@@ -211,8 +236,8 @@ class TestExecutionVector:
         execute(f"INSERT INTO fotos VALUES (1, '{img1}'), (2, '{img2}');", cat)
 
         # Both index kinds can exist for one column; USING chooses which one runs.
-        cat.create_index("fotos", "ruta", IndexType.HNSW, "idx_fotos_hnsw")
-        cat.create_index("fotos", "ruta", IndexType.IVF, "idx_fotos_ivf")
+        execute("CREATE INDEX idx_fotos_hnsw ON fotos USING HNSW (ruta);", cat)
+        execute("CREATE INDEX idx_fotos_ivf ON fotos USING IVF (ruta);", cat)
         selected_index = cat.get_physical_index(
             "fotos", "ruta", index_type=index_type.value
         )
@@ -227,10 +252,12 @@ class TestExecutionVector:
 
         sql = (
             f"SELECT id, SIMILARITY_SCORE() AS score FROM fotos "
-            f"WHERE SIMILAR_TO(ruta, '{query_img}', k=1) "
-            f"USING {sql_index_kind} WITH METRIC=euclidean;"
+            f"WHERE SIMILAR_TO(ruta, '{query_img}', k=2) "
+            f"USING {sql_index_kind} WITH METRIC=euclidean "
+            f"ORDER BY score DESC;"
         )
         result = execute(sql, cat)
-        assert len(result) == 1
+        assert len(result) == 2
         assert result[0].values[0].data == 1
+        assert result[0].values[1].data >= result[1].values[1].data
         assert calls == [VectorMetric.EUCLIDEAN]

@@ -88,6 +88,8 @@ _INDEX_TYPE_MAP = {
     TokenType.RTREE: IndexType.RTREE,
     TokenType.GIN: IndexType.GIN,
     TokenType.SPIMI: IndexType.SPIMI,
+    TokenType.IVF: IndexType.IVF,
+    TokenType.HNSW: IndexType.HNSW,
 }
 
 _STORAGE_TYPE_MAP = {
@@ -807,8 +809,8 @@ class Parser:
         return DropIndexStm(index_name_tok.text, if_exists=if_exists)
 
     def parse_index_type(self) -> IndexType:
-        """<IndexType> ::= BTREE | HASH | RTREE | GIN | SPIMI"""
+        """<IndexType> ::= BTREE | HASH | RTREE | GIN | SPIMI | IVF | HNSW"""
         for ttype, index_type in _INDEX_TYPE_MAP.items():
             if self.match(ttype):
                 return index_type
-        self.error("'BTREE', 'HASH', 'RTREE', 'GIN' o 'SPIMI'")
+        self.error("'BTREE', 'HASH', 'RTREE', 'GIN', 'SPIMI', 'IVF' o 'HNSW'")

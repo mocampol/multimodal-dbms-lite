@@ -83,7 +83,7 @@ def assert_rejected(engine, sql, fragment):
 # --------------------------------------------------------------------------
 
 ALGORITHM = "se esperaba un algoritmo de ranking ('BM25' o 'TF_IDF')"
-INDEX_TYPE = "se esperaba 'BTREE', 'HASH', 'RTREE', 'GIN' o 'SPIMI'"
+INDEX_TYPE = "se esperaba 'BTREE', 'HASH', 'RTREE', 'GIN', 'SPIMI', 'IVF' o 'HNSW'"
 
 
 @pytest.mark.parametrize("sql, fragment", [
