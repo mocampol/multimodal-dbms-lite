@@ -2,9 +2,9 @@
 -- externa contra el índice invertido SPIMI del DBMS propio.
 --
 -- documentos_staging recibe por COPY el texto y sus tokens ya normalizados
--- por el TextProcessor del motor (benchmarks/text_common.py); load_text_data.py
--- llena documentos.tsv con to_tsvector('simple', tokens), así ambos motores
--- indexan exactamente el mismo vocabulario.
+-- por el TextProcessor del motor (benchmarks/text_common.py), como literal de
+-- tsvector; load_text_data.py llena documentos.tsv con tokens::tsvector, sin
+-- pasar por el parser, así ambos motores indexan exactamente el mismo vocabulario.
 --
 -- El índice GIN NO se crea aquí: load_text_data.py lo construye después de
 -- la carga para medir su tiempo de construcción, igual que CREATE INDEX ...

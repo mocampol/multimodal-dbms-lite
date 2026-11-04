@@ -5,7 +5,7 @@ DBMS propio.
 
 Para cada corpus y N:
     1. Recrea las tablas (text_schema.sql), tokeniza con las reglas del motor
-       y carga los documentos con COPY; llena tsv con to_tsvector('simple', ...)
+       y carga los documentos con COPY; llena tsv con esos tokens como tsvector
        (cronometrado aparte como tsvector_time_s).
     2. En una conexión nueva construye el índice GIN (cronometrado), ejecuta
        ANALYZE y mide su tamaño (pg_relation_size).
@@ -141,6 +141,15 @@ def run_phase(dsn: str, phase):
 # Carga e índice
 # =============================================================================
 
+def tsvector_literal(tokens: list[str]) -> str:
+    """Tokens como literal de tsvector ('token':posición). Se evita to_tsvector
+    porque su parser parte algunos tokens del motor (p. ej. 3e3fe79f -> 3e3, fe79f)."""
+    return " ".join(
+        "'" + token.replace("'", "''").replace("\\", "\\\\") + f"':{position}"
+        for position, token in enumerate(tokens, start=1)
+    )
+
+
 def copy_rows(copy, documents, stats: dict):
     """Tokeniza con las reglas del motor y copia (id, contenido, tokens) a la
     tabla staging; devuelve (id, tokens) para calcular los relevantes en el
@@ -150,7 +159,7 @@ def copy_rows(copy, documents, stats: dict):
         tokens = tokenize(text)
         stats["preprocess_time_s"] += time.perf_counter() - t0
         stats["vocabulary"].update(tokens)
-        copy.write_row((doc_id, text, " ".join(tokens)))
+        copy.write_row((doc_id, text, tsvector_literal(tokens)))
         yield doc_id, tokens
 
 
@@ -165,7 +174,7 @@ def load_table(conn, documents, terms: set[str]):
     t0 = time.perf_counter()
     conn.execute(
         "INSERT INTO documentos "
-        f"SELECT id, contenido, to_tsvector('{TEXT_CONFIG}', tokens) FROM documentos_staging"
+        "SELECT id, contenido, tokens::tsvector FROM documentos_staging"
     )
     tsvector_time = time.perf_counter() - t0
     conn.execute("DROP TABLE documentos_staging")
