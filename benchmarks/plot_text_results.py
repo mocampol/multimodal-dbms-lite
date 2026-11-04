@@ -37,7 +37,7 @@ RANKED_ENGINES = (("spimi_bm25", BM25), ("spimi_tfidf", TFIDF), ("pg_gin", GIN_R
 # ranking: BM25 y TF-IDF comparten el índice SPIMI y ts_rank no interviene en GIN.
 SPIMI_INDEX = ("SPIMI (BM25 y TF-IDF)", BM25[1], BM25[2])
 GIN_INDEX = ("PostgreSQL GIN", GIN_RANK[1], GIN_RANK[2])
-GIN_WITH_PREP = ("GIN + tokenización y to_tsvector", GIN_RANK[1], "v")
+GIN_WITH_PREP = ("GIN + tokenización y tsvector", GIN_RANK[1], "v")
 
 
 # =============================================================================

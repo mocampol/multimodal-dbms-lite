@@ -112,7 +112,7 @@ FIELDNAMES = [
     "used_index",                   # True si el plan usó el índice invertido / GIN
     "vocabulary_size",              # términos distintos en el índice
     "preprocess_time_s",            # solo PostgreSQL: tokenización compartida en Python
-    "tsvector_time_s",              # solo PostgreSQL: to_tsvector al cargar
+    "tsvector_time_s",              # solo PostgreSQL: conversión a tsvector al cargar
     "index_build_time_s",
     "index_space_bytes",
     "build_peak_rss_delta_bytes",   # pico de RSS al construir - RSS inicial

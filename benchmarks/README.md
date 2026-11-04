@@ -197,9 +197,10 @@ Definidos en `text_common.py` y usados por ambos motores:
   N, se repiten cíclicamente. Cada documento se recorta a 3,500 bytes UTF-8 (sin
   partir palabras), porque un registro del heap debe caber en una página de 4 KB.
 - **Tokenización:** la del motor (`default_text_processor`: NFKD, sin tildes,
-  minúsculas y stopwords en español de PostgreSQL). PostgreSQL indexa
-  `to_tsvector('simple', <tokens del motor>)`, porque su parser trata distinto
-  guiones, URLs y decimales; así ambos índices tienen el mismo vocabulario.
+  minúsculas y stopwords en español de PostgreSQL). PostgreSQL indexa un `tsvector`
+  construido directamente con los tokens del motor (`'token':posición`), porque
+  `to_tsvector` trata distinto guiones, URLs, decimales y notación científica; así
+  ambos índices tienen el mismo vocabulario.
 - **Consultas:** 10 por grupo de longitud (1, 3 y 5+ términos; las de 5+ tienen
   entre 5 y 8), semilla 43, iguales para todos los N. Los términos de cada consulta
   se toman de un mismo documento semilla de los primeros 1,000.
@@ -216,7 +217,7 @@ Definidos en `text_common.py` y usados por ambos motores:
 Para cada corpus, N y motor:
 
 1. Se crea la tabla y se cargan los documentos (no cronometrado). PostgreSQL usa
-   `COPY` y `to_tsvector` (este último se reporta como `tsvector_time_s`); el DBMS
+   `COPY` y la conversión a `tsvector` (esta última se reporta como `tsvector_time_s`); el DBMS
    propio, `INSERT` por lotes de 500 filas.
 2. Se construye el índice **después** de la carga y se cronometra. En SPIMI el
    tiempo incluye tokenizar; en PostgreSQL la tokenización compartida se reporta
@@ -275,7 +276,7 @@ el entorno de ambos lados (versiones, ajustes de PostgreSQL, CPU, RAM) va en
 | `hits_at_k`, `precision_at_k`, `recall_at_k`, `top_ids` | Relevancia del top-k |
 | `used_index` | `True` si el plan usó el índice invertido / GIN |
 | `vocabulary_size` | Términos distintos del índice |
-| `preprocess_time_s`, `tsvector_time_s` | Solo PostgreSQL: tokenización compartida y `to_tsvector` |
+| `preprocess_time_s`, `tsvector_time_s` | Solo PostgreSQL: tokenización compartida y conversión a `tsvector` |
 | `index_build_time_s`, `index_space_bytes` | Construcción y tamaño del índice |
 | `build_peak_rss_delta_bytes`, `query_peak_rss_delta_bytes` | Memoria (ver arriba) |
 
