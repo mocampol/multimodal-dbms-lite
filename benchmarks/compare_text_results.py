@@ -132,7 +132,7 @@ def print_build_table(rows: list[dict]) -> None:
               f"{fmt(prep if engine == 'pg_gin' else None, '.3f'):>8} "
               f"{kb('index_space_bytes'):>11} {kb('build_peak_rss_delta_bytes'):>13} "
               f"{kb('query_peak_rss_delta_bytes'):>16}")
-    print("\nprep s (solo PostgreSQL): tokenización compartida en Python + to_tsvector. "
+    print("\nprep s (solo PostgreSQL): tokenización compartida en Python + conversión a tsvector. "
           "En SPIMI ese trabajo está dentro de build s.")
 
 

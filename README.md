@@ -560,9 +560,10 @@ cd benchmarks/postgres && docker compose up -d && cd ../..
 python benchmarks/postgres/load_text_data.py       # PostgreSQL GIN
 python benchmarks/benchmark_text_comparison.py     # SPIMI + BM25 / TF-IDF
 python benchmarks/compare_text_results.py          # verificación y resumen
+python benchmarks/plot_text_results.py             # gráficas
 ```
 
-Todos aceptan `--quick` (N = 1 000). El dataset, la metodología (incluida la medición de memoria) y el formato del CSV están en [`benchmarks/README.md`](benchmarks/README.md#comparación-de-texto-spimi-vs-postgresql-gin).
+Todos los scripts de medición y verificación aceptan `--quick` (N = 1 000). El dataset, la metodología (incluida la medición de memoria) y el formato del CSV están en [`benchmarks/README.md`](benchmarks/README.md#comparación-de-texto-spimi-vs-postgresql-gin). Los resultados, las gráficas y la comparación entre GIN y `ts_rank` están en [`text_comparison_summary.md`](benchmarks/results/text_comparison_summary.md).
 
 ## Nota
 
