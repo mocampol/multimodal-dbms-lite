@@ -44,6 +44,7 @@ NUM_QUERIES = 200
 CODEBOOK_SAMPLES = 5_000
 QUICK_CODEBOOK_SAMPLES = 1_000
 VARIANTS = ("normalized", "raw")
+MODALITIES = ("image", "audio")
 
 CORPUS_DIR = BENCH_DIR / "corpus" / "vector"
 RESULTS_DIR = BENCH_DIR / "results"
