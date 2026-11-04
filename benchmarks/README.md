@@ -6,7 +6,7 @@
 | `benchmark_indexes.py` | B+ clusterizado vs. B+ no clusterizado vs. Hash extensible | `results/index_comparison_results.csv` |
 | `benchmark_btree.py` | B+ Tree (pytest-benchmark) | — |
 | `benchmark_spatial.py` + `postgres/` | R-tree propio vs. PostgreSQL/PostGIS con GiST | `results/spatial_comparison_results.csv` |
-| `benchmark_text_comparison.py` + `postgres/load_text_data.py` | SPIMI + BM25 y SPIMI + TF-IDF vs. PostgreSQL tsvector + GIN (`ts_rank`) | `results/text_comparison_results.csv` |
+| `benchmark_text_comparison.py` + `postgres/load_text_data.py` | SPIMI + BM25 y SPIMI + TF-IDF vs. PostgreSQL tsvector + GIN (`ts_rank`) | `results/text_comparison_results.csv`, `results/text_comparison_summary.md` |
 
 
 El resto de este documento describe las comparaciones externas con PostgreSQL: espacial (PostGIS) y de texto (GIN).
@@ -146,6 +146,8 @@ consulta):
 | `postgres/text_queries.sql` | Consultas equivalentes (`@@` + `ts_rank`), candidatos y vocabulario (`ts_stat`) |
 | `postgres/load_text_data.py` | Carga, índice GIN, consultas, tiempos, tamaño, memoria y entorno |
 | `compare_text_results.py` | Verifica que ambos lados usen el mismo k, los mismos relevantes y los mismos candidatos; resume por N y longitud |
+| `plot_text_results.py` | Genera las gráficas de construcción, consulta, espacio y memoria en `results/charts/` |
+| `results/text_comparison_summary.md` | Resultados, Precision@10 y Recall@10, ventajas y desventajas, y limitaciones |
 
 Se usa el mismo contenedor que la comparación espacial (`postgres/docker-compose.yml`,
 PostgreSQL 16, puerto 5434, 2 CPU / 4 GB).
@@ -177,11 +179,14 @@ python benchmarks/benchmark_text_comparison.py
 # 4. Verificar la comparación y ver el resumen
 python benchmarks/compare_text_results.py
 
-# 5. Apagar PostgreSQL al terminar
+# 5. Generar las gráficas (se niega si falla la verificación)
+python benchmarks/plot_text_results.py
+
+# 6. Apagar PostgreSQL al terminar
 cd benchmarks/postgres && docker compose down -v
 ```
 
-Los tres scripts aceptan `--quick` (solo N = 1,000, escribe `*_quick.*`, ignorado
+Los scripts de los pasos 2 a 4 aceptan `--quick` (solo N = 1,000, escribe `*_quick.*`, ignorado
 por git). Los dos de medición aceptan `--corpus spanish|synthetic|20news|all` y
 `--sizes 1000,10000`; `load_text_data.py` acepta además `--dsn` o `PG_DSN`. El
 orden de los pasos 2 y 3 no importa: cada script reemplaza solo sus propias filas
@@ -218,7 +223,8 @@ Para cada corpus, N y motor:
 
 1. Se crea la tabla y se cargan los documentos (no cronometrado). PostgreSQL usa
    `COPY` y la conversión a `tsvector` (esta última se reporta como `tsvector_time_s`); el DBMS
-   propio, `INSERT` por lotes de 500 filas.
+   propio, `INSERT` por lotes de 500 filas con `BulkLoadHeap`, que solo considera
+   la última página para evitar que la carga crezca de forma cuadrática.
 2. Se construye el índice **después** de la carga y se cronometra. En SPIMI el
    tiempo incluye tokenizar; en PostgreSQL la tokenización compartida se reporta
    aparte (`preprocess_time_s`). Tamaño: el archivo `.idx` y `pg_relation_size`.
@@ -282,9 +288,13 @@ el entorno de ambos lados (versiones, ajustes de PostgreSQL, CPU, RAM) va en
 
 ### Notas
 
-- Con N = 1,000 el planner de PostgreSQL suele preferir un Seq Scan; en ese caso
-  `used_index` queda en `False` y se documenta.
+- El planner de PostgreSQL puede elegir otro plan en lugar de GIN, sobre todo con
+  N pequeño o consultas largas; en ese caso `used_index` queda en `False`. No es un
+  error del benchmark: el resumen indica cuántas consultas usaron GIN por grupo.
 - Las filas `spimi_bm25` y `spimi_tfidf` comparten el índice, así que repiten los
   valores de construcción, tamaño y memoria de construcción.
 - `tsvector` guarda como máximo 256 posiciones por término; afecta solo a
   `ts_rank`, no a los candidatos.
+- `results/text_summary.md` es la salida de otro script (`benchmark_text.py`, con
+  escaneo secuencial, sin PostgreSQL). Los resultados de esta comparación están en
+  `results/text_comparison_summary.md`.
