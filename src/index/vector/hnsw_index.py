@@ -30,21 +30,19 @@ class HNSWIndex(BaseVectorIndex):
         max_elements: int = 10000,
         ef_construction: int = 200,
         M: int = 16,
+        num_threads: int = -1,
     ) -> None:
         super().__init__(dim=dim, metric=metric)
+        if num_threads != -1 and num_threads <= 0:
+            raise ValueError(f"num_threads debe ser -1 (todos los núcleos) o mayor a 0, recibido {num_threads}")
         self.max_elements = max(100, max_elements)
         self.ef_construction = ef_construction
         self.M = M
         self.ef_search = 50
+        self.num_threads = num_threads
 
         self.space = self.SPACE_MAP[self.metric]
-        self._index = hnswlib.Index(space=self.space, dim=self.dim)
-        self._index.init_index(
-            max_elements=self.max_elements,
-            ef_construction=self.ef_construction,
-            M=self.M,
-        )
-        self._index.set_ef(self.ef_search)
+        self._create_graph()
 
         self.label_to_rid: dict[int, Any] = {}
         self.rid_to_label: dict[Any, int] = {}
@@ -53,6 +51,23 @@ class HNSWIndex(BaseVectorIndex):
 
     def __len__(self) -> int:
         return len(self.label_to_rid)
+
+    def _create_graph(self) -> None:
+        self._index = hnswlib.Index(space=self.space, dim=self.dim)
+        self._index.init_index(
+            max_elements=self.max_elements,
+            ef_construction=self.ef_construction,
+            M=self.M,
+        )
+        self._index.set_ef(self.ef_search)
+        self._index.set_num_threads(self.num_threads)
+
+    def set_ef_search(self, ef_search: int) -> None:
+        """Cambia cuántos candidatos explora cada búsqueda (más ef: más recall, más lento)."""
+        if ef_search <= 0:
+            raise ValueError(f"ef_search debe ser mayor a 0, recibido {ef_search}")
+        self.ef_search = ef_search
+        self._index.set_ef(ef_search)
 
     def build(self, vectors: Sequence[np.ndarray], rids: Sequence[Any]) -> None:
         if len(vectors) != len(rids):
@@ -69,13 +84,7 @@ class HNSWIndex(BaseVectorIndex):
 
         target_max = max(self.max_elements, n_samples * 2)
         self.max_elements = target_max
-        self._index = hnswlib.Index(space=self.space, dim=self.dim)
-        self._index.init_index(
-            max_elements=self.max_elements,
-            ef_construction=self.ef_construction,
-            M=self.M,
-        )
-        self._index.set_ef(self.ef_search)
+        self._create_graph()
 
         X = np.asarray(vectors, dtype=np.float32)
         if X.ndim != 2 or X.shape[1] != self.dim:
@@ -183,6 +192,7 @@ class HNSWIndex(BaseVectorIndex):
             "ef_construction": self.ef_construction,
             "M": self.M,
             "ef_search": self.ef_search,
+            "num_threads": self.num_threads,
             "label_to_rid": self.label_to_rid,
             "rid_to_label": self.rid_to_label,
             "next_label": self._next_label,
@@ -204,6 +214,7 @@ class HNSWIndex(BaseVectorIndex):
             max_elements=meta["max_elements"],
             ef_construction=meta["ef_construction"],
             M=meta["M"],
+            num_threads=meta.get("num_threads", -1),  # índices guardados antes de este campo
         )
         idx.ef_search = meta["ef_search"]
         idx.label_to_rid = meta["label_to_rid"]
@@ -214,4 +225,5 @@ class HNSWIndex(BaseVectorIndex):
         bin_path = os.path.join(os.path.dirname(os.path.abspath(path)), meta["bin_file"])
         idx._index.load_index(bin_path, max_elements=meta["max_elements"])
         idx._index.set_ef(idx.ef_search)
+        idx._index.set_num_threads(idx.num_threads)
         return idx
