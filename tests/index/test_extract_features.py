@@ -269,3 +269,201 @@ class TestExtractFeatures:
 
         with pytest.raises(ValueError, match="Extensión de archivo no reconocida"):
             extractor.extract("archivo_desconocido.xyz")
+
+
+
+class TestQuantizerValidation:
+    @pytest.mark.parametrize("k", [0, -1])
+    def test_rejects_non_positive_k(self, k):
+        with pytest.raises(ValueError, match="entero positivo"):
+            Quantizer(k=k)
+
+    def test_requires_fit_before_use(self):
+        quantizer = Quantizer(k=2)
+        with pytest.raises(ValueError, match="no está entrenado"):
+            quantizer.predict(np.ones((1, 2)))
+        with pytest.raises(ValueError, match="aún no ha sido entrenado"):
+            quantizer.centroids
+
+    @pytest.mark.parametrize(
+        "descriptors, error",
+        [
+            (None, "No se proporcionaron"),
+            (np.empty((0, 2)), "No se proporcionaron"),
+            (np.ones(3), "2 dimensiones"),
+            (np.empty((3, 0)), "al menos una característica"),
+        ],
+    )
+    def test_fit_rejects_invalid_descriptors(self, descriptors, error):
+        with pytest.raises(ValueError, match=error):
+            Quantizer(k=2).fit(descriptors)
+
+    @pytest.mark.parametrize("descriptors", [None, np.empty((0, 1))])
+    def test_predict_rejects_empty_descriptors(self, descriptors):
+        quantizer = Quantizer(k=2).fit(np.array([[0.0], [1.0]]))
+        with pytest.raises(ValueError, match="para cuantizar"):
+            quantizer.predict(descriptors)
+
+    def test_uses_fewer_centroids_when_there_are_fewer_samples_than_k(self):
+        quantizer = Quantizer(k=10).fit(np.array([[0.0], [1.0], [2.0]]))
+        assert quantizer.centroids.shape == (3, 1)
+        assert quantizer.codebook_size() == 10
+
+    def test_assigns_separated_clusters_to_different_words(self):
+        rng = np.random.default_rng(0)
+        low = rng.normal(0.0, 0.01, (50, 2))
+        high = rng.normal(10.0, 0.01, (50, 2))
+
+        quantizer = Quantizer(k=2).fit(np.vstack([low, high]))
+        low_words = set(quantizer.predict(low).tolist())
+        high_words = set(quantizer.predict(high).tolist())
+
+        assert len(low_words) == 1
+        assert len(high_words) == 1
+        assert low_words != high_words
+
+    def test_same_seed_produces_same_assignments(self):
+        descriptors = np.random.default_rng(1).standard_normal((200, 4))
+        first = Quantizer(k=8, random_state=1).fit(descriptors).predict(descriptors)
+        second = Quantizer(k=8, random_state=1).fit(descriptors).predict(descriptors)
+        assert np.array_equal(first, second)
+
+    def test_large_dataset_keeps_requested_codebook_size(self):
+        descriptors = np.random.default_rng(2).standard_normal((600, 4)).astype(np.float32)
+        quantizer = Quantizer(k=8).fit(descriptors)
+        assignments = quantizer.predict(descriptors)
+
+        assert quantizer.centroids.shape == (8, 4)
+        assert assignments.min() >= 0
+        assert assignments.max() < 8
+
+
+class TestBoWTFIDFValidation:
+    def test_rejects_non_positive_k(self):
+        with pytest.raises(ValueError, match="entero positivo"):
+            BoWTFIDF(k=0)
+
+    @pytest.mark.parametrize(
+        "assignments, error",
+        [
+            (None, "no pueden estar vacías"),
+            (np.array([], dtype=np.int64), "no pueden estar vacías"),
+            (np.array([0.5]), "unidimensional"),
+            (np.array([2]), "entre 0 y k - 1"),
+        ],
+    )
+    def test_compute_rejects_invalid_assignments(self, assignments, error):
+        with pytest.raises(ValueError, match=error):
+            BoWTFIDF(k=2).compute(assignments)
+
+    def test_fit_with_empty_corpus_uses_uniform_idf(self):
+        bow = BoWTFIDF(k=2).fit([])
+        assert np.array_equal(bow.idf_, np.ones(2, dtype=np.float32))
+
+    def test_idf_follows_smooth_formula(self):
+        bow = BoWTFIDF(k=3).fit([np.array([0]), np.array([0, 1])])
+        assert np.allclose(bow.idf_, [1.0, np.log(1.5) + 1.0, np.log(3.0) + 1.0])
+
+    def test_compute_applies_idf_and_l2_normalization(self):
+        bow = BoWTFIDF(k=3).fit([np.array([0]), np.array([0, 1])])
+
+        vector = bow.compute(np.array([0, 1]))
+
+        expected = np.array([1.0, np.log(1.5) + 1.0, 0.0])
+        expected /= np.linalg.norm(expected)
+        assert np.allclose(vector, expected)
+
+
+class TestExtractFeaturesValidation:
+    @pytest.mark.parametrize("k", [0, -1])
+    def test_rejects_non_positive_k(self, k):
+        with pytest.raises(ValueError, match="entero positivo"):
+            ExtractFeatures(k=k)
+
+    def test_fit_rejects_empty_corpus(self):
+        with pytest.raises(ValueError, match="no puede estar vacío"):
+            ExtractFeatures(k=2).fit([])
+
+    @pytest.mark.parametrize(
+        "item, error",
+        [
+            ("archivo.xyz", "Extensión de archivo no reconocida"),
+            (None, "no puede ser None"),
+            ("", "Ruta de archivo vacía"),
+        ],
+    )
+    def test_fit_rejects_invalid_items_and_stays_unfitted(self, item, error):
+        extractor = ExtractFeatures(k=2)
+        with pytest.raises(ValueError, match=error):
+            extractor.fit([item])
+        assert not extractor.is_fitted
+
+    @pytest.mark.parametrize("obj", [{}, {1}, np.zeros((2, 2, 2, 2))])
+    def test_extract_rejects_unsupported_types(self, obj):
+        with pytest.raises(TypeError, match="no soportado"):
+            ExtractFeatures(k=2).extract(obj)
+
+    @pytest.mark.parametrize(
+        "obj, error",
+        [
+            (["a"], "elementos no numéricos"),
+            (np.array([]), "Array numpy vacío"),
+            (np.array([np.nan]), "valores no finitos"),
+            ("archivo", "Extensión de archivo no reconocida"),
+            ("no_existe.png", "no existe"),
+            ("no_existe.wav", "no existe"),
+        ],
+    )
+    def test_extract_rejects_invalid_values(self, obj, error):
+        with pytest.raises(ValueError, match=error):
+            ExtractFeatures(k=2).extract(obj)
+
+    def test_extract_rejects_unknown_source_type(self):
+        with pytest.raises(ValueError, match="Modalidad desconocida"):
+            ExtractFeatures(k=2).extract([1.0], source_type="video")
+
+    @pytest.mark.parametrize(
+        "obj, expected",
+        [
+            ("FOTO.PNG", "image"),
+            ("clip.WAV", "audio"),
+            ([1, 2.0], "numeric"),
+            ((1, 2), "numeric"),
+            (np.zeros(3), "numeric"),
+            (np.zeros((4, 4), dtype=np.uint8), "image"),
+        ],
+    )
+    def test_detect_type(self, obj, expected):
+        assert ExtractFeatures(k=2).detect_type(obj) == expected
+
+    def test_same_object_is_more_similar_than_a_different_one(self):
+        first = [0.0, 1.0, 2.0, 3.0]
+        different = [10.0, 11.0, 12.0, 13.0]
+        extractor = ExtractFeatures(k=4).fit([first, different, [0.0, 1.0, 2.0, 2.5]])
+
+        first_vector = extractor.extract(first).data
+        different_vector = extractor.extract(different).data
+
+        assert np.allclose(first_vector, extractor.extract(first).data)
+        assert np.dot(first_vector, first_vector) > np.dot(first_vector, different_vector)
+
+    def test_same_corpus_produces_same_vector(self):
+        corpus = [[0.0, 1.0, 2.0], [5.0, 6.0, 7.0]]
+        first = ExtractFeatures(k=4).fit(corpus).extract(corpus[0]).data
+        second = ExtractFeatures(k=4).fit(corpus).extract(corpus[0]).data
+        assert np.array_equal(first, second)
+
+
+class TestFeatureVector:
+    def test_rejects_dimension_different_from_k(self):
+        with pytest.raises(ValueError, match="no coincide con k"):
+            FeatureVector(np.zeros(3), "numeric", 2)
+
+    def test_flattens_data_and_exposes_values(self):
+        vector = FeatureVector(np.array([[1.0, 2.0], [3.0, 4.0]]), "numeric", 4)
+
+        assert vector.data.shape == (4,)
+        assert vector.data.dtype == np.float32
+        assert len(vector) == 4
+        assert vector[2] == 3.0
+        assert vector.to_list() == [1.0, 2.0, 3.0, 4.0]
