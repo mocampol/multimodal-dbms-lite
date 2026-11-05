@@ -35,6 +35,8 @@ class IVFIndex(BaseVectorIndex):
         self.centroids: np.ndarray | None = None
         # inverted_lists: centroid_id -> list of (rid, vector)
         self.inverted_lists: dict[int, list[tuple[Any, np.ndarray]]] = {}
+        # rid -> lista donde está su vector, para quitarlo sin recorrer todas
+        self._list_of_rid: dict[Any, int] = {}
         self._count: int = 0
 
     def __len__(self) -> int:
@@ -45,6 +47,7 @@ class IVFIndex(BaseVectorIndex):
             raise ValueError("La cantidad de vectores debe ser igual a la cantidad de RIDs")
 
         self.inverted_lists = {}
+        self._list_of_rid = {}
         self._count = 0
 
         if len(vectors) == 0:
@@ -75,30 +78,37 @@ class IVFIndex(BaseVectorIndex):
             self.inverted_lists[i] = []
 
         labels = clusterer.predict(X)
-        for i, (rid, vec, label) in enumerate(zip(rids, X, labels)):
-            self.inverted_lists[int(label)].append((rid, vec))
-            self._count += 1
+        for rid, vec, label in zip(rids, X, labels):
+            self._append(int(label), rid, vec)
+
+    def _append(self, list_id: int, rid: Any, vec: np.ndarray) -> None:
+        self.inverted_lists.setdefault(list_id, []).append((rid, vec))
+        self._list_of_rid[rid] = list_id
+        self._count += 1
 
     def add(self, vector: np.ndarray, rid: Any) -> None:
         vec = np.asarray(vector, dtype=np.float32).flatten()
         if len(vec) != self.dim:
             raise ValueError(f"Dimensión del vector ({len(vec)}) no coincide con la dimensión del índice ({self.dim})")
 
+        self.remove(rid)
+
         if self.centroids is None or len(self.centroids) == 0:
             self.centroids = vec.reshape(1, self.dim)
-            self.inverted_lists = {0: [(rid, vec)]}
-            self._count = 1
+            self._append(0, rid, vec)
             return
 
         # Encontrar centroide más cercano (por distancia Euclidiana a los centroides)
         dists = np.linalg.norm(self.centroids - vec, axis=1)
-        best_cluster = int(np.argmin(dists))
+        self._append(int(np.argmin(dists)), rid, vec)
 
-        if best_cluster not in self.inverted_lists:
-            self.inverted_lists[best_cluster] = []
-
-        self.inverted_lists[best_cluster].append((rid, vec))
-        self._count += 1
+    def remove(self, rid: Any) -> bool:
+        list_id = self._list_of_rid.pop(rid, None)
+        if list_id is None:
+            return False
+        self.inverted_lists[list_id] = [item for item in self.inverted_lists[list_id] if item[0] != rid]
+        self._count -= 1
+        return True
 
     def search(
         self,
@@ -170,5 +180,8 @@ class IVFIndex(BaseVectorIndex):
         )
         idx.centroids = data["centroids"]
         idx.inverted_lists = data["inverted_lists"]
+        idx._list_of_rid = {
+            rid: list_id for list_id, items in idx.inverted_lists.items() for rid, _ in items
+        }
         idx._count = data["count"]
         return idx

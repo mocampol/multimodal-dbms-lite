@@ -111,7 +111,10 @@ class HNSWIndex(BaseVectorIndex):
         if len(vec) != self.dim:
             raise ValueError(f"Dimensión del vector ({len(vec)}) no coincide con la dimensión del índice ({self.dim})")
 
-        if len(self.label_to_rid) >= self.max_elements:
+        self.remove(rid)
+
+        # hnswlib no reutiliza las etiquetas borradas: siguen ocupando capacidad.
+        if self._index.get_current_count() >= self.max_elements:
             new_max = self.max_elements * 2
             self._index.resize_index(new_max)
             self.max_elements = new_max
@@ -124,6 +127,16 @@ class HNSWIndex(BaseVectorIndex):
         self._raw_vectors[label] = vec
 
         self._index.add_items(vec.reshape(1, self.dim), np.array([label], dtype=np.int64))
+
+    def remove(self, rid: Any) -> bool:
+        label = self.rid_to_label.pop(rid, None)
+        if label is None:
+            return False
+        # El nodo sigue en el grafo para no romper los caminos, pero ya no se devuelve.
+        self._index.mark_deleted(label)
+        del self.label_to_rid[label]
+        del self._raw_vectors[label]
+        return True
 
     def search(
         self,

@@ -23,7 +23,13 @@ class BaseVectorIndex(ABC):
 
     @abstractmethod
     def add(self, vector: np.ndarray, rid: Any) -> None:
-        """Inserta un nuevo vector con su correspondiente RID en el índice."""
+        """Inserta un nuevo vector con su correspondiente RID en el índice.
+        Si el RID ya estaba indexado, su vector anterior se reemplaza."""
+        pass
+
+    @abstractmethod
+    def remove(self, rid: Any) -> bool:
+        """Quita del índice el vector del RID. Devuelve False si el RID no estaba indexado."""
         pass
 
     @abstractmethod
