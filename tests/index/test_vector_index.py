@@ -1,6 +1,7 @@
 import os
 import pickle
 import tempfile
+import hnswlib
 import numpy as np
 import pytest
 
@@ -233,9 +234,20 @@ class TestHNSWIndex:
         assert res[0].rid == "a"
 
 
-    def test_hnsw_num_threads_defaults_to_every_core(self):
+    def test_hnsw_num_threads_defaults_to_every_core(self, tmp_path):
+        vectors = np.random.default_rng(0).normal(size=(50, 4)).astype(np.float32)
         hnsw = HNSWIndex(dim=4)
         assert hnsw.num_threads == -1
+        # hnswlib interpreta set_num_threads(-1) como un solo hilo: hay que mirar su valor real.
+        every_core = hnswlib.Index(space="l2", dim=4).num_threads
+        assert hnsw._index.num_threads == every_core
+
+        hnsw.build(list(vectors), list(range(50)))
+        assert hnsw._index.num_threads == every_core
+
+        path = str(tmp_path / "hnsw.idx")
+        hnsw.save(path)
+        assert HNSWIndex.load(path)._index.num_threads == every_core
 
     @pytest.mark.parametrize("num_threads", [0, -2])
     def test_hnsw_rejects_invalid_num_threads(self, num_threads):

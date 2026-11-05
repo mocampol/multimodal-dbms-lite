@@ -60,7 +60,13 @@ class HNSWIndex(BaseVectorIndex):
             M=self.M,
         )
         self._index.set_ef(self.ef_search)
-        self._index.set_num_threads(self.num_threads)
+        self._apply_num_threads()
+
+    def _apply_num_threads(self) -> None:
+        # hnswlib ya usa todos los núcleos por defecto; set_num_threads(-1) lo
+        # dejaría en un solo hilo, así que -1 significa no tocarlo.
+        if self.num_threads != -1:
+            self._index.set_num_threads(self.num_threads)
 
     def set_ef_search(self, ef_search: int) -> None:
         """Cambia cuántos candidatos explora cada búsqueda (más ef: más recall, más lento)."""
@@ -225,5 +231,5 @@ class HNSWIndex(BaseVectorIndex):
         bin_path = os.path.join(os.path.dirname(os.path.abspath(path)), meta["bin_file"])
         idx._index.load_index(bin_path, max_elements=meta["max_elements"])
         idx._index.set_ef(idx.ef_search)
-        idx._index.set_num_threads(idx.num_threads)
+        idx._apply_num_threads()
         return idx
