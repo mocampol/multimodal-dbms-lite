@@ -51,5 +51,7 @@ Thumbs.db
 # Benchmarks: salidas de la corrida corta (--quick); los resultados completos SI se versionan
 benchmarks/results/*_quick.*
 benchmarks/results/charts_quick/
+# Galería de similitud: contiene imágenes de los datasets, se queda en local
+benchmarks/results/gallery/
 benchmarks/corpus/
 tests/results/
