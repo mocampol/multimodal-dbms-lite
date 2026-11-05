@@ -95,22 +95,26 @@ class VectorSearch(PlanNode):
             if column_name
             else None
         )
-        feature_dimension = index.dim if isinstance(index, (IVFIndex, HNSWIndex)) else 64
-        extractor = ExtractFeatures(k=feature_dimension)
+        has_vector_index = isinstance(index, (IVFIndex, HNSWIndex))
         column_idx = self.schema.column_index(column_name) if column_name else 0
         storage = self.catalog.get_storage(self.table_name)
-        corpus = [
-            record[column_idx].data
-            for record in storage.scan()
-            if record[column_idx].data is not None
-        ]
-        if corpus:
-            extractor.fit(corpus)
+        # Con el extractor del índice, la consulta queda en el mismo espacio que
+        # los vectores guardados y no hace falta reentrenar sobre la columna.
+        extractor = self.catalog.get_vector_extractor(index) if has_vector_index else None
+        if extractor is None:
+            extractor = ExtractFeatures(k=index.dim if has_vector_index else 64)
+            corpus = [
+                record[column_idx].data
+                for record in storage.scan()
+                if record[column_idx].data is not None
+            ]
+            if corpus:
+                extractor.fit(corpus)
         query_fv = extractor.extract(target_obj)
 
         used_index = False
 
-        if index is not None and isinstance(index, (IVFIndex, HNSWIndex)) and len(index) > 0:
+        if has_vector_index and len(index) > 0:
             try:
                 results = index.search(query_fv.data, k=k_val, metric=metric)
                 for res in results:

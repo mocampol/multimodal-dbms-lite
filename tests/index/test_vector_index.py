@@ -508,6 +508,59 @@ class TestVectorIndexValidation:
         assert len(index) == 3
         assert index.search(np.array([1.0, 1.0]), k=1)[0].rid == "c"
 
+    @pytest.mark.parametrize("metric", [None, VectorMetric.DOT_PRODUCT])
+    def test_remove_hides_the_vector_from_search(self, index_class, metric):
+        index = _index_with_two_vectors(index_class)
+
+        assert index.remove("a") is True
+
+        assert len(index) == 1
+        assert [r.rid for r in index.search(np.array([1.0, 0.0]), k=2, metric=metric)] == ["b"]
+
+    def test_remove_unknown_rid_changes_nothing(self, index_class):
+        index = _index_with_two_vectors(index_class)
+
+        assert index.remove("z") is False
+        assert len(index) == 2
+
+    def test_remove_every_vector_leaves_an_empty_index(self, index_class):
+        index = _index_with_two_vectors(index_class)
+        index.remove("a")
+        index.remove("b")
+
+        assert len(index) == 0
+        assert index.search(np.array([1.0, 0.0]), k=1) == []
+
+    def test_add_existing_rid_replaces_its_vector(self, index_class):
+        index = _index_with_two_vectors(index_class)
+
+        index.add(np.array([-1.0, 0.0]), "a")
+
+        assert len(index) == 2
+        assert [r.rid for r in index.search(np.array([1.0, 0.0]), k=2)] == ["b", "a"]
+
+    def test_removed_rid_can_be_added_again(self, index_class):
+        index = _index_with_two_vectors(index_class)
+        index.remove("a")
+
+        index.add(np.array([1.0, 0.0]), "a")
+
+        assert len(index) == 2
+        assert index.search(np.array([1.0, 0.0]), k=1)[0].rid == "a"
+
+    def test_remove_survives_save_and_load(self, index_class, tmp_path):
+        path = str(tmp_path / "vectors.idx")
+        index = _index_with_two_vectors(index_class)
+        index.remove("a")
+        index.save(path)
+
+        loaded = index_class.load(path)
+
+        assert len(loaded) == 1
+        assert [r.rid for r in loaded.search(np.array([1.0, 0.0]), k=2)] == ["b"]
+        assert loaded.remove("b") is True
+        assert len(loaded) == 0
+
 
 class TestIVFValidation:
     @pytest.mark.parametrize("params", [{"n_lists": 0}, {"n_probe": 0}])
@@ -548,6 +601,20 @@ class TestHNSWValidation:
         assert len(index) == 150
         assert index.max_elements == 200
         assert index.search(np.array([149.0, 0.0]), k=1)[0].rid == 149
+
+    def test_add_grows_capacity_counting_removed_vectors(self):
+        # hnswlib no reutiliza el espacio de los borrados, así que también cuentan.
+        index = HNSWIndex(dim=2, metric=VectorMetric.EUCLIDEAN, max_elements=100)
+        for value in range(100):
+            index.add(np.array([float(value), 0.0]), value)
+        for value in range(50):
+            index.remove(value)
+
+        index.add(np.array([500.0, 0.0]), "new")
+
+        assert len(index) == 51
+        assert index.max_elements == 200
+        assert index.search(np.array([500.0, 0.0]), k=1)[0].rid == "new"
 
     def test_capacity_has_minimum(self):
         assert HNSWIndex(dim=2, max_elements=1).max_elements == 100

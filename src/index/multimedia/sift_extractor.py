@@ -14,6 +14,16 @@ class SIFTExtractor:
         self.n_features = n_features
         self._sift = cv2.SIFT_create(nfeatures=n_features)
 
+    def __getstate__(self) -> dict:
+        # cv2.SIFT no se puede guardar con pickle; no tiene estado propio, así que se recrea al cargar.
+        state = self.__dict__.copy()
+        del state["_sift"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._sift = cv2.SIFT_create(nfeatures=self.n_features)
+
     def extract(self, source: Union[str, bytes, np.ndarray]) -> np.ndarray:
         """
         Extrae descriptores locales SIFT de la imagen provista.

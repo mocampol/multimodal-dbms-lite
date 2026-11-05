@@ -1,4 +1,5 @@
 import os
+import pickle
 import tempfile
 import cv2
 import numpy as np
@@ -452,6 +453,39 @@ class TestExtractFeaturesValidation:
         first = ExtractFeatures(k=4).fit(corpus).extract(corpus[0]).data
         second = ExtractFeatures(k=4).fit(corpus).extract(corpus[0]).data
         assert np.array_equal(first, second)
+
+
+class TestExtractFeaturesPersistence:
+    def test_sift_extractor_survives_pickle(self, tmp_path):
+        path = _create_synthetic_image(str(tmp_path / "sift.png"))
+        extractor = SIFTExtractor(n_features=100)
+
+        loaded = pickle.loads(pickle.dumps(extractor))
+
+        assert loaded.n_features == 100
+        assert np.array_equal(loaded.extract(path), extractor.extract(path))
+
+    def test_loaded_extractor_produces_the_same_vectors(self, tmp_path):
+        image = _create_synthetic_image(str(tmp_path / "img.png"))
+        audio = _create_synthetic_audio(str(tmp_path / "audio.wav"))
+        corpus = [image, audio, [1.0, 2.0], [3.0, 4.0]]
+        extractor = ExtractFeatures(k=8).fit(corpus)
+        path = str(tmp_path / "nested" / "extractor.pkl")
+
+        extractor.save(path)
+        loaded = ExtractFeatures.load(path)
+
+        assert loaded.is_fitted
+        assert loaded.k == 8
+        for item in corpus:
+            assert np.array_equal(loaded.extract(item).data, extractor.extract(item).data)
+
+    def test_load_rejects_a_file_that_is_not_an_extractor(self, tmp_path):
+        path = tmp_path / "other.pkl"
+        path.write_bytes(pickle.dumps({"k": 8}))
+
+        with pytest.raises(ValueError, match="no contiene un ExtractFeatures"):
+            ExtractFeatures.load(str(path))
 
 
 class TestFeatureVector:
