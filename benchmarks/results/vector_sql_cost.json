@@ -1,0 +1,46 @@
+[
+  {
+    "modality": "image",
+    "n": 1000,
+    "index_kind": "IVF",
+    "num_queries": 5,
+    "create_index_s": 3.516,
+    "avg_query_s": 1.688,
+    "avg_fit_s": 1.674,
+    "fit_share": 0.9916,
+    "fits_per_query": 1.0
+  },
+  {
+    "modality": "image",
+    "n": 1000,
+    "index_kind": "HNSW",
+    "num_queries": 5,
+    "create_index_s": 3.916,
+    "avg_query_s": 1.959,
+    "avg_fit_s": 1.948,
+    "fit_share": 0.9939,
+    "fits_per_query": 1.0
+  },
+  {
+    "modality": "audio",
+    "n": 1000,
+    "index_kind": "IVF",
+    "num_queries": 5,
+    "create_index_s": 20.88,
+    "avg_query_s": 3.573,
+    "avg_fit_s": 3.545,
+    "fit_share": 0.9923,
+    "fits_per_query": 1.0
+  },
+  {
+    "modality": "audio",
+    "n": 1000,
+    "index_kind": "HNSW",
+    "num_queries": 5,
+    "create_index_s": 7.49,
+    "avg_query_s": 3.768,
+    "avg_fit_s": 3.753,
+    "fit_share": 0.9961,
+    "fits_per_query": 1.0
+  }
+]

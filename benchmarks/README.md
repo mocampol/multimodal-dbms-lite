@@ -7,9 +7,10 @@
 | `benchmark_btree.py` | B+ Tree (pytest-benchmark) | — |
 | `benchmark_spatial.py` + `postgres/` | R-tree propio vs. PostgreSQL/PostGIS con GiST | `results/spatial_comparison_results.csv` |
 | `benchmark_text_comparison.py` + `postgres/load_text_data.py` | SPIMI + BM25 y SPIMI + TF-IDF vs. PostgreSQL tsvector + GIN (`ts_rank`) | `results/text_comparison_results.csv`, `results/text_comparison_summary.md` |
+| `prepare_vector_data.py` + `benchmark_vector.py` | IVF vs. HNSW y coseno vs. euclidiana sobre imágenes y audios | `results/vector_comparison_results.csv`, `results/vector_summary.md` |
 
 
-El resto de este documento describe las comparaciones externas con PostgreSQL: espacial (PostGIS) y de texto (GIN).
+El resto de este documento describe las comparaciones externas con PostgreSQL, espacial (PostGIS) y de texto (GIN), y la comparación de similitud entre IVF y HNSW.
 
 
 ---
@@ -298,3 +299,74 @@ el entorno de ambos lados (versiones, ajustes de PostgreSQL, CPU, RAM) va en
 - `results/text_summary.md` es la salida de otro script (`benchmark_text.py`, con
   escaneo secuencial, sin PostgreSQL). Los resultados de esta comparación están en
   `results/text_comparison_summary.md`.
+
+---
+
+## Comparación de similitud: IVF vs. HNSW
+
+Resultados, recomendaciones por escenario y limitaciones:
+[`results/vector_summary.md`](results/vector_summary.md).
+
+### Archivos
+
+| Archivo | Qué hace |
+|---|---|
+| `vector_common.py` | Datasets, partición y construcción de vectores |
+| `prepare_vector_data.py` | Descarga los datasets, verifica su SHA-256, extrae SIFT / MFCC y guarda los histogramas |
+| `benchmark_vector.py` | Mide `IVFIndex`, `HNSWIndex`, la fuerza bruta y el control en numpy |
+| `compare_vector_results.py` | Verifica la comparación y resume el CSV |
+| `plot_vector_results.py` | Genera `results/charts/vector_*.png` (se niega si falla la verificación) |
+| `plot_vector_gallery.py` | Genera la galería en `results/gallery/`, que no se versiona |
+| `benchmark_vector_sql.py` | Mide el costo de una consulta por SQL con N = 1,000 |
+
+### Cómo reproducir
+
+Requiere unos 6 GB libres en `benchmarks/corpus/vector/`, que no se versiona.
+
+```bash
+pip install -r requirements.txt
+
+# 1. Datasets e histogramas (unos 9 minutos con 10 procesos, más la descarga)
+python benchmarks/prepare_vector_data.py
+
+# 2. Mediciones (unos 40 minutos; se puede interrumpir y retomar)
+python benchmarks/benchmark_vector.py
+
+# 3. Verificar y resumir
+python benchmarks/compare_vector_results.py
+
+# 4. Gráficas y galería
+python benchmarks/plot_vector_results.py
+python benchmarks/plot_vector_gallery.py
+
+# 5. Costo por SQL (unos 2 minutos)
+python benchmarks/benchmark_vector_sql.py
+```
+
+Para probar el flujo completo con N = 1,000, usa `--quick` en los pasos 1 a 4 (en
+`plot_vector_gallery.py`, además `--n 1000`). Las salidas `*_quick.*` y
+`charts_quick/` no se versionan.
+
+### Metodología
+
+- **Índice, no SQL:** `benchmark_vector.py` llama a los índices directamente, porque
+  por SQL se mediría sobre todo la extracción. `benchmark_vector_sql.py` mide esa
+  diferencia aparte.
+- **Vectores:** cada objeto se extrae y cuantiza una vez. Los vectores de N = 1,000
+  son prefijo de los de N = 100,000, y las consultas no están en la base.
+- **Recall@10:** contra la fuerza bruta de la misma métrica. Un resultado cuenta si
+  su distancia no supera la del décimo vecino exacto, porque los histogramas
+  idénticos empatan.
+- **Precision@10:** vecinos de la misma clase que la consulta. Es lo único que
+  compara métricas entre sí, porque cada recall se mide contra su propia métrica.
+- **Tiempo:** promedio de 3 repeticiones de 200 consultas, con un hilo, sin recolector
+  de basura y tras 10 consultas de calentamiento.
+- **Memoria:** pico de RSS menos RSS inicial, con cada fase en un proceso nuevo.
+
+### Formato de resultados
+
+`results/vector_comparison_results.csv`, una fila por (modalidad, N, variante,
+métrica, índice, configuración y valor del barrido). Las columnas están comentadas en
+`FIELDNAMES`, en `benchmark_vector.py`. El entorno está en
+`results/vector_comparison_environment.json`, y cada dataset en
+`results/vector_dataset_*.json`.
