@@ -589,3 +589,27 @@ def test_hnsw_with_other_metric_ranks_exactly(clustered_dataset, metric):
     index.build(vectors, list(range(len(vectors))))
 
     assert _recall_at_k(index, vectors, queries, 10, metric) == 1.0
+
+
+class TestKnownVectorIndexFailures:
+    """Comportamiento esperado que los índices aún no cumplen."""
+
+    @pytest.mark.xfail(strict=True, reason="HNSWIndex.build no valida valores no finitos")
+    def test_hnsw_build_rejects_nan(self):
+        with pytest.raises(ValueError):
+            HNSWIndex(dim=2).build(
+                [np.array([np.nan, 1.0]), np.array([1.0, 1.0])],
+                ["a", "b"],
+            )
+
+    @pytest.mark.xfail(strict=True, reason="search no valida valores no finitos en la consulta")
+    @pytest.mark.parametrize("index_class", VECTOR_INDEXES)
+    def test_search_rejects_nan_query(self, index_class):
+        index = _index_with_two_vectors(index_class)
+        with pytest.raises(ValueError):
+            index.search(np.array([np.nan, 1.0]), k=1)
+
+    @pytest.mark.xfail(strict=True, reason="from_str(None) lanza AttributeError")
+    def test_from_str_rejects_none(self):
+        with pytest.raises(ValueError):
+            VectorMetric.from_str(None)

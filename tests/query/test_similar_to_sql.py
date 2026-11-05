@@ -522,3 +522,60 @@ class TestVectorJoin:
         )
 
         assert [(row.values[0].data, row.values[1].data) for row in rows] == [(1, 3)]
+
+
+class TestKnownSimilarityFailures:
+    """Comportamiento esperado que el motor aún no cumple."""
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="IVFIndex y HNSWIndex no tienen insert, que register_insert necesita",
+    )
+    @pytest.mark.parametrize("kind", ["IVF", "HNSW"])
+    def test_insert_after_creating_index(self, photos, tmp_path, kind):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+        path = _create_pattern_image(tmp_path / "foto5.png", seed=5)
+
+        execute(f"INSERT INTO fotos VALUES (5, '{path}');", catalog)
+
+        assert 5 in _ids(execute(_knn_sql(query, 5, kind), catalog))
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="IVFIndex y HNSWIndex no tienen delete, que unregister_delete necesita",
+    )
+    @pytest.mark.parametrize("kind", ["IVF", "HNSW"])
+    def test_delete_after_creating_index(self, photos, kind):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+
+        execute("DELETE FROM fotos WHERE id = 3;", catalog)
+
+        assert 3 not in _ids(execute(_knn_sql(query, 4, kind), catalog))
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="_validate_text_search solo admite SCORE(...) después de '*'",
+    )
+    def test_star_with_similarity_score(self, photos):
+        catalog, query = photos
+
+        rows = execute(
+            f"SELECT *, SIMILARITY_SCORE() AS score FROM fotos "
+            f"WHERE SIMILAR_TO(ruta, '{query}', k=1);",
+            catalog,
+        )
+
+        assert rows[0].values[0].data == 3
+        assert len(rows[0].values) == 3
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="VectorSearch entrena con toda la columna y una fila no multimedia aborta la consulta",
+    )
+    def test_non_media_row_does_not_break_search(self, photos):
+        catalog, query = photos
+        execute("INSERT INTO fotos VALUES (5, 'no es una ruta');", catalog)
+
+        assert _ids(execute(_knn_sql(query, 1), catalog)) == [3]
