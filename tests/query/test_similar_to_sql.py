@@ -1,3 +1,5 @@
+import os
+
 import cv2
 import numpy as np
 import pytest
@@ -5,6 +7,7 @@ import soundfile as sf
 
 from catalog.catalog import Catalog
 from catalog.table_metadata import StorageType, IndexType
+from index.multimedia import ExtractFeatures
 from index.vector import VectorMetric
 from main import make_heap_factory, make_index_buffer_factory, make_sequential_factory
 from query.parser.ast_nodes import (
@@ -413,17 +416,79 @@ class TestSimilarToKnn:
         catalog, query = photos
         execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
         expected = _ids(execute(_knn_sql(query, 4, kind), catalog))
-        for storage in catalog._table_storage.values():
-            storage.bm.flush_all()
-        catalog._sys_tables.bm.flush_all()
-        catalog._sys_columns.bm.flush_all()
-        catalog._sys_indexes.bm.flush_all()
 
-        reopened = _make_catalog(tmp_path)
+        reopened = _reopen(catalog, tmp_path)
 
         index = reopened.get_physical_index("fotos", "ruta", index_type=kind.lower())
         assert len(index) == 4
         assert _ids(execute(_knn_sql(query, 4, kind), reopened)) == expected
+
+
+def _reopen(catalog, base_dir):
+    for storage in catalog._table_storage.values():
+        storage.bm.flush_all()
+    catalog._sys_tables.bm.flush_all()
+    catalog._sys_columns.bm.flush_all()
+    catalog._sys_indexes.bm.flush_all()
+    return _make_catalog(base_dir)
+
+
+def _vector_index(catalog, kind):
+    return catalog.get_physical_index("fotos", "ruta", index_type=kind.lower())
+
+
+def _forbid_fit(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("la consulta no debería reentrenar el extractor")
+
+    monkeypatch.setattr(ExtractFeatures, "fit", fail)
+
+
+@pytest.mark.parametrize("kind", ["IVF", "HNSW"])
+class TestVectorIndexExtractor:
+    """El índice guarda el extractor con que se construyó y las consultas lo reutilizan."""
+
+    def test_search_uses_the_index_extractor_without_refitting(self, photos, monkeypatch, kind):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+        _forbid_fit(monkeypatch)
+
+        assert _ids(execute(_knn_sql(query, 1, kind), catalog)) == [3]
+
+    def test_extractor_survives_catalog_restart(self, photos, tmp_path, monkeypatch, kind):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+
+        reopened = _reopen(catalog, tmp_path)
+        _forbid_fit(monkeypatch)
+
+        assert reopened.get_vector_extractor(_vector_index(reopened, kind)) is not None
+        assert _ids(execute(_knn_sql(query, 1, kind), reopened)) == [3]
+
+    def test_index_without_saved_extractor_still_searches(self, photos, tmp_path, kind):
+        # Índices creados antes de guardar el extractor: la consulta reentrena como antes.
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+        os.remove(_vector_index(catalog, kind)._storage_path + ".extractor")
+
+        reopened = _reopen(catalog, tmp_path)
+
+        assert reopened.get_vector_extractor(_vector_index(reopened, kind)) is None
+        assert _ids(execute(_knn_sql(query, 1, kind), reopened)) == [3]
+
+    @pytest.mark.parametrize("statement", ["DROP INDEX idx_fotos;", "DROP TABLE fotos;"])
+    def test_drop_removes_every_index_file(self, photos, kind, statement):
+        catalog, _ = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+        index = _vector_index(catalog, kind)
+        path = index._storage_path
+        files = [path, path + ".extractor"] + ([path + ".bin"] if kind == "HNSW" else [])
+        assert all(os.path.exists(file) for file in files)
+
+        execute(statement, catalog)
+
+        assert not any(os.path.exists(file) for file in files)
+        assert catalog.get_vector_extractor(index) is None
 
 
 class TestSimilarToEmptyDatasets:

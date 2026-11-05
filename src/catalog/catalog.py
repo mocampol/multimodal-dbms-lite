@@ -89,6 +89,8 @@ class Catalog:
         self.indexes: dict[str, list[dict]] = {}
         self._table_storage: dict[str, object] = {}
         self._physical_indexes: dict[int, object] = {}
+        # index_id -> extractor con que se construyó cada índice IVF/HNSW
+        self._vector_extractors: dict[int, ExtractFeatures] = {}
         self._index_catalog_rids: dict[int, object] = {}
         self._clustered_indexes: dict[str, ClusteredIndex] = {}
 
@@ -359,7 +361,7 @@ class Catalog:
         for index_id in index_ids:
             index = self._physical_indexes.pop(index_id, None)
             self._index_catalog_rids.pop(index_id, None)
-            self._remove_file(self._buffer_file_path(index))
+            self._remove_index_files(index_id, self._buffer_file_path(index))
 
         for rid, record in self._sys_columns.scan_with_rid():
             if record[0].data == table_id:
@@ -390,6 +392,10 @@ class Catalog:
         file_path = getattr(buffer_owner, "file_path", None)
         if file_path is not None:
             return file_path
+        # IVF y HNSW no tienen BufferManager: el catálogo les asigna la ruta.
+        storage_path = getattr(buffer_owner, "_storage_path", None)
+        if storage_path is not None:
+            return storage_path
         buffer_manager = getattr(buffer_owner, "bm", None)
         if buffer_manager is None:
             buffer_manager = getattr(buffer_owner, "buffer_manager", None)
@@ -403,6 +409,18 @@ class Catalog:
                 os.remove(file_path)
             except FileNotFoundError:
                 pass
+
+    def _remove_index_files(self, index_id, file_path):
+        """Borra el archivo del índice y los que IVF/HNSW guardan a su lado."""
+        self._vector_extractors.pop(index_id, None)
+        self._remove_file(file_path)
+        if file_path is not None:
+            self._remove_file(self._extractor_path(file_path))
+            self._remove_file(f"{file_path}.bin")  # grafo de HNSW
+
+    @staticmethod
+    def _extractor_path(index_path: str) -> str:
+        return f"{index_path}.extractor"
 
     def get_storage(self, table_name: str):
         """
@@ -505,7 +523,7 @@ class Catalog:
             root_page_id = 0
         elif index_type in (IndexType.IVF, IndexType.HNSW):
             index = self._build_vector_index(
-                index_type, index, self._table_storage[table_name], tm, column_name
+                index_type, index, self._table_storage[table_name], tm, column_name, index_id
             )
             root_page_id = 0
         else:
@@ -558,7 +576,7 @@ class Catalog:
         index.save()
         return index
 
-    def _build_vector_index(self, index_type, index, storage, table_metadata, column_name):
+    def _build_vector_index(self, index_type, index, storage, table_metadata, column_name, index_id):
         column_index = table_metadata.schema.column_index(column_name)
         extractor = ExtractFeatures(k=index.dim)
         samples = []
@@ -575,7 +593,25 @@ class Catalog:
         rids = [rid for rid, _ in samples]
         index.build(vectors, rids)
         index.save(index._storage_path)
+        # Las consultas y las filas nuevas se extraen con este mismo codebook,
+        # para que sus vectores sean comparables con los del índice.
+        extractor.save(self._extractor_path(index._storage_path))
+        self._vector_extractors[index_id] = extractor
         return index
+
+    def _load_vector_extractor(self, index_id, index_path):
+        path = self._extractor_path(index_path)
+        if os.path.exists(path):
+            self._vector_extractors[index_id] = ExtractFeatures.load(path)
+        else:  # índice creado antes de que se guardara el extractor
+            self._vector_extractors.pop(index_id, None)
+
+    def get_vector_extractor(self, index):
+        """El extractor con que se construyó un índice IVF/HNSW, o None si no se guardó."""
+        for index_id, physical_index in self._physical_indexes.items():
+            if physical_index is index:
+                return self._vector_extractors.get(index_id)
+        return None
 
     def _create_index(self, index_type, table_name, column_name, index_id, key_type):
         manager = self._index_buffer_factory(table_name, column_name, index_id)
@@ -610,21 +646,15 @@ class Catalog:
             return RTree(manager, root_page_id=root_page_id)
         if index_type in (IndexType.GIN.value, IndexType.SPIMI.value):
             return InvertedIndex.load(manager.file_manager.file_path, manager=manager)
-        if index_type == IndexType.IVF.value:
+        if index_type in (IndexType.IVF.value, IndexType.HNSW.value):
+            index_class = IVFIndex if index_type == IndexType.IVF.value else HNSWIndex
             fpath = manager.file_manager.file_path
             if os.path.exists(fpath):
-                idx = IVFIndex.load(fpath)
+                idx = index_class.load(fpath)
             else:
-                idx = IVFIndex(dim=64, metric="cosine")
+                idx = index_class(dim=64, metric="cosine")
             idx._storage_path = fpath
-            return idx
-        if index_type == IndexType.HNSW.value:
-            fpath = manager.file_manager.file_path
-            if os.path.exists(fpath):
-                idx = HNSWIndex.load(fpath)
-            else:
-                idx = HNSWIndex(dim=64, metric="cosine")
-            idx._storage_path = fpath
+            self._load_vector_extractor(index_id, fpath)
             return idx
         raise ValueError(f"Tipo de índice no soportado: {index_type}")
 
@@ -749,7 +779,7 @@ class Catalog:
             if file_path is None and self._index_buffer_factory is not None:
                 bm = self._index_buffer_factory(target_table_name, target_entry["column_name"], index_id)
                 file_path = self._buffer_file_path(bm)
-            self._remove_file(file_path)
+            self._remove_index_files(index_id, file_path)
 
     def register_insert(self, table_name: str, record: Record, rid):
         clustered = self._clustered_indexes.get(table_name)
