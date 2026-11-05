@@ -464,3 +464,128 @@ class TestHNSWValidation:
             list(range(120)),
         )
         assert index.max_elements == 240
+
+
+def _clustered_dataset(n_clusters=20, per_cluster=50, dim=16, seed=11):
+    rng = np.random.default_rng(seed)
+    centers = rng.uniform(-10.0, 10.0, (n_clusters, dim))
+    vectors = np.vstack(
+        [center + rng.normal(0.0, 0.5, (per_cluster, dim)) for center in centers]
+    ).astype(np.float32)
+    queries = (centers + rng.normal(0.0, 0.5, centers.shape)).astype(np.float32)
+    return vectors, queries
+
+
+def _exact_top_k(vectors, query, k, metric):
+    distances = [compute_distance(query, vector, metric) for vector in vectors]
+    return sorted(range(len(vectors)), key=lambda i: (distances[i], i))[:k]
+
+
+def _recall_at_k(index, vectors, queries, k, metric):
+    hits = 0
+    for query in queries:
+        found = {result.rid for result in index.search(query, k=k, metric=metric)}
+        hits += len(found & set(_exact_top_k(vectors, query, k, metric)))
+    return hits / (k * len(queries))
+
+
+@pytest.fixture(scope="module")
+def clustered_dataset():
+    return _clustered_dataset()
+
+
+@pytest.mark.parametrize("metric", list(VectorMetric))
+class TestRecallAndOrder:
+    def test_hnsw_recall_on_clustered_data(self, clustered_dataset, metric):
+        vectors, queries = clustered_dataset
+        index = HNSWIndex(dim=vectors.shape[1], metric=metric)
+        index.build(vectors, list(range(len(vectors))))
+
+        assert _recall_at_k(index, vectors, queries, 10, metric) >= 0.90
+
+    def test_ivf_recall_on_clustered_data(self, clustered_dataset, metric):
+        vectors, queries = clustered_dataset
+        index = IVFIndex(dim=vectors.shape[1], metric=metric, n_lists=20, n_probe=4)
+        index.build(vectors, list(range(len(vectors))))
+
+        assert _recall_at_k(index, vectors, queries, 10, metric) >= 0.95
+
+    def test_ivf_recall_does_not_drop_when_probing_more_lists(self, metric):
+        rng = np.random.default_rng(23)
+        vectors = rng.standard_normal((400, 16)).astype(np.float32)
+        queries = rng.standard_normal((20, 16)).astype(np.float32)
+
+        recalls = []
+        for n_probe in (1, 4, 16):
+            index = IVFIndex(dim=16, metric=metric, n_lists=16, n_probe=n_probe)
+            index.build(vectors, list(range(len(vectors))))
+            recalls.append(_recall_at_k(index, vectors, queries, 10, metric))
+
+        assert recalls == sorted(recalls)
+        assert recalls[0] < recalls[-1]
+        assert recalls[-1] == 1.0
+
+    @pytest.mark.parametrize(
+        "index_class, params",
+        [
+            (IVFIndex, {"n_lists": 20, "n_probe": 20}),
+            (HNSWIndex, {}),
+        ],
+    )
+    def test_results_are_ordered_and_match_the_metric(
+        self, clustered_dataset, metric, index_class, params
+    ):
+        vectors, queries = clustered_dataset
+        index = index_class(dim=vectors.shape[1], metric=metric, **params)
+        index.build(vectors, list(range(len(vectors))))
+
+        for query in queries:
+            results = index.search(query, k=10)
+            distances = [result.distance for result in results]
+            scores = [result.score for result in results]
+
+            assert len(results) == 10
+            assert len({result.rid for result in results}) == 10
+            assert distances == sorted(distances)
+            assert scores == sorted(scores, reverse=True)
+            for result in results:
+                expected = compute_distance(query, vectors[result.rid], metric)
+                assert np.isclose(result.distance, expected, atol=1e-3)
+
+    def test_ivf_probing_all_lists_returns_exact_neighbors(
+        self, clustered_dataset, metric
+    ):
+        vectors, queries = clustered_dataset
+        index = IVFIndex(dim=vectors.shape[1], metric=metric, n_lists=20, n_probe=20)
+        index.build(vectors, list(range(len(vectors))))
+
+        for k in (1, 5, 10, 50):
+            assert _recall_at_k(index, vectors, queries, k, metric) == 1.0
+
+    @pytest.mark.parametrize("index_class", VECTOR_INDEXES)
+    def test_saved_index_returns_same_results(
+        self, clustered_dataset, metric, index_class, tmp_path
+    ):
+        vectors, queries = clustered_dataset
+        index = index_class(dim=vectors.shape[1], metric=metric)
+        index.build(vectors, list(range(len(vectors))))
+        path = str(tmp_path / "vectores.idx")
+        index.save(path)
+
+        loaded = index_class.load(path)
+
+        assert loaded.metric == metric
+        assert [r.rid for r in loaded.search(queries[0], k=10)] == [
+            r.rid for r in index.search(queries[0], k=10)
+        ]
+
+
+@pytest.mark.parametrize(
+    "metric", [VectorMetric.COSINE, VectorMetric.DOT_PRODUCT]
+)
+def test_hnsw_with_other_metric_ranks_exactly(clustered_dataset, metric):
+    vectors, queries = clustered_dataset
+    index = HNSWIndex(dim=vectors.shape[1], metric=VectorMetric.EUCLIDEAN)
+    index.build(vectors, list(range(len(vectors))))
+
+    assert _recall_at_k(index, vectors, queries, 10, metric) == 1.0
