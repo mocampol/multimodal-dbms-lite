@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+import pickle
 from typing import Any, Sequence
 import numpy as np
 
@@ -192,3 +193,17 @@ class ExtractFeatures:
     def fit_transform(self, corpus: Sequence[Any], obj: Any) -> FeatureVector:
         self.fit(corpus)
         return self.extract(obj)
+
+    def save(self, path: str) -> None:
+        """Guarda el extractor con sus codebooks e IDF, para extraer después sin reentrenar."""
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path: str) -> ExtractFeatures:
+        with open(path, "rb") as f:
+            extractor = pickle.load(f)
+        if not isinstance(extractor, cls):
+            raise ValueError(f"El archivo {path} no contiene un ExtractFeatures")
+        return extractor
