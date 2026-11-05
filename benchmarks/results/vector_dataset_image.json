@@ -1,0 +1,31 @@
+{
+  "modality": "image",
+  "dataset": "tiny_imagenet",
+  "url": "http://cs231n.stanford.edu/tiny-imagenet-200.zip",
+  "archive_sha256": "6198c8ae015e2b3e007c7841da39ec069199b9aa3bfa943a462022fe5e43c821",
+  "feature_dim": 64,
+  "base_objects": 100000,
+  "queries": 200,
+  "classes": 200,
+  "codebook_samples": 5000,
+  "codebook_time_s": 13.893,
+  "extract_time_s": 214.889,
+  "processes": 10,
+  "rejected": {
+    "No se encontraron puntos clave SIFT en la imagen": 113
+  },
+  "rejected_examples": [
+    "tiny-imagenet-200/train/n03404251/images/n03404251_83.JPEG",
+    "tiny-imagenet-200/train/n09246464/images/n09246464_215.JPEG",
+    "tiny-imagenet-200/train/n01910747/images/n01910747_117.JPEG",
+    "tiny-imagenet-200/train/n03804744/images/n03804744_447.JPEG",
+    "tiny-imagenet-200/train/n01910747/images/n01910747_216.JPEG",
+    "tiny-imagenet-200/train/n03837869/images/n03837869_486.JPEG",
+    "tiny-imagenet-200/train/n03804744/images/n03804744_329.JPEG",
+    "tiny-imagenet-200/train/n02999410/images/n02999410_385.JPEG",
+    "tiny-imagenet-200/train/n01910747/images/n01910747_416.JPEG",
+    "tiny-imagenet-200/train/n04311004/images/n04311004_451.JPEG"
+  ],
+  "python": "3.12.2",
+  "platform": "Windows-11-10.0.26200-SP0"
+}

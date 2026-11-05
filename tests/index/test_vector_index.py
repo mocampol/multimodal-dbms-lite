@@ -1,5 +1,7 @@
 import os
+import pickle
 import tempfile
+import hnswlib
 import numpy as np
 import pytest
 
@@ -230,6 +232,99 @@ class TestHNSWIndex:
         res = loaded.search(np.array([1, 2, 3, 4]), k=1)
         assert len(res) == 1
         assert res[0].rid == "a"
+
+
+    def test_hnsw_num_threads_defaults_to_every_core(self, tmp_path):
+        vectors = np.random.default_rng(0).normal(size=(50, 4)).astype(np.float32)
+        hnsw = HNSWIndex(dim=4)
+        assert hnsw.num_threads == -1
+        # hnswlib interpreta set_num_threads(-1) como un solo hilo: hay que mirar su valor real.
+        every_core = hnswlib.Index(space="l2", dim=4).num_threads
+        assert hnsw._index.num_threads == every_core
+
+        hnsw.build(list(vectors), list(range(50)))
+        assert hnsw._index.num_threads == every_core
+
+        path = str(tmp_path / "hnsw.idx")
+        hnsw.save(path)
+        assert HNSWIndex.load(path)._index.num_threads == every_core
+
+    @pytest.mark.parametrize("num_threads", [0, -2])
+    def test_hnsw_rejects_invalid_num_threads(self, num_threads):
+        with pytest.raises(ValueError, match="num_threads"):
+            HNSWIndex(dim=4, num_threads=num_threads)
+
+    def test_hnsw_build_keeps_num_threads_and_ef_search(self):
+        vectors = np.random.default_rng(1).normal(size=(50, 4)).astype(np.float32)
+        hnsw = HNSWIndex(dim=4, num_threads=1)
+        hnsw.set_ef_search(77)
+        hnsw.build(list(vectors), list(range(50)))  # build() recrea el grafo
+        assert hnsw._index.num_threads == 1
+        assert hnsw._index.ef == 77
+
+    def test_hnsw_single_thread_build_is_reproducible(self):
+        vectors = np.random.default_rng(2).normal(size=(300, 8)).astype(np.float32)
+        query = np.random.default_rng(3).normal(size=8).astype(np.float32)
+
+        def top_ids():
+            hnsw = HNSWIndex(dim=8, metric=VectorMetric.EUCLIDEAN, num_threads=1)
+            hnsw.build(list(vectors), list(range(300)))
+            return [result.rid for result in hnsw.search(query, k=10)]
+
+        assert top_ids() == top_ids()
+
+    def test_hnsw_set_ef_search_changes_the_search_without_rebuilding(self):
+        rng = np.random.default_rng(4)
+        vectors = rng.normal(size=(2000, 32)).astype(np.float32)
+        queries = rng.normal(size=(20, 32)).astype(np.float32)
+        hnsw = HNSWIndex(dim=32, metric=VectorMetric.EUCLIDEAN, ef_construction=40, M=4, num_threads=1)
+        hnsw.build(list(vectors), list(range(2000)))
+
+        def recall():
+            hits = 0
+            for query in queries:
+                exact = set(np.argsort(np.linalg.norm(vectors - query, axis=1))[:10].tolist())
+                hits += len(exact & {result.rid for result in hnsw.search(query, k=10)})
+            return hits / (10 * len(queries))
+
+        hnsw.set_ef_search(10)
+        low = recall()
+        hnsw.set_ef_search(400)
+        high = recall()
+        assert high > low
+        assert hnsw.ef_search == 400 and hnsw._index.ef == 400
+
+    @pytest.mark.parametrize("ef_search", [0, -1])
+    def test_hnsw_rejects_invalid_ef_search(self, ef_search):
+        with pytest.raises(ValueError, match="ef_search"):
+            HNSWIndex(dim=4).set_ef_search(ef_search)
+
+    def test_hnsw_save_load_keeps_num_threads_and_ef_search(self, tmp_path):
+        vectors = np.random.default_rng(5).normal(size=(20, 4)).astype(np.float32)
+        hnsw = HNSWIndex(dim=4, num_threads=1)
+        hnsw.set_ef_search(33)
+        hnsw.build(list(vectors), list(range(20)))
+        path = str(tmp_path / "hnsw.idx")
+        hnsw.save(path)
+
+        loaded = HNSWIndex.load(path)
+        assert loaded.num_threads == 1 and loaded._index.num_threads == 1
+        assert loaded.ef_search == 33 and loaded._index.ef == 33
+
+    def test_hnsw_loads_an_index_saved_without_num_threads(self, tmp_path):
+        vectors = np.random.default_rng(6).normal(size=(20, 4)).astype(np.float32)
+        hnsw = HNSWIndex(dim=4)
+        hnsw.build(list(vectors), list(range(20)))
+        path = tmp_path / "hnsw.idx"
+        hnsw.save(str(path))
+
+        meta = pickle.loads(path.read_bytes())
+        del meta["num_threads"]
+        path.write_bytes(pickle.dumps(meta))
+
+        loaded = HNSWIndex.load(str(path))
+        assert loaded.num_threads == -1
+        assert len(loaded.search(vectors[0], k=3)) == 3
 
 
 class TestIndexUniformAPI:
