@@ -465,7 +465,8 @@ def _index_rows(index_config, built, measured, common, empty, truth, labels, que
 
 
 def write_environment(path: Path, sizes: list[int]) -> None:
-    import hnswlib
+    from importlib.metadata import version
+
     import psutil
     import sklearn
 
@@ -479,7 +480,7 @@ def write_environment(path: Path, sizes: list[int]) -> None:
         "python": platform.python_version(),
         "numpy": np.__version__,
         "scikit_learn": sklearn.__version__,
-        "hnswlib": getattr(hnswlib, "__version__", "desconocida"),
+        "hnswlib": version("hnswlib"),
         "sizes": sizes,
         "memory_metric": "peak_wset" if sys.platform == "win32" else "VmHWM",
         "threads": 1,
