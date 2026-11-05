@@ -75,6 +75,11 @@ class ExtractFeatures:
     def is_fitted(self) -> bool:
         return self._is_fitted
 
+    @property
+    def modalities(self) -> tuple[str, ...]:
+        """Modalidades con codebook propio. extract() agrega una al ver una nueva."""
+        return tuple(self._quantizers)
+
     def _extract_descriptors(self, obj: Any, modality: str) -> np.ndarray:
         if modality == "image":
             return self.sift.extract(obj)

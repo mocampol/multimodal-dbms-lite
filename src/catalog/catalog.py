@@ -68,6 +68,8 @@ class Catalog:
         indexes (dict[str, list[dict]]): table_name -> list of index metadata.
     """
 
+    _VECTOR_INDEX_TYPES = (IndexType.IVF.value, IndexType.HNSW.value)
+
     def __init__(self, heap_factory, storage_factories=None, index_buffer_factory=None):
         """
         Args:
@@ -251,6 +253,12 @@ class Catalog:
                     index = self._build_text_index(
                         index_type, index, storage, tm, entry["column_name"]
                     )
+                elif index_type in (IndexType.IVF, IndexType.HNSW):
+                    index = self._create_index(
+                        index_type, table_name, entry["column_name"],
+                        entry["index_id"], column.data_type,
+                    )
+                    index = self._rebuild_vector_index(index_type, index, storage, tm, entry)
                 else:
                     index = self._create_index(
                         index_type, table_name, entry["column_name"],
@@ -599,6 +607,64 @@ class Catalog:
         self._vector_extractors[index_id] = extractor
         return index
 
+    def _rebuild_vector_index(self, index_type, index, storage, table_metadata, entry):
+        """Como _build_vector_index, pero una tabla vacía deja el índice vacío en vez de fallar."""
+        column_index = table_metadata.schema.column_index(entry["column_name"])
+        if any(record[column_index].data is not None for record in storage.scan()):
+            return self._build_vector_index(
+                index_type, index, storage, table_metadata, entry["column_name"], entry["index_id"]
+            )
+        index.build([], [])
+        index.save(index._storage_path)
+        # sin filas no hay con qué entrenar: el próximo INSERT lo reconstruye
+        self._vector_extractors.pop(entry["index_id"], None)
+        self._remove_file(self._extractor_path(index._storage_path))
+        return index
+
+    def _vector_extractor_for(self, table_name, entry, index):
+        """El extractor del índice. Si no hay uno guardado (índice anterior a guardarlo,
+        o reconstruido sobre una tabla vacía), reconstruye el índice desde la tabla."""
+        extractor = self._vector_extractors.get(entry["index_id"])
+        if extractor is None:
+            self._build_vector_index(
+                IndexType(entry["index_type"]), index, self._table_storage[table_name],
+                self.get_table(table_name), entry["column_name"], entry["index_id"],
+            )
+            extractor = self._vector_extractors[entry["index_id"]]
+        return extractor
+
+    def _extract_row_vector(self, extractor, entry, index, value):
+        modalities = extractor.modalities
+        try:
+            vector = extractor.extract(value).data
+        except Exception as error:
+            raise ValueError(
+                f"No se pudo calcular el vector de '{value}' para el índice "
+                f"'{entry['index_name']}': {error}"
+            ) from error
+        if extractor.modalities != modalities:
+            # extract() entrenó un codebook para una modalidad que el índice no tenía
+            extractor.save(self._extractor_path(index._storage_path))
+        return vector
+
+    def _index_row_vector(self, table_name, entry, index, rid, value):
+        """Agrega el vector de la fila al índice IVF/HNSW. Las celdas NULL no se indexan."""
+        if value.data is None:
+            return
+        extractor = self._vector_extractor_for(table_name, entry, index)
+        vector = self._extract_row_vector(extractor, entry, index, value.data)
+        self._save_index_change(index, lambda: index.add(vector, rid), lambda: index.remove(rid))
+
+    def _unindex_row_vector(self, table_name, entry, index, rid, value):
+        extractor = self._vector_extractor_for(table_name, entry, index)
+        removed = []
+
+        def restore():
+            if removed and removed[0] and value.data is not None:
+                index.add(self._extract_row_vector(extractor, entry, index, value.data), rid)
+
+        self._save_index_change(index, lambda: removed.append(index.remove(rid)), restore)
+
     def _load_vector_extractor(self, index_id, index_path):
         path = self._extractor_path(index_path)
         if os.path.exists(path):
@@ -794,11 +860,14 @@ class Catalog:
                     if val.data is not None:
                         doc_id = rid_to_doc_id(rid.page_id, rid.slot)
                         tokens = self.text_processor.process(str(val.data))
-                        self._save_text_index_change(
+                        self._save_index_change(
                             index,
                             lambda: index.add_document(doc_id, tokens),
                             lambda: index.remove_document(doc_id),
                         )
+                    continue
+                if entry["index_type"] in self._VECTOR_INDEX_TYPES:
+                    self._index_row_vector(table_name, entry, index, rid, record[column_index])
                     continue
                 key = record[column_index]
                 if entry["index_type"] == IndexType.RTREE.value:
@@ -824,13 +893,16 @@ class Catalog:
                         if had_document:
                             index.add_document(doc_id, tokens)
 
-                    self._save_text_index_change(
+                    self._save_index_change(
                         index,
                         lambda: index.remove_document(doc_id),
                         restore_document,
                     )
                     continue
                 column_index = self.get_schema(table_name).column_index(entry["column_name"])
+                if entry["index_type"] in self._VECTOR_INDEX_TYPES:
+                    self._unindex_row_vector(table_name, entry, index, rid, record[column_index])
+                    continue
                 key = record[column_index]
                 if entry["index_type"] == IndexType.RTREE.value:
                     key = self._rtree_key(key)
@@ -884,7 +956,14 @@ class Catalog:
                         if had_old_document:
                             index.add_document(old_doc_id, old_tokens)
 
-                    self._save_text_index_change(index, change_document, restore_old_document)
+                    self._save_index_change(index, change_document, restore_old_document)
+                continue
+            if entry["index_type"] in self._VECTOR_INDEX_TYPES:
+                old_val = old_record[column_index]
+                new_val = new_record[column_index]
+                if old_val.data != new_val.data or old_rid != new_rid:
+                    self._unindex_row_vector(table_name, entry, index, old_rid, old_val)
+                    self._index_row_vector(table_name, entry, index, new_rid, new_val)
                 continue
             old_key = old_record[column_index]
             new_key = new_record[column_index]
@@ -909,7 +988,7 @@ class Catalog:
                 self._unique_values[(table_name, column_name)].add(new_value)
 
     @staticmethod
-    def _save_text_index_change(index, change, rollback):
+    def _save_index_change(index, change, rollback):
         try:
             change()
             index.save()
@@ -918,7 +997,8 @@ class Catalog:
             raise
 
     def _persist_index_root(self, entry, index):
-        if entry["index_type"] in (IndexType.GIN.value, IndexType.SPIMI.value):
+        # los índices de texto y los vectoriales no tienen página raíz
+        if entry["index_type"] in (IndexType.GIN.value, IndexType.SPIMI.value, *self._VECTOR_INDEX_TYPES):
             return
         root_page_id = (
             index.directory_page_id if entry["index_type"] == IndexType.HASH.value else index.root_page_id

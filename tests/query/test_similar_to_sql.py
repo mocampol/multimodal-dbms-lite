@@ -589,14 +589,14 @@ class TestVectorJoin:
         assert [(row.values[0].data, row.values[1].data) for row in rows] == [(1, 3)]
 
 
-class TestKnownSimilarityFailures:
-    """Comportamiento esperado que el motor aún no cumple."""
+def _all_ids(catalog):
+    return sorted(_ids(execute("SELECT id FROM fotos;", catalog)))
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="IVFIndex y HNSWIndex no tienen insert, que register_insert necesita",
-    )
-    @pytest.mark.parametrize("kind", ["IVF", "HNSW"])
+
+@pytest.mark.parametrize("kind", ["IVF", "HNSW"])
+class TestVectorIndexMaintenance:
+    """INSERT, DELETE y UPDATE mantienen al día los índices IVF y HNSW."""
+
     def test_insert_after_creating_index(self, photos, tmp_path, kind):
         catalog, query = photos
         execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
@@ -605,12 +605,9 @@ class TestKnownSimilarityFailures:
         execute(f"INSERT INTO fotos VALUES (5, '{path}');", catalog)
 
         assert 5 in _ids(execute(_knn_sql(query, 5, kind), catalog))
+        assert len(_vector_index(catalog, kind)) == 5
+        assert _ids(execute(_knn_sql(path, 1, kind), catalog)) == [5]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="IVFIndex y HNSWIndex no tienen delete, que unregister_delete necesita",
-    )
-    @pytest.mark.parametrize("kind", ["IVF", "HNSW"])
     def test_delete_after_creating_index(self, photos, kind):
         catalog, query = photos
         execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
@@ -618,6 +615,92 @@ class TestKnownSimilarityFailures:
         execute("DELETE FROM fotos WHERE id = 3;", catalog)
 
         assert 3 not in _ids(execute(_knn_sql(query, 4, kind), catalog))
+        assert len(_vector_index(catalog, kind)) == 3
+
+    def test_update_moves_the_row_to_its_new_vector(self, photos, tmp_path, kind):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+        path = _create_pattern_image(tmp_path / "nueva.png", seed=9)
+
+        execute(f"UPDATE fotos SET ruta = '{path}' WHERE id = 3;", catalog)
+
+        assert len(_vector_index(catalog, kind)) == 4
+        assert _ids(execute(_knn_sql(path, 1, kind), catalog)) == [3]
+        # el vector viejo de la fila 3 ya no está: nada coincide del todo con la consulta
+        assert _scores(execute(_knn_sql(query, 1, kind), catalog))[0] < 0.99
+
+    def test_null_value_is_inserted_but_not_indexed(self, photos, kind):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+
+        execute("INSERT INTO fotos VALUES (5, NULL);", catalog)
+        execute("DELETE FROM fotos WHERE id = 5;", catalog)
+
+        assert len(_vector_index(catalog, kind)) == 4
+        assert _all_ids(catalog) == [1, 2, 3, 4]
+
+    @pytest.mark.parametrize("value", ["no es una ruta", "C:/no/existe/foto.png"])
+    def test_insert_without_vector_is_rejected_and_undone(self, photos, kind, value):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+
+        with pytest.raises(ValueError, match="No se pudo calcular el vector"):
+            execute(f"INSERT INTO fotos VALUES (5, '{value}');", catalog)
+
+        assert _all_ids(catalog) == [1, 2, 3, 4]
+        assert len(_vector_index(catalog, kind)) == 4
+
+    def test_changes_survive_catalog_restart(self, photos, tmp_path, kind):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+        path = _create_pattern_image(tmp_path / "foto5.png", seed=5)
+        execute(f"INSERT INTO fotos VALUES (5, '{path}');", catalog)
+        execute("DELETE FROM fotos WHERE id = 3;", catalog)
+
+        reopened = _reopen(catalog, tmp_path)
+
+        assert len(_vector_index(reopened, kind)) == 4
+        assert _ids(execute(_knn_sql(path, 1, kind), reopened)) == [5]
+        assert 3 not in _ids(execute(_knn_sql(query, 4, kind), reopened))
+
+    def test_index_without_saved_extractor_is_rebuilt_on_insert(self, photos, tmp_path, kind):
+        catalog, _ = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+        extractor_path = _vector_index(catalog, kind)._storage_path + ".extractor"
+        os.remove(extractor_path)
+        reopened = _reopen(catalog, tmp_path)
+        path = _create_pattern_image(tmp_path / "foto5.png", seed=5)
+
+        execute(f"INSERT INTO fotos VALUES (5, '{path}');", reopened)
+
+        assert os.path.exists(extractor_path)
+        assert len(_vector_index(reopened, kind)) == 5
+        assert _ids(execute(_knn_sql(path, 1, kind), reopened)) == [5]
+
+    def test_rebuild_derived_rebuilds_the_vector_index(self, photos, kind):
+        catalog, query = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+
+        catalog.rebuild_derived("fotos")
+
+        assert len(_vector_index(catalog, kind)) == 4
+        assert _ids(execute(_knn_sql(query, 1, kind), catalog)) == [3]
+
+    def test_rebuild_derived_on_empty_table_waits_for_the_next_insert(self, photos, tmp_path, kind):
+        catalog, _ = photos
+        execute(f"CREATE INDEX idx_fotos ON fotos USING {kind} (ruta);", catalog)
+        execute("DELETE FROM fotos;", catalog)
+
+        catalog.rebuild_derived("fotos")
+        assert len(_vector_index(catalog, kind)) == 0
+
+        path = _create_pattern_image(tmp_path / "foto5.png", seed=5)
+        execute(f"INSERT INTO fotos VALUES (5, '{path}');", catalog)
+        assert _ids(execute(_knn_sql(path, 1, kind), catalog)) == [5]
+
+
+class TestKnownSimilarityFailures:
+    """Comportamiento esperado que el motor aún no cumple."""
 
     @pytest.mark.xfail(
         strict=True,
