@@ -65,3 +65,10 @@ class CsvImportConfirm(BaseModel):
     table_name: str
     columns: list[CsvImportColumn]
     on_error: Literal["stop", "ignore"] = "stop"
+
+
+class MediaImportRequest(BaseModel):
+    directory: str
+    table_name: str
+    kind: Literal["image", "audio", "text"]
+    index: Literal["IVF", "HNSW", "SPIMI"] | None = None
