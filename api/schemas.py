@@ -20,7 +20,7 @@ class DistanceValue(BaseModel):
 class IndexInfo(BaseModel):
     index_id: int
     column_name: str
-    index_type: Literal["btree", "hash", "rtree"]
+    index_type: Literal["btree", "hash", "rtree", "gin", "spimi", "ivf", "hnsw"]
     root_page_id: int | None = None
     is_spatial: bool
 
