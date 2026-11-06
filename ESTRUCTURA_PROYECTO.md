@@ -1,7 +1,7 @@
 # Estructura actual del proyecto
 
 **Proyecto:** Multimodal DBMS Lite  
-**Actualizado:** 19 de octubre de 2026
+**Actualizado:** Noviembre de 2026
 
 Este documento resume la organización actual del repositorio. Se describen los módulos de código, las pruebas y los recursos auxiliares. Se omiten archivos generados de caché como `__pycache__` y `.pytest_cache`.
 
@@ -9,11 +9,11 @@ Este documento resume la organización actual del repositorio. Se describen los 
 
 ```text
 multimodal-dbms-lite/
-├── api/                 # API HTTP con FastAPI
+├── api/                 # API HTTP con FastAPI y streaming multimedia
 ├── benchmarks/          # mediciones, comparaciones y sus resultados
-├── frontend/            # cliente web con React, TypeScript y Vite
+├── frontend/            # cliente web interactivo con React, TypeScript y Vite
 ├── sql/                 # ejemplos y generación de scripts SQL
-├── src/                 # implementación del motor DBMS
+├── src/                 # implementación del motor DBMS multimodal
 ├── tests/               # pruebas automatizadas por componente
 ├── .gitignore
 ├── LICENSE
@@ -31,59 +31,78 @@ multimodal-dbms-lite/
 ├── api/
 │   ├── __init__.py
 │   ├── engine.py                 # conexión de la API con el motor
-│   ├── explain.py                # presentación de planes de ejecución
-│   ├── main.py                   # aplicación FastAPI
+│   ├── explain.py                # presentación y serialización de planes de ejecución
+│   ├── main.py                   # aplicación FastAPI y configuración CORS
 │   ├── requirements.txt          # dependencias específicas de la API
-│   ├── schemas.py                # modelos de entrada y salida
-│   ├── serialize.py              # serialización de resultados
+│   ├── schemas.py                # modelos Pydantic de entrada y salida
+│   ├── serialize.py              # serialización de resultados para el frontend
 │   └── routers/
 │       ├── __init__.py
-│       ├── imports.py            # rutas de importación de datos
-│       ├── query.py              # ejecución de consultas
-│       └── tables.py             # acceso a tablas y metadatos
+│       ├── imports.py            # rutas de importación de CSV
+│       ├── media.py              # importación de carpetas multimedia y streaming (GET /files)
+│       ├── query.py              # ejecución de consultas SQL
+│       └── tables.py             # acceso a tablas y metadatos del catálogo
 │
 ├── benchmarks/
 │   ├── README.md                 # guía para ejecutar los benchmarks
 │   ├── benchmark_btree.py
 │   ├── benchmark_indexes.py
 │   ├── benchmark_spatial.py
+│   ├── benchmark_text.py
+│   ├── benchmark_text_comparison.py # SPIMI vs PostgreSQL GIN
+│   ├── benchmark_vector.py       # IVF vs HNSW sobre imágenes y audio
+│   ├── benchmark_vector_sql.py   # costo de feature extraction en tiempo de consulta SQL
+│   ├── compare_text_results.py   # validación de consistencia de resultados de texto
+│   ├── compare_vector_results.py # validación de recall y consistencia k-NN
 │   ├── perf_heap_vs_sequential.py
+│   ├── plot_text_results.py      # generación de gráficos de texto
+│   ├── plot_vector_results.py    # generación de gráficos vectoriales
+│   ├── plot_vector_gallery.py    # galería visual de aciertos y errores
+│   ├── prepare_vector_data.py    # descarga y preparación de Tiny ImageNet y Speech Commands
 │   ├── spatial_common.py         # utilidades compartidas para pruebas espaciales
-│   ├── postgres/                 # entorno de comparación PostgreSQL/PostGIS
+│   ├── text_common.py            # utilidades compartidas para pruebas de texto
+│   ├── vector_common.py          # utilidades compartidas para pruebas vectoriales
+│   ├── postgres/                 # entorno de comparación PostgreSQL (PostGIS y GIN)
 │   │   ├── docker-compose.yml
 │   │   ├── load_data.py
+│   │   ├── load_text_data.py
 │   │   ├── queries.sql
 │   │   ├── requirements.txt
-│   │   └── schema.sql
+│   │   ├── schema.sql
+│   │   ├── text_queries.sql
+│   │   └── text_schema.sql
 │   └── results/                  # salidas guardadas de las mediciones
+│       ├── charts/               # gráficos generados (.png)
 │       ├── heap_vs_sequential_results_*.csv
-│       ├── postgis_environment.json
 │       ├── spatial_comparison_results.csv
-│       ├── spatial_results.csv
-│       ├── spatial_results_quick.csv
 │       ├── spatial_summary.md
-│       ├── spatial_summary_quick.md
-│       ├── charts/               # gráficos de resultados espaciales
-│       └── charts_quick/         # gráficos de la ejecución rápida
+│       ├── text_comparison_results.csv
+│       ├── text_comparison_summary.md
+│       ├── vector_comparison_results.csv
+│       └── vector_summary.md
 │
 ├── frontend/
 │   ├── .env.example              # ejemplo de configuración de la API
 │   ├── .gitignore
+│   ├── Dockerfile
+│   ├── nginx.conf
 │   ├── index.html
 │   ├── package.json
 │   ├── package-lock.json
 │   ├── tsconfig.json
 │   ├── vite.config.ts
 │   └── src/
-│       ├── App.tsx               # composición principal de la interfaz
-│       ├── CsvImport.tsx         # importación de CSV
-│       ├── ExecutionPlanPanel.tsx
-│       ├── FilesPanel.tsx
-│       ├── QueryPanel.tsx
-│       ├── ResultsPanel.tsx
-│       ├── SpatialMapPanel.tsx   # visualización espacial
-│       ├── api.ts                # comunicación con la API
-│       ├── index.css
+│       ├── App.tsx               # composición principal de la interfaz y layout
+│       ├── CsvImport.tsx         # importación de CSV con inferencia de tipos
+│       ├── MediaImport.tsx       # importación masiva de carpetas multimedia
+│       ├── ExecutionPlanPanel.tsx# visualización del plan de ejecución Volcano
+│       ├── FilesPanel.tsx        # exploración de tablas, columnas e índices
+│       ├── Panel.tsx             # componente contenedor con memoria de estado
+│       ├── QueryPanel.tsx        # editor interactivo de consultas SQL
+│       ├── ResultsPanel.tsx      # tabla de resultados con miniaturas, audio y "Buscar similares"
+│       ├── SpatialMapPanel.tsx   # visualización espacial en mapa interactivo Leaflet
+│       ├── api.ts                # cliente de comunicación con la API FastAPI
+│       ├── index.css             # estilos del sistema
 │       └── main.tsx              # punto de entrada de React
 │
 ├── sql/
@@ -95,9 +114,9 @@ multimodal-dbms-lite/
 │   └── scripts/                  # utilidades para generar SQL
 │       └── generate_places_postgis.py
 │
-├── src/                          # motor de base de datos
-│   ├── main.py                   # creación/configuración del catálogo y storage
-│   ├── catalog/                  # catálogo y metadatos
+├── src/                          # motor de base de datos multimodal
+│   ├── main.py                   # arranque, registro del catálogo y startup recovery
+│   ├── catalog/                  # catálogo y metadatos persistidos en Heap
 │   │   ├── catalog.py
 │   │   ├── column.py
 │   │   ├── exceptions.py
@@ -107,18 +126,44 @@ multimodal-dbms-lite/
 │   │   ├── schema.py
 │   │   └── value.py
 │   ├── index/                    # estructuras de indexación
-│   │   ├── btree/                # árbol B/B+ y variante clustered
-│   │   ├── extendible_hash/      # hashing extensible
-│   │   ├── rtree/                # índice espacial R-tree
+│   │   ├── btree/                # árbol B+ (clustered y non-clustered)
+│   │   │   ├── btree.py
+│   │   │   ├── clustered_index.py
+│   │   │   ├── exceptions.py
+│   │   │   ├── key_codec.py
+│   │   │   └── node.py
+│   │   ├── extendible_hash/      # hashing dinámico extensible
+│   │   │   ├── extendible_hash_index.py
+│   │   │   ├── hash_bucket_page.py
+│   │   │   └── hash_directory_page.py
+│   │   ├── rtree/                # índice espacial R-tree persistente
+│   │   │   ├── exceptions.py
+│   │   │   ├── node.py
+│   │   │   ├── page.py
+│   │   │   └── rtree.py
 │   │   ├── text/                 # índices de texto invertido y SPIMI
-│   │   ├── multimedia/           # extracción de características (SIFT, MFCC, BoW, TF-IDF)
-│   │   └── vector/               # índices vectoriales de similitud (IVF, HNSW)
-│   ├── loader/                   # lectura de CSV e inferencia de tipos
+│   │   │   ├── inverted_index.py
+│   │   │   ├── spimi.py
+│   │   │   ├── text_processor.py
+│   │   │   └── stopwords/
+│   │   ├── multimedia/           # extracción y cuantización de características
+│   │   │   ├── bow_tfidf.py
+│   │   │   ├── feature_extractor.py
+│   │   │   ├── mfcc_extractor.py
+│   │   │   ├── quantizer.py
+│   │   │   └── sift_extractor.py
+│   │   └── vector/               # índices vectoriales k-NN de alta dimensionalidad
+│   │       ├── base_vector_index.py
+│   │       ├── hnsw_index.py
+│   │       ├── ivf_index.py
+│   │       └── metric.py
+│   ├── loader/                   # lectura de CSV, medios e inferencia de tipos
 │   │   ├── csv_loader.py
 │   │   ├── csv_reader.py
 │   │   ├── exceptions.py
+│   │   ├── media_loader.py
 │   │   └── type_inference.py
-│   ├── query/                    # procesamiento de consultas
+│   ├── query/                    # procesamiento de consultas SQL
 │   │   ├── query_engine.py
 │   │   ├── parser/               # scanner, parser, AST y gramática
 │   │   │   ├── GRAMMAR.md
@@ -128,21 +173,39 @@ multimodal-dbms-lite/
 │   │   │   ├── scanner.py
 │   │   │   ├── token_.py
 │   │   │   └── visitor.py
-│   │   ├── planner/              # construcción de planes
+│   │   ├── planner/              # construcción de planes físicos
 │   │   │   └── plan_builder.py
 │   │   ├── rewriter/             # reescrituras y optimizaciones
 │   │   │   ├── rewriter.py
 │   │   │   └── rules/
 │   │   │       ├── predicate_pushdown.py
 │   │   │       └── simplify_expressions.py
-│   │   └── executor/             # ejecución física de planes
+│   │   └── executor/             # ejecución física de planes (modelo Volcano)
 │   │       ├── executor.py
 │   │       ├── plan_node.py
 │   │       ├── spatial_utils.py
-│   │       ├── access/           # scans secuenciales, indexados y espaciales
-│   │       ├── aggregate/        # agregación, ordenamiento y límite
+│   │       ├── access/           # scans secuenciales, indexados, espaciales y de texto
+│   │       │   ├── bitmap_scan.py
+│   │       │   ├── clustered_scan.py
+│   │       │   ├── index_scan.py
+│   │       │   ├── seq_scan.py
+│   │       │   ├── spatial_scan.py
+│   │       │   └── text_index_scan.py
+│   │       ├── aggregate/        # agregación y agrupamiento
+│   │       │   ├── group_aggregate.py
+│   │       │   └── hash_aggregate.py
 │   │       ├── join/             # hash join, nested loop y sort-merge
-│   │       └── processing/       # filtros, proyección y procesamiento
+│   │       │   ├── hash_join.py
+│   │       │   ├── nested_loop_join.py
+│   │       │   └── sort_merge_join.py
+│   │       └── processing/       # filtros, proyección, ordenamiento, texto y vectores
+│   │           ├── filter.py
+│   │           ├── limit.py
+│   │           ├── projection.py
+│   │           ├── sort.py
+│   │           ├── spatial_filter.py
+│   │           ├── text_search.py
+│   │           └── vector_search.py
 │   ├── spatial/                  # geometría y cálculos de distancia
 │   │   ├── distance.py
 │   │   └── geometry.py
@@ -151,8 +214,12 @@ multimodal-dbms-lite/
 │   │   ├── file_manager.py
 │   │   ├── latch.py
 │   │   ├── page.py
-│   │   ├── heap/                 # almacenamiento heap y codificación de filas
-│   │   └── sequential/           # almacenamiento secuencial
+│   │   ├── heap/                 # almacenamiento heap y slotted page
+│   │   │   ├── heap_file.py
+│   │   │   ├── record_codec.py
+│   │   │   └── rid.py
+│   │   └── sequential/           # almacenamiento secuencial y overflow
+│   │       └── sequential_file.py
 │   └── transaction/              # transacciones, locks, WAL y recuperación
 │       ├── demo.py
 │       ├── demo_recovery.py
@@ -162,12 +229,13 @@ multimodal-dbms-lite/
 │       ├── row_undo.py
 │       └── transaction_manager.py
 │
-├── tests/
+├── tests/                        # pruebas automatizadas con pytest
 │   ├── conftest.py
 │   ├── catalog/                  # persistencia del catálogo e índices
-│   ├── index/                    # B-tree, hash extensible y R-tree
-│   ├── loader/                   # carga de CSV
-│   ├── query/                    # parser, ejecución, API y consultas espaciales
+│   ├── index/                    # B-tree, hash extensible, R-tree, IVF y HNSW
+│   ├── loader/                   # carga de CSV y carpetas de medios
+│   ├── query/                    # parser, ejecución, API, texto y consultas espaciales
+│   ├── search/                   # nodos de búsqueda textual
 │   ├── spatial/                  # geometría y distancias
 │   ├── storage/                  # gestión de espacio en heap
 │   └── transaction/              # locks, WAL, recovery y concurrencia
@@ -180,41 +248,3 @@ multimodal-dbms-lite/
 ├── requirements.txt              # dependencias Python del proyecto
 └── uv.lock                       # versiones bloqueadas por uv
 ```
-
-## Responsabilidades por área
-
-### Motor (`src/`)
-
-El motor reúne el catálogo, los tipos de datos, el almacenamiento persistente, los índices y el procesamiento SQL. Una consulta atraviesa el parser, las reglas de reescritura, el planificador y el ejecutor. El ejecutor compone operadores de acceso, procesamiento, joins y agregación.
-
-### Datos espaciales
-
-La funcionalidad espacial se reparte entre `src/spatial/` (geometría y distancias), `src/index/rtree/` (índice R-tree), los operadores espaciales de `src/query/executor/` y el panel `SpatialMapPanel.tsx` de la interfaz.
-
-### API y frontend
-
-`api/` expone el motor mediante FastAPI. `frontend/` contiene la aplicación web, los paneles de tablas, consultas, resultados y plan de ejecución, además de la importación CSV y la vista de mapa.
-
-### Benchmarks y recursos SQL
-
-`benchmarks/` contiene scripts de medición, un entorno para contrastar resultados con PostgreSQL/PostGIS y resultados exportados como CSV, JSON, Markdown e imágenes. `sql/` separa los ejemplos escritos a mano, los archivos generados y los scripts generadores.
-
-### Pruebas
-
-`tests/` organiza las pruebas según los subsistemas del motor: catálogo, índices, importación, consultas, geometría, almacenamiento y transacciones.
-
-## Flujo general de una consulta
-
-1. La aplicación web envía la solicitud a la API.
-2. La API entrega la sentencia al motor de consultas.
-3. El parser genera la representación sintáctica; el rewriter aplica reglas y el planner produce el plan.
-4. El executor realiza las lecturas y operaciones necesarias usando el catálogo, el almacenamiento y los índices.
-5. La API serializa el resultado y la interfaz lo presenta; para consultas espaciales también puede mostrarlo en el mapa.
-
-## Archivos de configuración principales
-
-- `pyproject.toml` y `uv.lock`: configuración y dependencias del proyecto Python.
-- `requirements.txt` y `api/requirements.txt`: dependencias Python para el proyecto y la API.
-- `pytest.ini`: ajustes del runner de pruebas.
-- `frontend/package.json` y `frontend/package-lock.json`: dependencias y scripts del frontend.
-- `frontend/.env.example`: plantilla de variables de entorno del cliente web.
