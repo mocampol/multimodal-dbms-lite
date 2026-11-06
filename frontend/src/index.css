@@ -50,6 +50,18 @@ h1, h2, h3 {
   border-bottom: 1px solid var(--border);
 }
 
+.header-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.media-import-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .csv-import-trigger {
   display: flex;
   flex-direction: column;

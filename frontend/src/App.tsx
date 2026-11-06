@@ -3,6 +3,7 @@ import { ApiError, runQuery, type QueryResult } from './api'
 import CsvImport from './CsvImport'
 import ExecutionPlanPanel from './ExecutionPlanPanel'
 import FilesPanel from './FilesPanel'
+import MediaImport from './MediaImport'
 import Panel from './Panel'
 import QueryPanel from './QueryPanel'
 import ResultsPanel from './ResultsPanel'
@@ -44,7 +45,10 @@ function App() {
     <>
       <header className="app-header">
         <h1>Multimodal DBMS Lite</h1>
-        <CsvImport onImported={() => setRefreshKey((key) => key + 1)} />
+        <div className="header-actions">
+          <MediaImport onImported={() => setRefreshKey((key) => key + 1)} />
+          <CsvImport onImported={() => setRefreshKey((key) => key + 1)} />
+        </div>
       </header>
 
       <div className="app-layout">
