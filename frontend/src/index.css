@@ -415,6 +415,12 @@ h1, h2, h3 {
   height: 32px;
 }
 
+.similar-button {
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .query-editor {
   width: 100%;
   min-height: 120px;

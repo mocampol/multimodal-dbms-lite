@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ApiError, runQuery, type QueryResult } from './api'
+import { ApiError, getTable, runQuery, type QueryResult } from './api'
 import CsvImport from './CsvImport'
 import ExecutionPlanPanel from './ExecutionPlanPanel'
 import FilesPanel from './FilesPanel'
@@ -26,6 +26,25 @@ function App() {
     setSearchCenter(center)
     setSql(query)
     runSql(query)
+  }
+
+  function handleFindSimilar(table: string, column: string, path: string) {
+    getTable(table)
+      .then((detail) => {
+        const index = detail.indexes.find(
+          (item) => item.column_name === column && (item.index_type === 'ivf' || item.index_type === 'hnsw'),
+        )
+        // columnas explícitas: no depende de que el motor acepte *, SIMILARITY_SCORE()
+        const columns = detail.columns.map((item) => item.name).join(', ')
+        const query =
+          `SELECT ${columns}, SIMILARITY_SCORE() AS score FROM ${table} ` +
+          `WHERE SIMILAR_TO(${column}, '${path}', k=10) ` +
+          `USING ${index ? index.index_type.toUpperCase() : 'HNSW'} WITH METRIC=cosine;`
+        setSearchCenter(null)
+        setSql(query)
+        runSql(query)
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'No se pudo conectar con la API'))
   }
 
   function runSql(query: string) {
@@ -62,7 +81,7 @@ function App() {
           </Panel>
 
           <Panel id="results" title="Results">
-            <ResultsPanel result={result} error={error} running={running} />
+            <ResultsPanel result={result} error={error} running={running} onFindSimilar={handleFindSimilar} />
           </Panel>
 
           <Panel id="spatial" title="Spatial Search & Map" defaultCollapsed>
