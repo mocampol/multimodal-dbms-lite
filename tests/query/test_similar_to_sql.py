@@ -699,6 +699,41 @@ class TestVectorIndexMaintenance:
         assert _ids(execute(_knn_sql(path, 1, kind), catalog)) == [5]
 
 
+def _vector_node(plan):
+    if plan["node"] == "VectorSearch":
+        return plan
+    for child in plan.get("children", []):
+        found = _vector_node(child)
+        if found is not None:
+            return found
+    return None
+
+
+class TestVectorSearchPlan:
+    def test_plan_reports_the_vector_index(self, photos):
+        catalog, query = photos
+        execute("CREATE INDEX idx_hnsw ON fotos USING HNSW (ruta);", catalog)
+
+        node = _vector_node(execute("EXPLAIN " + _knn_sql(query, 2), catalog).description)
+
+        assert node == {
+            "node": "VectorSearch",
+            "table": "fotos",
+            "column_name": "ruta",
+            "index_type": "hnsw",
+            "k": 2,
+            "vector_metric": "cosine",
+        }
+
+    def test_plan_without_index_reports_a_sequential_search(self, photos):
+        catalog, query = photos
+
+        node = _vector_node(execute("EXPLAIN " + _knn_sql(query, 2, kind="IVF"), catalog).description)
+
+        assert node["index_type"] is None
+        assert node["column_name"] == "ruta"
+
+
 class TestKnownSimilarityFailures:
     """Comportamiento esperado que el motor aún no cumple."""
 

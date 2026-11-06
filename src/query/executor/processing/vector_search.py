@@ -57,35 +57,7 @@ class VectorSearch(PlanNode):
         metric = self.METRIC_MAP.get(metric_kind, VectorMetric.COSINE)
         index_type = "ivf" if index_kind == VectorIndexKind.IVF else "hnsw"
 
-        column_name = None
-        if self.similar_to and self.similar_to.column:
-            column_name = self.similar_to.column.value
-            if "." in column_name:
-                column_name = column_name.rsplit(".", 1)[-1]
-        elif self.score and self.score.column:
-            column_name = self.score.column
-            if "." in column_name:
-                column_name = column_name.rsplit(".", 1)[-1]
-
-        if column_name is None:
-            # Prefer a column with an index of the requested kind.
-            for col in self.schema.columns:
-                idx = self.catalog.get_physical_index(
-                    self.table_name, col.name, index_type=index_type
-                )
-                if idx is not None and isinstance(idx, (IVFIndex, HNSWIndex)):
-                    column_name = col.name
-                    break
-
-        if column_name is None:
-            # Seleccionar la primera columna de tipo texto o la primera de la tabla
-            for col in self.schema.columns:
-                if col.data_type in (DataType.VARCHAR, DataType.TEXT):
-                    column_name = col.name
-                    break
-
-        if column_name is None and self.schema.columns:
-            column_name = self.schema.columns[0].name
+        column_name = self._column_name(index_type)
 
         # Verificar si hay índice vectorial aplicable
         index = (
@@ -172,3 +144,46 @@ class VectorSearch(PlanNode):
         self.child.close()
         self._output = []
         self._cursor = 0
+
+    def _column_name(self, index_type: str) -> Optional[str]:
+        """La columna sobre la que se busca: la indicada en la consulta o, si no
+        hay, una con índice del tipo pedido, la primera de texto o la primera."""
+        spec_column = None
+        if self.similar_to and self.similar_to.column:
+            spec_column = self.similar_to.column.value
+        elif self.score and self.score.column:
+            spec_column = self.score.column
+        if spec_column is not None:
+            return spec_column.rsplit(".", 1)[-1]
+
+        for col in self.schema.columns:
+            idx = self.catalog.get_physical_index(self.table_name, col.name, index_type=index_type)
+            if isinstance(idx, (IVFIndex, HNSWIndex)):
+                return col.name
+
+        for col in self.schema.columns:
+            if col.data_type in (DataType.VARCHAR, DataType.TEXT):
+                return col.name
+
+        return self.schema.columns[0].name if self.schema.columns else None
+
+    def describe_self(self) -> dict:
+        """Para EXPLAIN y el panel del plan: el índice que se usará, o None si
+        la búsqueda compara la consulta contra toda la tabla (escaneo secuencial)."""
+        spec = self.similar_to or self.score
+        index_type = "ivf" if spec.index_kind == VectorIndexKind.IVF else "hnsw"
+        column_name = self._column_name(index_type)
+        index = (
+            self.catalog.get_physical_index(self.table_name, column_name, index_type=index_type)
+            if column_name
+            else None
+        )
+        uses_index = isinstance(index, (IVFIndex, HNSWIndex)) and len(index) > 0
+        return {
+            "node": "VectorSearch",
+            "table": self.table_name,
+            "column_name": column_name,
+            "index_type": index_type if uses_index else None,
+            "k": spec.k,
+            "vector_metric": self.METRIC_MAP.get(spec.metric, VectorMetric.COSINE).value,
+        }

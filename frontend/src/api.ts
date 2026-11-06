@@ -64,6 +64,12 @@ export interface PlanNode {
   index_mbrs?: [number, number, number, number][]
   predicate?: string
   metric?: 'EUCLIDEAN' | 'HAVERSINE' | null
+  // búsqueda por similitud (VectorSearch) y full-text (TextSearch / TextIndexScan)
+  k?: number
+  vector_metric?: string
+  column?: string
+  query?: string
+  ranking?: string
   // Solo presentes cuando el plan viene de EXPLAIN ANALYZE (plan
   // ejecutado de verdad, no solo armado): filas que produjo este nodo
   // puntual y tiempo propio (no acumulado de sus hijos) en next().

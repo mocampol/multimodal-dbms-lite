@@ -28,6 +28,14 @@ function describeNodeShape(node: PlanNode): string {
       return `Spatial Filter ${node.predicate ?? ''}`
     case 'KNNScan':
       return `K-NN por distancia${node.metric ? ` (${node.metric})` : ''}`
+    case 'VectorSearch':
+      return `Vector Search k=${node.k ?? '?'} (${node.vector_metric ?? 'cosine'}) sobre ${node.table}.${node.column_name ?? ''} · ${
+        node.index_type ? `índice ${node.index_type.toUpperCase()}` : 'sin índice: escaneo secuencial'
+      }`
+    case 'TextIndexScan':
+      return `Text Index Scan (SPIMI · ${node.table}.${node.column ?? ''} · ${node.ranking ?? ''})`
+    case 'TextSearch':
+      return `Text Search (${node.ranking ?? ''})`
     case 'BitmapScan':
       return `Bitmap Scan (clave = ${JSON.stringify(node.key)})`
     case 'Filter':
