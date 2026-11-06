@@ -388,6 +388,33 @@ h1, h2, h3 {
   font-weight: 600;
 }
 
+.columns-table .score-column,
+.columns-table .score-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.columns-table th.score-column,
+.columns-table .score-cell {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.result-thumbnail {
+  display: block;
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--editor-bg);
+}
+
+.result-audio {
+  width: 220px;
+  height: 32px;
+}
+
 .query-editor {
   width: 100%;
   min-height: 120px;
