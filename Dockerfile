@@ -18,6 +18,7 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV NUMBA_CACHE_DIR=/tmp/numba-cache
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -33,8 +34,8 @@ WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
 COPY --chown=app:app api ./api
 COPY --chown=app:app src ./src
-RUN mkdir -p /app/data /media \
-    && chown app:app /app/data /media
+RUN mkdir -p /app/data /media "${NUMBA_CACHE_DIR}" \
+    && chown app:app /app/data /media "${NUMBA_CACHE_DIR}"
 
 USER app
 EXPOSE 8000
