@@ -152,6 +152,18 @@ function FitMap({ features, target }: { features: MapFeature[]; target: PointCoo
   return null
 }
 
+// Leaflet calcula su tamaño al montarse; si el panel estaba minimizado ese
+// tamaño es 0. Al expandirlo el contenedor cambia de tamaño y se redibuja.
+function InvalidateOnResize() {
+  const map = useMap()
+  useEffect(() => {
+    const observer = new ResizeObserver(() => map.invalidateSize())
+    observer.observe(map.getContainer())
+    return () => observer.disconnect()
+  }, [map])
+  return null
+}
+
 function SpatialMapPanel({ result, running, searchCenter, refreshKey, onRunQuery }: SpatialMapPanelProps) {
   const [tables, setTables] = useState<TableSummary[]>([])
   const [tablesError, setTablesError] = useState<string | null>(null)
@@ -353,6 +365,7 @@ function SpatialMapPanel({ result, running, searchCenter, refreshKey, onRunQuery
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+          <InvalidateOnResize />
           <FitMap features={features} target={searchCenter} />
           {indexMbrs.map((box, i) => (
             <Rectangle
