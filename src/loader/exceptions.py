@@ -12,3 +12,11 @@ class UnsupportedTypeError(Exception):
 
 class DuplicateColumnNameError(Exception):
     pass
+
+
+class MediaDirectoryNotFoundError(Exception):
+    pass
+
+
+class EmptyMediaDirectoryError(Exception):
+    pass
