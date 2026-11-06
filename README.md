@@ -216,6 +216,46 @@ Si quieres apuntar a otra API, crea un archivo `.env` dentro de `frontend/` usan
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
+## Ejecutar con Docker Compose
+
+Requiere Docker Desktop (o Docker Engine con el plugin de Docker Compose).
+Desde la raíz del repositorio:
+
+```bash
+docker compose up --build
+```
+
+La primera ejecución construye las imágenes y puede tardar varios minutos. Luego
+abre <http://localhost:8080>; la API se sirve a través del proxy del frontend y
+también está disponible en <http://localhost:8000> (documentación en
+<http://localhost:8000/docs>). Para detener los servicios, pulsa `Ctrl+C` y
+ejecuta:
+
+```bash
+docker compose down
+```
+
+Las tablas e índices se guardan en el volumen Docker `db-data` y se conservan
+entre reinicios. **No** uses `docker compose down -v` salvo que quieras borrar
+permanentemente la base de datos.
+
+Para importar imágenes, audio o texto, coloca los archivos en una subcarpeta de
+`media/` en el host, por ejemplo `media/fotos`, y en el panel **Importar
+carpeta** indica `/media/fotos`. La carpeta `media/` se monta como solo lectura
+en la API. Los archivos originales permanecen en el host.
+
+Se pueden cambiar los puertos con variables de entorno:
+
+```bash
+FRONTEND_PORT=8081 API_PORT=8001 docker compose up --build
+```
+
+En Windows PowerShell:
+
+```powershell
+$env:FRONTEND_PORT="8081"; $env:API_PORT="8001"; docker compose up --build
+```
+
 ## Verificación
 
 Se incluye una suite de pruebas con pytest. Para ejecutarlas:

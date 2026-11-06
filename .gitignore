@@ -41,6 +41,8 @@ data/
 *.db
 *.sqlite3
 *.sqlite
+media/*
+!media/.gitkeep
 
 # OS/editor noise
 .DS_Store
