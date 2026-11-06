@@ -50,6 +50,18 @@ h1, h2, h3 {
   border-bottom: 1px solid var(--border);
 }
 
+.header-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.media-import-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .csv-import-trigger {
   display: flex;
   flex-direction: column;
@@ -106,6 +118,38 @@ h1, h2, h3 {
   letter-spacing: 0.04em;
   color: var(--text-muted);
   margin-bottom: 12px;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.panel-header h2 {
+  margin-bottom: 0;
+}
+
+.panel.collapsed .panel-header {
+  margin-bottom: 0;
+}
+
+.panel-toggle {
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.panel-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .panel-placeholder {
@@ -342,6 +386,39 @@ h1, h2, h3 {
 .columns-table th {
   color: var(--text-muted);
   font-weight: 600;
+}
+
+.columns-table .score-column,
+.columns-table .score-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.columns-table th.score-column,
+.columns-table .score-cell {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.result-thumbnail {
+  display: block;
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--editor-bg);
+}
+
+.result-audio {
+  width: 220px;
+  height: 32px;
+}
+
+.similar-button {
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .query-editor {

@@ -1,20 +1,30 @@
 import {
+  fileUrl,
   isBatchQueryResult,
   isExplainQueryResult,
   type DistanceValue,
+  type PlanNode,
   type PointCoordinates,
   type QueryResult,
   type QueryValue,
   type SingleQueryResult,
 } from './api'
 
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png']
+const AUDIO_EXTENSIONS = ['.wav', '.mp3']
+// columnas de SCORE() y SIMILARITY_SCORE(), con o sin alias como "relevancia"
+const SCORE_COLUMN = /score|relevan/i
+
+export type FindSimilar = (table: string, column: string, path: string) => void
+
 interface ResultsPanelProps {
   result: QueryResult | null
   error: string | null
   running: boolean
+  onFindSimilar: FindSimilar
 }
 
-function ResultsPanel({ result, error, running }: ResultsPanelProps) {
+function ResultsPanel({ result, error, running, onFindSimilar }: ResultsPanelProps) {
   if (running) return <p className="panel-placeholder">Ejecutando consulta...</p>
   if (error) return <p className="error-text">Error: {error}</p>
   if (!result) return <p className="panel-placeholder">Query results will be shown here.</p>
@@ -28,17 +38,17 @@ function ResultsPanel({ result, error, running }: ResultsPanelProps) {
         {result.statements.map((statement, index) => (
           <div key={index}>
             <p className="meta-line">#{index + 1} · {statement.type}</p>
-            {!isBatchQueryResult(statement) && <ResultContent result={statement} />}
+            {!isBatchQueryResult(statement) && <ResultContent result={statement} onFindSimilar={onFindSimilar} />}
           </div>
         ))}
       </>
     )
   }
 
-  return <ResultContent result={result} />
+  return <ResultContent result={result} onFindSimilar={onFindSimilar} />
 }
 
-function ResultContent({ result }: { result: SingleQueryResult }) {
+function ResultContent({ result, onFindSimilar }: { result: SingleQueryResult; onFindSimilar: FindSimilar }) {
 
   if (isExplainQueryResult(result)) {
     return (
@@ -59,6 +69,13 @@ function ResultContent({ result }: { result: SingleQueryResult }) {
     )
   }
 
+  // El resultado no trae la tabla: se toma del plan (el scan que la lee).
+  // La primera columna con rutas multimedia es la que se usa para buscar.
+  const table = planTable(result.plan)
+  const similarColumn = table
+    ? result.columns.findIndex((_, i) => result.rows.some((row) => mediaFile(row[i]) !== null))
+    : -1
+
   return (
     <>
       <p className="meta-line">
@@ -71,25 +88,104 @@ function ResultContent({ result }: { result: SingleQueryResult }) {
           <table className="columns-table">
             <thead>
               <tr>
-                {result.columns.map((column) => (
-                  <th key={column}>{column}</th>
-                ))}
+                {result.columns.map((column, index) => {
+                  const isScore = SCORE_COLUMN.test(column)
+                  const direction = isScore ? sortDirection(result.rows, index) : ''
+                  return (
+                    <th key={column} className={isScore ? 'score-column' : undefined}>
+                      {column}
+                      {direction && (
+                        <span title={direction === '↓' ? 'Orden descendente' : 'Orden ascendente'}> {direction}</span>
+                      )}
+                    </th>
+                  )
+                })}
+                {similarColumn >= 0 && <th>Similares</th>}
               </tr>
             </thead>
             <tbody>
-              {result.rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
-                  {row.map((value, cellIndex) => (
-                    <td key={cellIndex}>{formatCellValue(value)}</td>
-                  ))}
-                </tr>
-              ))}
+              {result.rows.map((row, rowIndex) => {
+                const media = similarColumn >= 0 ? mediaFile(row[similarColumn]) : null
+                return (
+                  <tr key={rowIndex}>
+                    {row.map((value, cellIndex) => {
+                      const isScore = SCORE_COLUMN.test(result.columns[cellIndex] ?? '')
+                      return (
+                        <td key={cellIndex} className={isScore ? 'score-cell' : undefined}>
+                          <CellValue value={value} isScore={isScore} />
+                        </td>
+                      )
+                    })}
+                    {similarColumn >= 0 && (
+                      <td>
+                        {media && table && (
+                          <button
+                            type="button"
+                            className="secondary-button similar-button"
+                            // una comilla simple cortaría el literal SQL de la ruta
+                            disabled={media.path.includes("'")}
+                            onClick={() => onFindSimilar(table, result.columns[similarColumn], media.path)}
+                          >
+                            Buscar similares
+                          </button>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
       )}
     </>
   )
+}
+
+function planTable(plan: PlanNode | null | undefined): string | null {
+  if (!plan) return null
+  if (plan.table) return plan.table
+  for (const child of plan.children ?? []) {
+    const table = planTable(child)
+    if (table) return table
+  }
+  return null
+}
+
+function CellValue({ value, isScore }: { value: QueryValue; isScore: boolean }) {
+  if (isScore && typeof value === 'number') return <>{value.toFixed(4)}</>
+
+  const media = mediaFile(value)
+  if (media?.kind === 'image') {
+    return (
+      <a href={fileUrl(media.path)} target="_blank" rel="noreferrer" title={media.path}>
+        <img className="result-thumbnail" src={fileUrl(media.path)} alt={media.name} loading="lazy" />
+      </a>
+    )
+  }
+  if (media?.kind === 'audio') {
+    return <audio className="result-audio" controls preload="none" src={fileUrl(media.path)} title={media.path} />
+  }
+  return <>{formatCellValue(value)}</>
+}
+
+// Solo las rutas absolutas son archivos: la columna "nombre" (foto1.png)
+// también termina en .png, pero no es una ruta que la API pueda servir.
+function mediaFile(value: QueryValue): { kind: 'image' | 'audio'; path: string; name: string } | null {
+  if (typeof value !== 'string' || !/^([a-zA-Z]:[\\/]|\/)/.test(value)) return null
+  const lower = value.toLowerCase()
+  const name = value.split(/[\\/]/).pop() ?? value
+  if (IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return { kind: 'image', path: value, name }
+  if (AUDIO_EXTENSIONS.some((ext) => lower.endsWith(ext))) return { kind: 'audio', path: value, name }
+  return null
+}
+
+function sortDirection(rows: QueryValue[][], index: number): '↓' | '↑' | '' {
+  const values = rows.map((row) => row[index]).filter((value): value is number => typeof value === 'number')
+  if (values.length < 2) return ''
+  if (values.every((value, i) => i === 0 || values[i - 1] >= value)) return '↓'
+  if (values.every((value, i) => i === 0 || values[i - 1] <= value)) return '↑'
+  return ''
 }
 
 function formatCellValue(value: QueryValue): string {

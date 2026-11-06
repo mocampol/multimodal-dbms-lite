@@ -12,7 +12,7 @@ export interface ColumnInfo {
 export interface IndexInfo {
   index_id: number
   column_name: string
-  index_type: 'btree' | 'hash' | 'rtree'
+  index_type: 'btree' | 'hash' | 'rtree' | 'gin' | 'spimi' | 'ivf' | 'hnsw'
   root_page_id?: number
   is_spatial: boolean
 }
@@ -64,6 +64,12 @@ export interface PlanNode {
   index_mbrs?: [number, number, number, number][]
   predicate?: string
   metric?: 'EUCLIDEAN' | 'HAVERSINE' | null
+  // búsqueda por similitud (VectorSearch) y full-text (TextSearch / TextIndexScan)
+  k?: number
+  vector_metric?: string
+  column?: string
+  query?: string
+  ranking?: string
   // Solo presentes cuando el plan viene de EXPLAIN ANALYZE (plan
   // ejecutado de verdad, no solo armado): filas que produjo este nodo
   // puntual y tiempo propio (no acumulado de sus hijos) en next().
@@ -209,4 +215,28 @@ export function confirmCsv(uploadId: string, tableName: string, columns: CsvColu
 
 export function discardCsv(uploadId: string) {
   return request<{ ok: boolean }>(`/import/csv/${encodeURIComponent(uploadId)}`, { method: 'DELETE' })
+}
+
+export type MediaKind = 'image' | 'audio' | 'text'
+export type MediaIndex = 'IVF' | 'HNSW' | 'SPIMI'
+
+export interface MediaImportResult {
+  table_name: string
+  kind: MediaKind
+  directory: string
+  inserted: number
+  skipped: { file: string; reason: string }[]
+  index: { index_id: number; index_name: string; column_name: string; index_type: string } | null
+}
+
+export function importMedia(directory: string, tableName: string, kind: MediaKind, index: MediaIndex | null) {
+  return request<MediaImportResult>('/import/media', {
+    method: 'POST',
+    body: JSON.stringify({ directory, table_name: tableName, kind, index }),
+  })
+}
+
+// URL para <img> y <audio>: la API solo sirve archivos de carpetas importadas
+export function fileUrl(path: string) {
+  return `${BASE_URL}/files?path=${encodeURIComponent(path)}`
 }
