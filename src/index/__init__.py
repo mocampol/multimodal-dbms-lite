@@ -4,7 +4,12 @@ from .btree import BTree
 from .btree.clustered_index import ClusteredIndex
 from .extendible_hash import ExtendibleHashIndex
 from .text import InvertedIndex, SPIMIIndexer, TextProcessor
-from .multimedia import ExtractFeatures, FeatureVector
+from .multimedia import (
+    ExtractFeatures,
+    FaceEmbedding,
+    FaceEmbeddingExtractor,
+    FeatureVector,
+)
 from .vector import IVFIndex, HNSWIndex, VectorMetric
 
 __all__ = [
@@ -15,9 +20,10 @@ __all__ = [
     "SPIMIIndexer",
     "TextProcessor",
     "ExtractFeatures",
+    "FaceEmbedding",
+    "FaceEmbeddingExtractor",
     "FeatureVector",
     "IVFIndex",
     "HNSWIndex",
     "VectorMetric",
 ]
-
