@@ -214,13 +214,14 @@ Esta transformación aritmética pura es estrictamente biyectiva y permite conve
 
 ### 10.4 Persistencia, Reboot y Ciclo de Vida Físico
 * **Ubicación en Disco:** Cada índice se almacena físicamente en `{table_name}.{column_name}.{index_id}.idx` a través de la fábrica de buffers del catálogo (`_index_buffer_factory`).
-* **Reinicio del Motor (`_load`):** Al iniciar el catálogo, escanea `sys_indexes` y, al detectar entradas con `index_type in ("gin", "spimi")`, invoca `InvertedIndex.load(file_path)` restaurando automáticamente todo el vocabulario, listas de postings y longitudes de documentos en memoria.
-* **Construcción:** `USING SPIMI` construye el índice invertido mediante bloques temporales SPIMI y los fusiona antes de guardar el índice persistente; los bloques temporales se limpian al terminar.
+* **Formato paginado:** El archivo `.idx` contiene páginas de tamaño fijo administradas por el Buffer Manager. La página 0 apunta al último directorio de términos y metadatos; cada entrada del directorio guarda la cadena de páginas y la longitud de los postings serializados. Las escrituras publican el nuevo directorio al final, manteniendo legible la versión anterior si falla una escritura.
+* **Reinicio del Motor (`_load`):** Al iniciar el catálogo, escanea `sys_indexes` y, al detectar entradas con `index_type in ("gin", "spimi")`, invoca `InvertedIndex.load(file_path)`. Mantiene en memoria el vocabulario, las estadísticas y las longitudes de documentos; los postings se leen por demanda mediante el Buffer Manager.
+* **Construcción:** `USING SPIMI` construye el índice invertido mediante bloques temporales SPIMI y guarda los postings fusionados en páginas administradas por el Buffer Manager; los bloques temporales se limpian al terminar.
 * **Mantenimiento Dinámico (DML):**
   - `INSERT`: Añade el documento (incluidos documentos sin tokens) y guarda el índice antes de confirmar la transacción.
   - `DELETE`: Remueve el `doc_id` de postings y metadatos del corpus antes de confirmar la transacción.
   - `UPDATE`: Si cambia el texto o el RID, reemplaza el documento indexado; si el valor es `NULL`, lo excluye del índice.
-  - Los errores de escritura se propagan y hacen abortar la operación. La persistencia reemplaza el archivo mediante escritura temporal atómica; ante un error, la mutación en memoria se revierte.
+  - Los errores de escritura se propagan y hacen abortar la operación. La nueva versión del directorio se publica después de escribir y vaciar sus páginas; ante un error antes de publicarla, la versión anterior sigue siendo la activa y la mutación en memoria se revierte.
 * **Eliminación en Cascada:**
   - `DROP INDEX <nombre>`: Elimina el registro de `sys_indexes`, desaloca la estructura en memoria y borra físicamente el archivo `.idx` del disco (`os.remove`).
   - `DROP TABLE <tabla>`: Realiza la eliminación en cascada, eliminando de disco todos los índices secundarios e invertidos asociados a dicha tabla.

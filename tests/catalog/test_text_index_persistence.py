@@ -15,6 +15,7 @@ so they prove the persisted/maintained index answers like the data says.
 """
 
 import math
+import pickle
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from catalog.table_metadata import StorageType
 from index.text import InvertedIndex, default_text_processor
 from main import make_heap_factory, make_index_buffer_factory, make_sequential_factory
 from query.query_engine import QueryError, execute
+from storage.page import PAGE_SIZE
 
 PROCESSOR = default_text_processor()
 
@@ -231,6 +233,53 @@ def test_index_file_is_a_standalone_loadable_artifact(tmp_path):
 
     assert path.name.startswith("docs.contenido.") and path.suffix == ".idx"
     assert state(InvertedIndex.load(str(path))) == live_state(catalog)
+    assert path.stat().st_size % PAGE_SIZE == 0
+
+
+@pytest.mark.parametrize("ranking", ["bm25", "tf_idf"])
+def test_postings_are_loaded_from_pages_only_for_query_terms(tmp_path, ranking):
+    catalog = seed(tmp_path)
+    index = catalog.get_text_index("docs", "contenido")
+
+    assert not isinstance(index.index, dict)
+    assert index.index._cache == {}
+
+    index.rank(PROCESSOR.process("indice"), ranking)
+
+    assert set(index.index._cache) == {"indice"}
+
+
+def test_large_postings_list_spans_multiple_buffer_pages(tmp_path):
+    path = tmp_path / "large-postings.idx"
+    expected = [(doc_id, 1) for doc_id in range(1, 1501)]
+    index = InvertedIndex(file_path=str(path))
+    for doc_id, _ in expected:
+        index.add_document(doc_id, ["comun"])
+    index.save()
+
+    reopened = InvertedIndex.load(str(path))
+
+    assert reopened.get_postings("comun") == expected
+    assert reopened.bm.file_manager.page_count() > 3
+
+
+def test_legacy_monolithic_index_is_migrated_to_pages_on_save(tmp_path):
+    path = tmp_path / "legacy.idx"
+    with path.open("wb") as handle:
+        pickle.dump({
+            "index": {"indice": [(1, 2)]},
+            "doc_lengths": {1: 2},
+            "total_docs": 1,
+            "doc_norms": {},
+        }, handle)
+
+    legacy = InvertedIndex.load(str(path))
+    assert legacy.get_postings("indice") == [(1, 2)]
+    legacy.save()
+
+    migrated = InvertedIndex.load(str(path))
+    assert migrated.get_postings("indice") == [(1, 2)]
+    assert path.stat().st_size % PAGE_SIZE == 0
 
 
 def test_index_metadata_is_persisted_in_the_catalog(tmp_path):

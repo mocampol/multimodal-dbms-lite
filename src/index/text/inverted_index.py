@@ -10,12 +10,76 @@ from __future__ import annotations
 import math
 import os
 import pickle
-import tempfile
-from typing import Sequence
+import struct
+from collections.abc import MutableMapping
+from typing import Iterator, Sequence
 
-# Okapi BM25 parameters fixed by the search contract (docs/text_search_policy.md §7)
+from storage.buffer_manager import BufferManager
+from storage.file_manager import FileManager
+from storage.page import PAGE_SIZE
+
 BM25_K1 = 1.2
 BM25_B = 0.75
+_INDEX_MAGIC = b"FTI1"
+_PAGE_MAGIC = b"FTR1"
+_HEADER = struct.Struct(">4sII")
+_PAGE_HEADER = struct.Struct(">4sIH")
+_END_OF_CHAIN = 0xFFFFFFFF
+
+
+class _PagedPostings(MutableMapping):
+    """Term-to-postings mapping that reads each serialized list through the BM."""
+
+    def __init__(
+        self,
+        index: InvertedIndex,
+        term_pages: dict[str, tuple[int, int, int]],
+    ):
+        self._index = index
+        self._term_pages = term_pages
+        self._cache: dict[str, list[tuple[int, int]]] = {}
+        self._dirty: set[str] = set()
+
+    def __getitem__(self, term: str) -> list[tuple[int, int]]:
+        if term in self._cache:
+            return self._cache[term]
+        descriptor = self._term_pages.get(term)
+        if descriptor is None:
+            raise KeyError(term)
+        page_id, length, _ = descriptor
+        postings = pickle.loads(self._index._read_chain(page_id, length))
+        self._cache[term] = postings
+        return postings
+
+    def __setitem__(self, term: str, postings: list[tuple[int, int]]) -> None:
+        self._cache[term] = postings
+        self._dirty.add(term)
+
+    def __delitem__(self, term: str) -> None:
+        if term not in self._term_pages and term not in self._cache:
+            raise KeyError(term)
+        self._cache.pop(term, None)
+        self._term_pages.pop(term, None)
+        self._dirty.discard(term)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(dict.fromkeys((*self._term_pages, *self._cache)))
+
+    def __len__(self) -> int:
+        return len(set(self._term_pages) | set(self._cache))
+
+    def document_frequency(self, term: str) -> int:
+        postings = self._cache.get(term)
+        if postings is not None:
+            return len(postings)
+        descriptor = self._term_pages.get(term)
+        if descriptor is not None:
+            return descriptor[2]
+        return 0
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
+        self._dirty.clear()
 
 
 def rid_to_doc_id(page_id: int, slot: int) -> int:
@@ -40,10 +104,10 @@ class InvertedIndex:
         doc_lengths: dict[int, int] | None = None,
         total_docs: int = 0,
         file_path: str | None = None,
-        manager: object | None = None,
+        manager: BufferManager | None = None,
     ):
         # term -> list of (doc_id, tf) sorted by doc_id
-        self.index: dict[str, list[tuple[int, int]]] = index or {}
+        self.index: dict[str, list[tuple[int, int]]] | _PagedPostings = index or {}
         # doc_id -> number of tokens in the document
         self.doc_lengths: dict[int, int] = doc_lengths or {}
         # Total number of indexed documents
@@ -52,7 +116,9 @@ class InvertedIndex:
         self._doc_norms: dict[int, float] = {}
         # Physical storage binding for Catalog integration
         self.file_path: str | None = file_path
-        self.bm: object | None = manager
+        self.bm: BufferManager | None = manager
+        self._term_pages: dict[str, tuple[int, int, int]] = {}
+        self._paged_format = False
 
     @property
     def avg_doc_length(self) -> float:
@@ -71,6 +137,8 @@ class InvertedIndex:
 
     def get_document_frequency(self, term: str) -> int:
         """Returns df(term): the number of documents containing the term."""
+        if isinstance(self.index, _PagedPostings):
+            return self.index.document_frequency(term)
         return len(self.index.get(term, []))
 
     def get_term_frequency(self, term: str, doc_id: int) -> int:
@@ -281,52 +349,176 @@ class InvertedIndex:
         return self.score_tfidf_cosine(query_tokens, top_k=top_k)
 
     def save(self, file_path: str | None = None) -> None:
-        """Persists the inverted index to disk."""
+        """Persists metadata and postings in pages managed by the Buffer Manager."""
         target_path = file_path or self.file_path
         if not target_path:
             raise ValueError("No file_path provided for saving InvertedIndex")
-        state = {
-            "index": self.index,
+
+        # TF-IDF needs norms for every document. Persist them so a query only
+        # has to read postings for its terms.
+        if not self._doc_norms and self.total_docs:
+            self.compute_doc_norms()
+
+        manager = self.bm
+        if manager is not None and manager.file_manager.file_path != target_path:
+            if isinstance(self.index, _PagedPostings):
+                self.index = {term: list(self.index[term]) for term in self.index}
+            self._term_pages = {}
+            self._paged_format = False
+            manager = None
+        if manager is None:
+            manager = BufferManager(FileManager(target_path))
+            self.bm = manager
+
+        if not self._paged_format:
+            has_paged_file = False
+            if manager.file_manager.page_count():
+                with open(target_path, "rb") as handle:
+                    has_paged_file = handle.read(len(_INDEX_MAGIC)) == _INDEX_MAGIC
+            if not has_paged_file:
+                manager.reset()
+                if manager.allocate_page() != 0:
+                    raise RuntimeError("El encabezado del índice debe estar en la página 0")
+            self._term_pages = {}
+            self._paged_format = True
+        dirty_terms = (
+            list(self.index._dirty)
+            if isinstance(self.index, _PagedPostings)
+            else list(self.index)
+        )
+
+        if isinstance(self.index, _PagedPostings):
+            for term in dirty_terms:
+                if term not in self.index:
+                    continue
+                postings = self.index[term]
+                payload = pickle.dumps(postings, protocol=5)
+                first_page = self._write_chain(payload)
+                self._term_pages[term] = (first_page, len(payload), len(postings))
+        else:
+            for term in dirty_terms:
+                postings = self.index[term]
+                payload = pickle.dumps(postings, protocol=5)
+                first_page = self._write_chain(payload)
+                self._term_pages[term] = (first_page, len(payload), len(postings))
+
+        metadata = pickle.dumps({
+            "version": 1,
+            "term_pages": self._term_pages,
             "doc_lengths": self.doc_lengths,
             "total_docs": self.total_docs,
             "doc_norms": self._doc_norms,
-        }
-        directory = os.path.dirname(os.path.abspath(target_path))
-        fd, temporary_path = tempfile.mkstemp(
-            prefix=f".{os.path.basename(target_path)}.",
-            suffix=".tmp",
-            dir=directory,
-        )
+        }, protocol=5)
+        metadata_page = self._write_chain(metadata)
+        manager.flush_all()
+
+        page = manager.fetch_page(0)
         try:
-            with os.fdopen(fd, "wb") as handle:
-                pickle.dump(state, handle, protocol=5)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary_path, target_path)
-        except Exception:
-            try:
-                os.remove(temporary_path)
-            except FileNotFoundError:
-                pass
-            raise
+            page.clear()
+            page.write_bytes(0, _HEADER.pack(_INDEX_MAGIC, metadata_page, len(metadata)))
+        finally:
+            manager.unpin_page(0, is_dirty=True)
+        manager.flush_page(0)
+
+        self.file_path = target_path
+        if isinstance(self.index, _PagedPostings):
+            self.index.clear_cache()
+        else:
+            self.index = _PagedPostings(self, self._term_pages)
 
     @classmethod
-    def load(cls, file_path: str, manager: object | None = None) -> InvertedIndex:
-        """Loads a persisted InvertedIndex from disk."""
-        import os
-        if not os.path.exists(file_path):
+    def load(cls, file_path: str, manager: BufferManager | None = None) -> InvertedIndex:
+        """Loads paged indexes lazily, or upgrades a legacy pickle on next save."""
+        if manager is None:
+            manager = BufferManager(FileManager(file_path))
+        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
             return cls(file_path=file_path, manager=manager)
-        with open(file_path, "rb") as f:
-            state = pickle.load(f)
-        idx = cls(
-            index=state["index"],
-            doc_lengths=state["doc_lengths"],
-            total_docs=state["total_docs"],
-            file_path=file_path,
-            manager=manager,
-        )
-        idx._doc_norms = state.get("doc_norms", {})
+
+        with open(file_path, "rb") as handle:
+            magic = handle.read(len(_INDEX_MAGIC))
+        if magic != _INDEX_MAGIC:
+            with open(file_path, "rb") as handle:
+                state = pickle.load(handle)
+            idx = cls(
+                index=state["index"],
+                doc_lengths=state["doc_lengths"],
+                total_docs=state["total_docs"],
+                file_path=file_path,
+                manager=manager,
+            )
+            idx._doc_norms = state.get("doc_norms", {})
+            return idx
+
+        idx = cls(file_path=file_path, manager=manager)
+        header_page = manager.fetch_page(0)
+        try:
+            magic, metadata_page, metadata_length = _HEADER.unpack(
+                header_page.read_bytes(0, _HEADER.size)
+            )
+        finally:
+            manager.unpin_page(0)
+        if magic != _INDEX_MAGIC:
+            raise ValueError(f"Formato de índice invertido inválido: {file_path}")
+        metadata = pickle.loads(idx._read_chain(metadata_page, metadata_length))
+        if metadata.get("version") != 1:
+            raise ValueError(f"Versión de índice invertido no soportada: {metadata.get('version')}")
+        idx._term_pages = metadata["term_pages"]
+        idx.doc_lengths = metadata["doc_lengths"]
+        idx.total_docs = metadata["total_docs"]
+        idx._doc_norms = metadata.get("doc_norms", {})
+        idx.index = _PagedPostings(idx, idx._term_pages)
+        idx._paged_format = True
         return idx
+
+    def _write_chain(self, payload: bytes) -> int:
+        manager = self.bm
+        if manager is None:
+            raise RuntimeError("No hay Buffer Manager para escribir el índice")
+        page_size = manager.file_manager.page_size
+        chunk_size = page_size - _PAGE_HEADER.size
+        page_count = max(1, (len(payload) + chunk_size - 1) // chunk_size)
+        page_ids = [manager.allocate_page() for _ in range(page_count)]
+        for offset, page_id in enumerate(page_ids):
+            chunk = payload[offset * chunk_size:(offset + 1) * chunk_size]
+            next_page = page_ids[offset + 1] if offset + 1 < page_count else _END_OF_CHAIN
+            page = manager.fetch_page(page_id)
+            try:
+                page.clear()
+                page.write_bytes(
+                    0,
+                    _PAGE_HEADER.pack(_PAGE_MAGIC, next_page, len(chunk)) + chunk,
+                )
+            finally:
+                manager.unpin_page(page_id, is_dirty=True)
+        return page_ids[0]
+
+    def _read_chain(self, first_page: int, length: int) -> bytes:
+        if self.bm is None:
+            raise RuntimeError("No hay Buffer Manager para leer el índice")
+        result = bytearray()
+        page_id = first_page
+        visited: set[int] = set()
+        while len(result) < length:
+            if page_id in visited:
+                raise ValueError("La cadena de páginas de índice invertido contiene un ciclo")
+            visited.add(page_id)
+            page = self.bm.fetch_page(page_id)
+            try:
+                magic, next_page, chunk_length = _PAGE_HEADER.unpack(
+                    page.read_bytes(0, _PAGE_HEADER.size)
+                )
+                if magic != _PAGE_MAGIC or chunk_length > page.size - _PAGE_HEADER.size:
+                    raise ValueError(f"Página de índice invertido inválida: {page_id}")
+                result.extend(page.read_bytes(_PAGE_HEADER.size, chunk_length))
+            finally:
+                self.bm.unpin_page(page_id)
+            if len(result) < length:
+                if next_page == _END_OF_CHAIN or next_page == page_id:
+                    raise ValueError("Cadena de páginas de índice invertido truncada")
+                page_id = next_page
+        if len(result) != length:
+            raise ValueError("Cadena de páginas de índice invertido excede su longitud")
+        return bytes(result)
 
     def add_document(self, doc_id: int, tokens: Sequence[str]) -> None:
         """Indexes a single document dynamically (for Catalog DML register_insert)."""
@@ -341,9 +533,10 @@ class InvertedIndex:
             term_counts[token] = term_counts.get(token, 0) + 1
 
         for term, tf in term_counts.items():
-            postings = self.index.setdefault(term, [])
+            postings = list(self.index.get(term, []))
             postings.append((doc_id, tf))
             postings.sort(key=lambda x: x[0])
+            self.index[term] = postings
 
         self.doc_lengths[doc_id] = len(tokens)
         self.total_docs += 1
@@ -359,7 +552,8 @@ class InvertedIndex:
 
         # Remove from postings
         empty_terms = []
-        for term, postings in self.index.items():
+        for term in list(self.index):
+            postings = self.index[term]
             new_postings = [p for p in postings if p[0] != doc_id]
             if not new_postings:
                 empty_terms.append(term)
