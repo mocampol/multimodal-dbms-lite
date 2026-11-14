@@ -1,0 +1,12 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+requests>=2.31
+numpy>=1.26
+opencv-python-headless>=4.8
+pillow>=10.0
+torch>=2.2
+torchvision>=0.17
+facenet-pytorch>=2.5.3
+# Opcional para caché distribuida Redis:
+# redis>=5.0
