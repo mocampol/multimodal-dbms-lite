@@ -7,7 +7,12 @@ import numpy as np
 from sklearn.cluster import MiniBatchKMeans, KMeans
 
 from .base_vector_index import BaseVectorIndex
-from .metric import VectorMetric, SearchResult, compute_distance, distance_to_score
+from .metric import (
+    VectorMetric,
+    SearchResult,
+    compute_distances_batch,
+    distances_to_scores_batch,
+)
 
 
 class IVFIndex(BaseVectorIndex):
@@ -129,24 +134,62 @@ class IVFIndex(BaseVectorIndex):
 
         # Probe lists using the requested metric, which may differ from the
         # metric configured when the index was built.
-        centroid_dists = np.asarray(
-            [compute_distance(q, centroid, target_metric) for centroid in self.centroids],
-            dtype=np.float32,
-        )
+        centroid_dists = compute_distances_batch(q, self.centroids, target_metric)
         probe_count = min(self.n_probe, len(self.centroids))
         probed_clusters = np.argsort(centroid_dists)[:probe_count]
 
-        candidates: list[SearchResult] = []
+        probed_rids: list[Any] = []
+        probed_vecs: list[np.ndarray] = []
         for cluster_id in probed_clusters:
             items = self.inverted_lists.get(int(cluster_id), [])
             for rid, item_vec in items:
-                dist = compute_distance(q, item_vec, target_metric)
-                score = distance_to_score(dist, target_metric)
-                candidates.append(SearchResult(rid=rid, distance=dist, score=score))
+                probed_rids.append(rid)
+                probed_vecs.append(item_vec)
 
-        # Ordenar por distancia ascendente (menor distancia = más similar)
-        candidates.sort(key=lambda r: r.distance)
-        return candidates[:k]
+        if not probed_rids:
+            return []
+
+        matrix = np.vstack(probed_vecs).astype(np.float32, copy=False)
+        dists = compute_distances_batch(q, matrix, target_metric)
+        scores = distances_to_scores_batch(dists, target_metric)
+
+        top_k = min(k, len(probed_rids))
+
+        def _rid_key(rid: Any):
+            if hasattr(rid, "page_id") and hasattr(rid, "slot"):
+                return (0, int(rid.page_id), int(rid.slot), "")
+            if isinstance(rid, int):
+                return (1, rid, 0, "")
+            return (2, 0, 0, repr(rid))
+
+        if top_k == len(probed_rids):
+            top_indices = sorted(
+                range(len(probed_rids)),
+                key=lambda i: (float(dists[i]), _rid_key(probed_rids[i])),
+            )
+        else:
+            cutoff = float(np.partition(dists, top_k - 1)[top_k - 1])
+            strict = np.flatnonzero(dists < cutoff).tolist()
+            if len(strict) == top_k - 1 and int(np.count_nonzero(dists == cutoff)) == 1:
+                tied = np.flatnonzero(dists == cutoff).tolist()
+                combined = strict + tied
+            else:
+                tied = np.flatnonzero(dists == cutoff).tolist()
+                tied.sort(key=lambda i: _rid_key(probed_rids[i]))
+                combined = strict + tied[: top_k - len(strict)]
+            top_indices = sorted(
+                combined,
+                key=lambda i: (float(dists[i]), _rid_key(probed_rids[i])),
+            )
+
+        return [
+            SearchResult(
+                rid=probed_rids[int(idx)],
+                distance=float(dists[int(idx)]),
+                score=float(scores[int(idx)]),
+            )
+            for idx in top_indices
+        ]
 
     def save(self, path: str | None = None) -> None:
         target_path = path or getattr(self, "_storage_path", None)

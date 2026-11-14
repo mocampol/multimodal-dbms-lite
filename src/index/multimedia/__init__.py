@@ -9,6 +9,12 @@ from .face_embedding_extractor import (
     FaceEmbedding,
     FaceEmbeddingExtractor,
 )
+from .raw_vector_extractor import (
+    RawVectorExtractor,
+    decode_raw_vector,
+    encode_raw_vector,
+    load_vector_extractor,
+)
 
 __all__ = [
     "SIFTExtractor",
@@ -21,4 +27,8 @@ __all__ = [
     "FACE_EMBEDDING_DIM",
     "FaceEmbedding",
     "FaceEmbeddingExtractor",
+    "RawVectorExtractor",
+    "decode_raw_vector",
+    "encode_raw_vector",
+    "load_vector_extractor",
 ]

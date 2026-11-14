@@ -19,7 +19,7 @@ from index.btree.clustered_index import ClusteredIndex
 from index.rtree import RTree
 from index.text import InvertedIndex, SPIMIIndexer, TextProcessor, default_text_processor, rid_to_doc_id
 from index.vector import IVFIndex, HNSWIndex
-from index.multimedia import ExtractFeatures
+from index.multimedia import ExtractFeatures, RawVectorExtractor, decode_raw_vector, load_vector_extractor
 from spatial.geometry import Point2D
 
 from .table_metadata import TableMetadata, StorageType, IndexType
@@ -254,9 +254,13 @@ class Catalog:
                         index_type, index, storage, tm, entry["column_name"]
                     )
                 elif index_type in (IndexType.IVF, IndexType.HNSW):
+                    old_index = self._physical_indexes.get(entry["index_id"])
+                    old_dim = getattr(old_index, "dim", None)
+                    old_params = self._extract_vector_index_params(old_index)
                     index = self._create_index(
                         index_type, table_name, entry["column_name"],
                         entry["index_id"], column.data_type,
+                        dim=old_dim, index_params=old_params,
                     )
                     index = self._rebuild_vector_index(index_type, index, storage, tm, entry)
                 else:
@@ -450,9 +454,18 @@ class Catalog:
         column_name: str,
         index_type: str,
         index_name: str | None = None,
+        dim: int | None = None,
+        index_params: dict | None = None,
     ) -> dict:
         with self._ddl_latch, self.table_latch(table_name), self._sys_latch:
-            entry = self._register_index(table_name, column_name, index_type, index_name=index_name)
+            entry = self._register_index(
+                table_name,
+                column_name,
+                index_type,
+                index_name=index_name,
+                dim=dim,
+                index_params=index_params,
+            )
             self.flush_table(table_name)
             self._flush_sys_tables()
             return entry
@@ -469,6 +482,8 @@ class Catalog:
         column_name: str,
         index_type: str,
         index_name: str | None = None,
+        dim: int | None = None,
+        index_params: dict | None = None,
     ) -> dict:
         """
         Registers an index over a column.
@@ -522,7 +537,15 @@ class Catalog:
         if self._index_buffer_factory is None:
             raise ValueError("No hay fábrica de BufferManager para índices")
 
-        index = self._create_index(index_type, table_name, column_name, index_id, column.data_type)
+        index = self._create_index(
+            index_type,
+            table_name,
+            column_name,
+            index_id,
+            column.data_type,
+            dim=dim,
+            index_params=index_params,
+        )
 
         if index_type in (IndexType.GIN, IndexType.SPIMI):
             index = self._build_text_index(
@@ -531,7 +554,14 @@ class Catalog:
             root_page_id = 0
         elif index_type in (IndexType.IVF, IndexType.HNSW):
             index = self._build_vector_index(
-                index_type, index, self._table_storage[table_name], tm, column_name, index_id
+                index_type,
+                index,
+                self._table_storage[table_name],
+                tm,
+                column_name,
+                index_id,
+                explicit_dim=dim,
+                index_params=index_params,
             )
             root_page_id = 0
         else:
@@ -584,18 +614,52 @@ class Catalog:
         index.save()
         return index
 
-    def _build_vector_index(self, index_type, index, storage, table_metadata, column_name, index_id):
+    def _build_vector_index(
+        self,
+        index_type,
+        index,
+        storage,
+        table_metadata,
+        column_name,
+        index_id,
+        explicit_dim: int | None = None,
+        index_params: dict | None = None,
+    ):
         column_index = table_metadata.schema.column_index(column_name)
-        extractor = ExtractFeatures(k=index.dim)
+        column_type = table_metadata.schema.columns[column_index].data_type
         samples = []
         for rid, record in self._scan_with_rids(storage):
             val = record[column_index].data
             if val is not None:
                 samples.append((rid, val))
 
+        if column_type == DataType.BYTEA:
+            target_dim = explicit_dim
+            if target_dim is None and samples:
+                target_dim = int(decode_raw_vector(samples[0][1]).size)
+            if target_dim is not None and target_dim != index.dim:
+                index = self._instantiate_vector_index(
+                    index_type,
+                    dim=target_dim,
+                    storage_path=index._storage_path,
+                    index_params=index_params,
+                )
+            extractor = RawVectorExtractor(dim=index.dim)
+            if samples:
+                vectors = [extractor.extract(value).data for _, value in samples]
+                rids = [rid for rid, _ in samples]
+                index.build(vectors, rids)
+            else:
+                index.build([], [])
+            index.save(index._storage_path)
+            extractor.save(self._extractor_path(index._storage_path))
+            self._vector_extractors[index_id] = extractor
+            return index
+
         if not samples:
             raise ValueError(f"No hay valores para construir el índice vectorial de {column_name}")
 
+        extractor = ExtractFeatures(k=index.dim)
         extractor.fit([value for _, value in samples])
         vectors = [extractor.extract(value).data for _, value in samples]
         rids = [rid for rid, _ in samples]
@@ -610,9 +674,19 @@ class Catalog:
     def _rebuild_vector_index(self, index_type, index, storage, table_metadata, entry):
         """Como _build_vector_index, pero una tabla vacía deja el índice vacío en vez de fallar."""
         column_index = table_metadata.schema.column_index(entry["column_name"])
-        if any(record[column_index].data is not None for record in storage.scan()):
+        column_type = table_metadata.schema.columns[column_index].data_type
+        if column_type == DataType.BYTEA or any(
+            record[column_index].data is not None for record in storage.scan()
+        ):
             return self._build_vector_index(
-                index_type, index, storage, table_metadata, entry["column_name"], entry["index_id"]
+                index_type,
+                index,
+                storage,
+                table_metadata,
+                entry["column_name"],
+                entry["index_id"],
+                explicit_dim=index.dim,
+                index_params=self._extract_vector_index_params(index),
             )
         index.build([], [])
         index.save(index._storage_path)
@@ -626,10 +700,13 @@ class Catalog:
         o reconstruido sobre una tabla vacía), reconstruye el índice desde la tabla."""
         extractor = self._vector_extractors.get(entry["index_id"])
         if extractor is None:
-            self._build_vector_index(
+            rebuilt = self._build_vector_index(
                 IndexType(entry["index_type"]), index, self._table_storage[table_name],
                 self.get_table(table_name), entry["column_name"], entry["index_id"],
+                explicit_dim=index.dim,
+                index_params=self._extract_vector_index_params(index),
             )
+            self._physical_indexes[entry["index_id"]] = rebuilt
             extractor = self._vector_extractors[entry["index_id"]]
         return extractor
 
@@ -652,11 +729,13 @@ class Catalog:
         if value.data is None:
             return
         extractor = self._vector_extractor_for(table_name, entry, index)
+        index = self._physical_indexes.get(entry["index_id"], index)
         vector = self._extract_row_vector(extractor, entry, index, value.data)
         self._save_index_change(index, lambda: index.add(vector, rid), lambda: index.remove(rid))
 
     def _unindex_row_vector(self, table_name, entry, index, rid, value):
         extractor = self._vector_extractor_for(table_name, entry, index)
+        index = self._physical_indexes.get(entry["index_id"], index)
         removed = []
 
         def restore():
@@ -668,7 +747,7 @@ class Catalog:
     def _load_vector_extractor(self, index_id, index_path):
         path = self._extractor_path(index_path)
         if os.path.exists(path):
-            self._vector_extractors[index_id] = ExtractFeatures.load(path)
+            self._vector_extractors[index_id] = load_vector_extractor(path)
         else:  # índice creado antes de que se guardara el extractor
             self._vector_extractors.pop(index_id, None)
 
@@ -679,7 +758,68 @@ class Catalog:
                 return self._vector_extractors.get(index_id)
         return None
 
-    def _create_index(self, index_type, table_name, column_name, index_id, key_type):
+    @staticmethod
+    def _extract_vector_index_params(index) -> dict | None:
+        if isinstance(index, IVFIndex):
+            return {
+                "metric": index.metric.value,
+                "n_lists": index.n_lists,
+                "n_probe": index.n_probe,
+            }
+        if isinstance(index, HNSWIndex):
+            return {
+                "metric": index.metric.value,
+                "max_elements": index.max_elements,
+                "ef_construction": index.ef_construction,
+                "M": index.M,
+                "ef_search": index.ef_search,
+                "num_threads": index.num_threads,
+            }
+        return None
+
+    @staticmethod
+    def _instantiate_vector_index(
+        index_type: IndexType,
+        dim: int,
+        storage_path: str,
+        index_params: dict | None = None,
+    ):
+        params = dict(index_params or {})
+        metric = params.get("metric", "cosine")
+        if index_type == IndexType.IVF:
+            idx = IVFIndex(
+                dim=dim,
+                metric=metric,
+                n_lists=int(params.get("n_lists", 16)),
+                n_probe=int(params.get("n_probe", 4)),
+            )
+            idx._storage_path = storage_path
+            return idx
+        if index_type == IndexType.HNSW:
+            idx = HNSWIndex(
+                dim=dim,
+                metric=metric,
+                max_elements=int(params.get("max_elements", 10000)),
+                ef_construction=int(params.get("ef_construction", 200)),
+                M=int(params.get("M", 16)),
+                num_threads=int(params.get("num_threads", -1)),
+            )
+            if "ef_search" in params and params["ef_search"] is not None:
+                idx.set_ef_search(int(params["ef_search"]))
+            idx._storage_path = storage_path
+            return idx
+        raise ValueError(f"Tipo de índice vectorial no soportado: {index_type}")
+
+    def _create_index(
+        self,
+        index_type,
+        table_name,
+        column_name,
+        index_id,
+        key_type,
+        dim: int | None = None,
+        index_params: dict | None = None,
+    ):
         manager = self._index_buffer_factory(table_name, column_name, index_id)
         if manager.file_manager.page_count() > 0:
             manager.reset()
@@ -691,14 +831,14 @@ class Catalog:
             return RTree(manager)
         if index_type in (IndexType.GIN, IndexType.SPIMI):
             return InvertedIndex(file_path=manager.file_manager.file_path, manager=manager)
-        if index_type == IndexType.IVF:
-            idx = IVFIndex(dim=64, metric="cosine")
-            idx._storage_path = manager.file_manager.file_path
-            return idx
-        if index_type == IndexType.HNSW:
-            idx = HNSWIndex(dim=64, metric="cosine")
-            idx._storage_path = manager.file_manager.file_path
-            return idx
+        if index_type in (IndexType.IVF, IndexType.HNSW):
+            resolved_dim = int(dim) if dim is not None else (128 if key_type == DataType.BYTEA else 64)
+            return self._instantiate_vector_index(
+                index_type,
+                dim=resolved_dim,
+                storage_path=manager.file_manager.file_path,
+                index_params=index_params,
+            )
         raise ValueError(f"Tipo de índice no soportado: {index_type}")
 
     def _open_index(self, table_name, column_name, index_type, root_page_id, index_id):
@@ -718,7 +858,8 @@ class Catalog:
             if os.path.exists(fpath):
                 idx = index_class.load(fpath)
             else:
-                idx = index_class(dim=64, metric="cosine")
+                default_dim = 128 if key_type == DataType.BYTEA else 64
+                idx = index_class(dim=default_dim, metric="cosine")
             idx._storage_path = fpath
             self._load_vector_extractor(index_id, fpath)
             return idx

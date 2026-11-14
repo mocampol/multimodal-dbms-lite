@@ -100,7 +100,7 @@ def _row_to_record(row: list, schema: Schema, line_number: int, table_name: str)
     return record
 
 
-def _insert_one_record(catalog, manager, table_name: str, record: Record) -> None:
+def _insert_one_record(catalog, manager, table_name: str, record: Record):
     storage = catalog.get_storage(table_name)
     with table_latch(catalog, table_name):
         violated = catalog.check_insert_uniques(table_name, record)
@@ -114,6 +114,7 @@ def _insert_one_record(catalog, manager, table_name: str, record: Record) -> Non
         catalog.register_insert_uniques(table_name, record)
     # the table was just created by this import, so nobody else can hold this lock
     manager.lock(rid_resource(table_name, rid), LockMode.EXCLUSIVE)
+    return rid
 
 
 def _transaction_manager(catalog) -> TransactionManager:
