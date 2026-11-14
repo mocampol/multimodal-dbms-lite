@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import engine
-from routers import tables, imports, media, query as query_router
+from routers import tables, imports, media, query as query_router, vectors
 
 from catalog.exceptions import (
     TableAlreadyExistsError,
@@ -51,6 +51,7 @@ app.include_router(tables.router)
 app.include_router(query_router.router)
 app.include_router(imports.router)
 app.include_router(media.router)
+app.include_router(vectors.router)
 
 
 @app.get("/health")
