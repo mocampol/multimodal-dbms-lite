@@ -7,17 +7,15 @@ reconocimiento facial, cómo se relacionan las muestras con identidades y cómo
 se registra y retira el consentimiento. No autoriza vigilancia ni identificación
 de personas que no hayan aceptado participar.
 
-- **Benchmark inicial propuesto: [LFW (Labeled Faces in the Wild)](https://vis-www.cs.umass.edu/lfw/)**,
-  solo para evaluación offline de similitud y recuperación. Antes de descargar
-  o usarlo, quien lo incorpore debe guardar la versión y verificar que sus
-  condiciones vigentes permiten el uso académico previsto. La disponibilidad
-  pública no se considera por sí sola una licencia ni consentimiento
-  individual. No mostrar nombres de sus identidades en la aplicación.
-- **CelebA y VGGFace2 quedan fuera del primer alcance.** Se reconsiderarán
+- **Benchmarks propuestos: [LFW (Labeled Faces in the Wild)](https://vis-www.cs.umass.edu/lfw/) y [CelebA (CelebFaces Attributes Dataset)](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html)**,
+  solo para evaluación offline de similitud, recuperación, escalabilidad (1,000 / 10,000+ muestras) y calibración de umbrales. Antes de descargar o usar cualquiera de los dos:
+  - Quien lo incorpore debe guardar la versión y verificar que sus condiciones vigentes permiten el uso académico no comercial previsto.
+  - **CelebA** exige aceptar sus condiciones de uso exclusivamente académico/no comercial, mantener la atribución al trabajo original (*Liu et al., ICCV 2015*) y no redistribuir ni reempaquetar sus imágenes.
+  - La disponibilidad pública no se considera por sí sola una licencia ni consentimiento individual. No mostrar nombres ni etiquetas visibles de sus identidades en la aplicación.
+- **VGGFace2 queda fuera del primer alcance.** Se reconsiderará
   únicamente si se documentan sus condiciones de uso, redistribución y
   tratamiento compatibles con este proyecto
-  ([CelebA](https://mmlab.ie.cuhk.edu.hk/projects/CelebA.html),
-  [VGGFace2](https://www.robots.ox.ac.uk/~vgg/data/vgg_face2/)). Su
+  ([VGGFace2](https://www.robots.ox.ac.uk/~vgg/data/vgg_face2/)). Su
   recomendación en clase no sustituye esa revisión.
 - **Fotos de estudiantes o compañeros:** solo se aceptan tras consentimiento
   explícito, informado y voluntario, obtenido antes de capturar o importar
@@ -37,7 +35,7 @@ datos biométricos sensibles y reciben las mismas restricciones.
    revisar y documentar sus condiciones. No descargar desde mirrors no
    verificados ni copiar imágenes desde redes sociales.
 2. Guardar archivos locales bajo `benchmarks/corpus/face/` (por ejemplo,
-   `benchmarks/corpus/face/lfw/`). `benchmarks/corpus/` ya está excluida de
+   `benchmarks/corpus/face/lfw/` y `benchmarks/corpus/face/celeba/`). `benchmarks/corpus/` ya está excluida de
    Git.
 3. Mantener localmente un manifiesto del corpus con: dataset y versión,
    URL oficial, fecha de descarga, checksum del archivo fuente, URL/versión de
@@ -62,7 +60,7 @@ nombre de una persona como clave. El esquema lógico mínimo es:
 | Muestra | `sample_id`, `identity_id`, `relative_path`, `source`, `split`, `sha256` | Cada imagen debe apuntar a una identidad y tener procedencia verificable. |
 | Consentimiento | `identity_id`, `purpose`, `granted_at`, `notice_version`, `status`, `withdrawn_at` opcional | Para fotos de participantes, `status` es `pending`, `granted` o `withdrawn`; solo `granted` permite procesarlas. Los registros de datasets públicos no representan consentimiento individual y no deben marcarse `granted`. |
 
-Para LFW, la asociación imagen-identidad se toma exclusivamente de las
+Para LFW y CelebA (ej. `identity_CelebA.txt`), la asociación imagen-identidad se toma exclusivamente de las
 anotaciones oficiales de la misma versión descargada. El identificador de
 origen se conserva como `source_subject_id`; no se infieren identidades por
 similitud ni se fusionan identidades entre datasets. Para participantes, una
