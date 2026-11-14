@@ -87,3 +87,48 @@ def distance_to_score(distance: float, metric: VectorMetric) -> float:
         # Distancia = -dot => score = -dist = dot
         return -distance
     raise ValueError(f"Métrica no soportada: {metric}")
+
+
+def compute_distances_batch(query: np.ndarray, matrix: np.ndarray, metric: VectorMetric) -> np.ndarray:
+    """
+    Calcula vectorizadamente la distancia entre `query` (D,) y cada fila de `matrix` (N, D).
+    """
+    q = np.asarray(query, dtype=np.float32).reshape(-1)
+    M = np.asarray(matrix, dtype=np.float32)
+    if M.ndim == 1:
+        M = M.reshape(1, -1)
+    if M.shape[0] == 0:
+        return np.empty(0, dtype=np.float64)
+
+    if metric == VectorMetric.EUCLIDEAN:
+        return np.linalg.norm(M - q, axis=1).astype(np.float64, copy=False)
+
+    if metric == VectorMetric.COSINE:
+        q_norm = float(np.linalg.norm(q))
+        if q_norm < 1e-12:
+            return np.ones(M.shape[0], dtype=np.float64)
+        m_norms = np.linalg.norm(M, axis=1).astype(np.float64)
+        dots = (M @ q).astype(np.float64)
+        denom = m_norms * q_norm
+        dists = np.ones(M.shape[0], dtype=np.float64)
+        valid = m_norms >= 1e-12
+        sims = np.clip(dots[valid] / denom[valid], -1.0, 1.0)
+        dists[valid] = 1.0 - sims
+        return dists
+
+    if metric == VectorMetric.DOT_PRODUCT:
+        return (-(M @ q)).astype(np.float64, copy=False)
+
+    raise ValueError(f"Métrica no soportada: {metric}")
+
+
+def distances_to_scores_batch(distances: np.ndarray, metric: VectorMetric) -> np.ndarray:
+    """Convierte un arreglo de distancias en scores de similitud (mayor = más similar)."""
+    d = np.asarray(distances, dtype=np.float32)
+    if metric == VectorMetric.EUCLIDEAN:
+        return 1.0 / (1.0 + np.maximum(0.0, d))
+    if metric == VectorMetric.COSINE:
+        return 1.0 - d
+    if metric == VectorMetric.DOT_PRODUCT:
+        return -d
+    raise ValueError(f"Métrica no soportada: {metric}")

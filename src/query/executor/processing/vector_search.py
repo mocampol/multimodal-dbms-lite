@@ -5,7 +5,7 @@ import numpy as np
 
 from common.record import Record
 from common.value import DataType, Value
-from index.multimedia import ExtractFeatures
+from index.multimedia import ExtractFeatures, RawVectorExtractor
 from index.vector import VectorMetric, IVFIndex, HNSWIndex, compute_distance, distance_to_score
 from query.executor.plan_node import PlanNode
 from query.parser.ast_nodes import SimilarToExp, SimilarityScoreSpec, VectorIndexKind, VectorMetricKind
@@ -69,24 +69,45 @@ class VectorSearch(PlanNode):
         )
         has_vector_index = isinstance(index, (IVFIndex, HNSWIndex))
         column_idx = self.schema.column_index(column_name) if column_name else 0
+        column_type = self.schema.columns[column_idx].data_type if column_name else None
         storage = self.catalog.get_storage(self.table_name)
         # Con el extractor del índice, la consulta queda en el mismo espacio que
         # los vectores guardados y no hace falta reentrenar sobre la columna.
         extractor = self.catalog.get_vector_extractor(index) if has_vector_index else None
         if extractor is None:
-            extractor = ExtractFeatures(k=index.dim if has_vector_index else 64)
-            corpus = [
-                record[column_idx].data
-                for record in storage.scan()
-                if record[column_idx].data is not None
-            ]
-            if corpus:
-                extractor.fit(corpus)
+            if column_type == DataType.BYTEA:
+                if has_vector_index:
+                    extractor = RawVectorExtractor(dim=index.dim)
+                else:
+                    sample = next(
+                        (
+                            record[column_idx].data
+                            for record in storage.scan()
+                            if record[column_idx].data is not None
+                        ),
+                        None,
+                    )
+                    if sample is None:
+                        return
+                    extractor = RawVectorExtractor(dim=len(sample) // 4)
+            else:
+                if has_vector_index and len(index) == 0:
+                    return
+                extractor = ExtractFeatures(k=index.dim if has_vector_index else 64)
+                corpus = [
+                    record[column_idx].data
+                    for record in storage.scan()
+                    if record[column_idx].data is not None
+                ]
+                if corpus:
+                    extractor.fit(corpus)
         query_fv = extractor.extract(target_obj)
 
         used_index = False
 
-        if has_vector_index and len(index) > 0:
+        if has_vector_index:
+            if len(index) == 0:
+                return
             try:
                 results = index.search(query_fv.data, k=k_val, metric=metric)
                 for res in results:
