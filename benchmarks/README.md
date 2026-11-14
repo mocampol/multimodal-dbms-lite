@@ -8,6 +8,7 @@
 | `benchmark_spatial.py` + `postgres/` | R-tree propio vs. PostgreSQL/PostGIS con GiST | `results/spatial_comparison_results.csv` |
 | `benchmark_text_comparison.py` + `postgres/load_text_data.py` | SPIMI + BM25 y SPIMI + TF-IDF vs. PostgreSQL tsvector + GIN (`ts_rank`) | `results/text_comparison_results.csv`, `results/text_comparison_summary.md` |
 | `prepare_vector_data.py` + `benchmark_vector.py` | IVF vs. HNSW y coseno vs. euclidiana sobre imágenes y audios | `results/vector_comparison_results.csv`, `results/vector_summary.md` |
+| `prepare_face_data.py` + `benchmark_face.py` | Reconocimiento facial (LFW y CelebA): calibración de umbral (`TAR`/`FAR`) y `HNSW` vs. `IVF` | `results/face_comparison_results.csv`, `results/face_summary.md` |
 
 
 El resto de este documento describe las comparaciones externas con PostgreSQL, espacial (PostGIS) y de texto (GIN), y la comparación de similitud entre IVF y HNSW.
@@ -370,3 +371,35 @@ métrica, índice, configuración y valor del barrido). Las columnas están come
 `FIELDNAMES`, en `benchmark_vector.py`. El entorno está en
 `results/vector_comparison_environment.json`, y cada dataset en
 `results/vector_dataset_*.json`.
+
+---
+
+## Reconocimiento facial: LFW y CelebA (calibración de umbral y HNSW vs. IVF)
+
+### Archivos
+
+| Archivo | Qué hace |
+|---|---|
+| `face_common.py` | Descarga/caché automático en `corpus/face/` (LFW y CelebA), manifiestos reproducibles (`--seed 42`) y carga vía `FaceRecognitionService` |
+| `prepare_face_data.py` | Verifica o descarga LFW y CelebA en `corpus/face/` y genera manifiestos (`enroll`, `probe_known`, `probe_unknown`) |
+| `benchmark_face.py` | Evalúa `HNSW` vs. `IVF`, agregación (`max`, `mean_top`) y barrido de umbrales (`0.25..0.65` en pasos de `0.05`) para recomendar el umbral óptimo (`FAR <= 2%`) |
+
+### Requisitos
+
+- Servidor del DBMS levantado en `http://127.0.0.1:8000` (`uvicorn api.main:app --host 127.0.0.1 --port 8000`) o `--dbms-url`.
+- Modelos YuNet y SFace presentes en `benchmarks/corpus/face/models/`.
+
+### Cómo reproducir
+
+Desde la raíz del repositorio:
+
+```bash
+# Muestra rápida (25 identidades conocidas + 25 desconocidas en LFW y CelebA; descarga si falta)
+python benchmarks/prepare_face_data.py --quick
+python benchmarks/benchmark_face.py --quick
+
+# Escala completa (500 conocidas = 1,000+ muestras indexadas, 150 desconocidas por dataset)
+python benchmarks/benchmark_face.py
+```
+
+Las salidas rápidas (`results/face_comparison_results_quick.*`, `results/face_summary_quick.md`) y todo `benchmarks/corpus/` están ignorados por `.gitignore`. La corrida completa genera `results/face_comparison_results.csv`, `results/face_comparison_results.json` y `results/face_summary.md`.
