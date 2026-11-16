@@ -40,6 +40,7 @@ QUICK_N_VALUES = [1_000]
 SEED = 42
 QUERY_SEED = 43
 FEATURE_DIM = 64                    # dimensión fija de los índices del motor (catalog.py)
+DIMENSIONS = (64, 128, 256, 512)    # tamaños de codebook que compara benchmark_vector_dims.py
 NUM_QUERIES = 200
 CODEBOOK_SAMPLES = 5_000
 QUICK_CODEBOOK_SAMPLES = 1_000
@@ -231,14 +232,16 @@ def build_vectors(counts: np.ndarray, idf: np.ndarray, variant: str) -> np.ndarr
     raise ValueError(f"Variante desconocida: {variant}")
 
 
-def features_path(modality: str, quick: bool = False) -> Path:
+def features_path(modality: str, quick: bool = False, dim: int = FEATURE_DIM) -> Path:
     suffix = "_quick" if quick else ""
-    return dataset_dir(DATASETS[modality]) / f"features_k{FEATURE_DIM}{suffix}.npz"
+    return dataset_dir(DATASETS[modality]) / f"features_k{dim}{suffix}.npz"
 
 
-def manifest_path(modality: str, quick: bool = False) -> Path:
+def manifest_path(modality: str, quick: bool = False, dim: int = FEATURE_DIM) -> Path:
+    """El de 64 conserva el nombre de #85; los demás llevan la dimensión."""
     suffix = "_quick" if quick else ""
-    return RESULTS_DIR / f"vector_dataset_{modality}{suffix}.json"
+    dimension = "" if dim == FEATURE_DIM else f"_k{dim}"
+    return RESULTS_DIR / f"vector_dataset_{modality}{dimension}{suffix}.json"
 
 
 @dataclass(frozen=True)
@@ -261,8 +264,8 @@ class FeatureSet:
         return build_vectors(self.query_counts, self.idf, variant)
 
 
-def load_features(modality: str, quick: bool = False) -> FeatureSet:
-    with np.load(features_path(modality, quick), allow_pickle=False) as data:
+def load_features(modality: str, quick: bool = False, dim: int = FEATURE_DIM) -> FeatureSet:
+    with np.load(features_path(modality, quick, dim), allow_pickle=False) as data:
         return FeatureSet(
             modality=modality,
             base_counts=data["base_counts"],
@@ -275,8 +278,8 @@ def load_features(modality: str, quick: bool = False) -> FeatureSet:
         )
 
 
-def write_manifest(modality: str, quick: bool, manifest: dict) -> Path:
-    path = manifest_path(modality, quick)
+def write_manifest(modality: str, quick: bool, manifest: dict, dim: int = FEATURE_DIM) -> Path:
+    path = manifest_path(modality, quick, dim)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
