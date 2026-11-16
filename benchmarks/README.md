@@ -9,6 +9,7 @@
 | `benchmark_text_comparison.py` + `postgres/load_text_data.py` | SPIMI + BM25 y SPIMI + TF-IDF vs. PostgreSQL tsvector + GIN (`ts_rank`) | `results/text_comparison_results.csv`, `results/text_comparison_summary.md` |
 | `prepare_vector_data.py` + `benchmark_vector.py` | IVF vs. HNSW y coseno vs. euclidiana sobre imágenes y audios | `results/vector_comparison_results.csv`, `results/vector_summary.md` |
 | `prepare_face_data.py` + `benchmark_face.py` | Reconocimiento facial (LFW y CelebA): calibración de umbral (`TAR`/`FAR`) y `HNSW` vs. `IVF` | `results/face_comparison_results.csv`, `results/face_summary.md` |
+| `prepare_face_data.py` + `benchmark_face_latency.py` | Medición de latencia de extremo a extremo, validación de SLA (< 100 ms) y reporte de hardware | `results/face_latency_results.csv`, `results/face_latency_summary.md` |
 
 
 El resto de este documento describe las comparaciones externas con PostgreSQL, espacial (PostGIS) y de texto (GIN), y la comparación de similitud entre IVF y HNSW.
@@ -383,6 +384,7 @@ métrica, índice, configuración y valor del barrido). Las columnas están come
 | `face_common.py` | Descarga/caché automático en `corpus/face/` (LFW y CelebA), manifiestos reproducibles (`--seed 42`) y carga vía `FaceRecognitionService` |
 | `prepare_face_data.py` | Verifica o descarga LFW y CelebA en `corpus/face/` y genera manifiestos (`enroll`, `probe_known`, `probe_unknown`) |
 | `benchmark_face.py` | Evalúa `HNSW` vs. `IVF`, agregación (`max`, `mean_top`) y barrido de umbrales (`0.25..0.65` en pasos de `0.05`) para recomendar el umbral óptimo (`FAR <= 2%`) |
+| `benchmark_face_latency.py` | Mide latencia end-to-end (extracción, DBMS search, roundtrip, total), valida SLA (< 100 ms) y documenta el hardware |
 
 ### Requisitos
 
