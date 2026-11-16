@@ -32,7 +32,7 @@ class FaceAppSettings:
     default_index_type: str = os.getenv("FACE_INDEX_TYPE", "hnsw")
     default_metric: str = os.getenv("FACE_METRIC", "cosine")
     default_k: int = int(os.getenv("FACE_DEFAULT_K", "5"))
-    default_threshold: float = float(os.getenv("FACE_THRESHOLD", "0.40"))
+    default_threshold: float = float(os.getenv("FACE_THRESHOLD", "0.45"))
     hnsw_ef_search: int = int(os.getenv("FACE_HNSW_EF_SEARCH", "100"))
     hnsw_ef_construction: int = int(os.getenv("FACE_HNSW_EF_CONSTRUCTION", "200"))
     hnsw_m: int = int(os.getenv("FACE_HNSW_M", "16"))
