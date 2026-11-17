@@ -67,6 +67,13 @@ class LocalClient:
         self.batches.append(len(rows))
         return {"inserted": len(rows)}
 
+    def get_table(self, table):
+        return {"indexes": self.catalog.get_indexes(table)}
+
+    def create_index(self, table, column, index_type, index_name=None, dim=None, index_params=None):
+        return self.catalog.create_index(table, column, index_type, index_name=index_name,
+                                         dim=dim, index_params=index_params)
+
 
 @pytest.fixture
 def client(tmp_path):
