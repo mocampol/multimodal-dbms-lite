@@ -9,6 +9,7 @@ Pasa por la API, como load_songs.py. Es idempotente:
   todos.
 - Extrae solo las canciones que todavía no tienen segmentos.
 - Borra los segmentos de las canciones que ya no están en el manifiesto.
+- Al final crea los índices HNSW e IVF si faltan (segment_index.py).
 
 Cada petición de inserción lleva canciones completas, y la API la hace en una sola
 transacción: si algo falla, ninguna canción queda con segmentos a medias.
@@ -44,8 +45,8 @@ from segment_extractor import (  # noqa: E402
     SegmentVector,
     SongFrames,
 )
+from segment_index import SEGMENTS_TABLE, ensure_segment_indexes  # noqa: E402
 
-SEGMENTS_TABLE = "audio_segments"
 CODEBOOK_NAME = "segment_codebook.pkl"
 INSERT_BATCH = 200          # filas por petición, redondeado a canciones completas
 SEGMENT_ID_STRIDE = 1000    # segment_id = song_id * 1000 + segment_index
@@ -66,14 +67,31 @@ class SegmentsClient(Protocol):
     def table_names(self) -> set[str]: ...
     def query(self, sql: str) -> dict: ...
     def insert_rows(self, table: str, rows: list[dict]) -> dict: ...
+    def get_table(self, table: str) -> dict: ...
+    def create_index(self, table: str, column: str, index_type: str, index_name: str | None = None,
+                     dim: int | None = None, index_params: dict | None = None) -> dict: ...
 
 
 class HttpSegmentsClient(HttpDBMSClient):
-    """El cliente de load_songs.py más la inserción por POST /tables/{t}/rows, que
-    acepta el vector en base64 para la columna BYTEA."""
+    """El cliente de load_songs.py más las interfaces vectoriales de la API: inserción con
+    el vector en base64 para la columna BYTEA y creación de índices con dim y parámetros."""
 
     def insert_rows(self, table: str, rows: list[dict]) -> dict:
         return self._request("POST", f"/tables/{table}/rows", {"rows": rows})
+
+    def get_table(self, table: str) -> dict:
+        return self._request("GET", f"/tables/{table}")
+
+    def create_index(self, table: str, column: str, index_type: str, index_name: str | None = None,
+                     dim: int | None = None, index_params: dict | None = None) -> dict:
+        payload = {"column_name": column, "index_type": index_type}
+        if index_name is not None:
+            payload["index_name"] = index_name
+        if dim is not None:
+            payload["dim"] = dim
+        if index_params is not None:
+            payload["index_params"] = index_params
+        return self._request("POST", f"/tables/{table}/indexes", payload)
 
 
 # =============================================================================
@@ -209,6 +227,9 @@ def extract(
     failed.update(new_failed)
     inserted = _insert(client, extractor, {song_id: frames[song_id] for song_id in missing if song_id in frames})
 
+    n_segments = len(client.query(f"SELECT segment_id FROM {SEGMENTS_TABLE};")["rows"])
+    created_indexes = ensure_segment_indexes(client, extractor.k, n_segments)
+
     result = {
         "codebook": codebook,
         "model_name": extractor.model_name,
@@ -216,6 +237,7 @@ def extract(
         "inserted_songs": sum(1 for song_id in missing if song_id in frames),
         "inserted_segments": inserted,
         "deleted_songs": len(stale),
+        "created_indexes": created_indexes,
         "failed": failed,
     }
     print(f"DBMS: {SEGMENTS_TABLE} {result}", flush=True)
