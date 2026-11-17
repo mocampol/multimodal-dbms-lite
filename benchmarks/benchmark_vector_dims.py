@@ -32,6 +32,10 @@ Uso:
     python benchmarks/benchmark_vector_dims.py --quick              # N = 1,000
     python benchmarks/benchmark_vector_dims.py --sizes 1000,10000
     python benchmarks/benchmark_vector_dims.py --dims 64,512 --modality image
+    python benchmarks/benchmark_vector_dims.py --sizes 10000 --cpu 2   # tiempos comparables
+
+En CPUs híbridas conviene --cpu con un núcleo rápido (P): sin fijarlo, cada fase
+puede caer en un núcleo de distinta velocidad y los tiempos no son comparables.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gc
+import json
 import os
 import sys
 import tempfile
@@ -304,9 +309,18 @@ def main():
     parser.add_argument("--modality", choices=[*MODALITIES, "all"], default="all")
     parser.add_argument("--repetitions", type=int, default=REPETITIONS)
     parser.add_argument("--force", action="store_true", help="repite lo que ya está en el CSV")
+    parser.add_argument("--cpu", type=int, default=None,
+                        help="fija el benchmark a este núcleo lógico (las fases lo heredan)")
     args = parser.parse_args()
 
-    sizes = [int(size) for size in args.sizes.split(",")] if args.sizes else (
+    if args.cpu is not None:
+        # En CPUs híbridas (núcleos P y E) cada proceso nuevo puede caer en un núcleo
+        # de distinta velocidad; fijarlo hace comparables los tiempos entre fases.
+        import psutil
+
+        psutil.Process().cpu_affinity([args.cpu])
+
+    sizes =[int(size) for size in args.sizes.split(",")] if args.sizes else (
         QUICK_N_VALUES if args.quick else list(DEFAULT_SIZES)
     )
     dims = [int(dim) for dim in args.dims.split(",")]
@@ -324,6 +338,9 @@ def main():
     out_path = RESULTS_CSV.with_name(f"{RESULTS_CSV.stem}{suffix}{RESULTS_CSV.suffix}")
     env_path = ENVIRONMENT_JSON.with_name(f"{ENVIRONMENT_JSON.stem}{suffix}{ENVIRONMENT_JSON.suffix}")
     write_environment(env_path, sizes)
+    environment = json.loads(env_path.read_text(encoding="utf-8"))
+    environment.update(dims=dims, cpu_affinity=args.cpu)
+    env_path.write_text(json.dumps(environment, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     started = time.perf_counter()
     for modality in modalities:

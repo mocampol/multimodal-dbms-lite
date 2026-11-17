@@ -8,6 +8,7 @@
 | `benchmark_spatial.py` + `postgres/` | R-tree propio vs. PostgreSQL/PostGIS con GiST | `results/spatial_comparison_results.csv` |
 | `benchmark_text_comparison.py` + `postgres/load_text_data.py` | SPIMI + BM25 y SPIMI + TF-IDF vs. PostgreSQL tsvector + GIN (`ts_rank`) | `results/text_comparison_results.csv`, `results/text_comparison_summary.md` |
 | `prepare_vector_data.py` + `benchmark_vector.py` | IVF vs. HNSW y coseno vs. euclidiana sobre imágenes y audios | `results/vector_comparison_results.csv`, `results/vector_summary.md` |
+| `prepare_vector_data.py --dims` + `benchmark_vector_dims.py` | IVF y HNSW con 64, 128, 256 y 512 dimensiones | `results/vector_dims_results.csv`, `results/vector_dims_summary.md` |
 | `prepare_face_data.py` + `benchmark_face.py` | Reconocimiento facial (LFW y CelebA): calibración de umbral (`TAR`/`FAR`) y `HNSW` vs. `IVF` | `results/face_comparison_results.csv`, `results/face_summary.md` |
 
 
@@ -371,6 +372,44 @@ métrica, índice, configuración y valor del barrido). Las columnas están come
 `FIELDNAMES`, en `benchmark_vector.py`. El entorno está en
 `results/vector_comparison_environment.json`, y cada dataset en
 `results/vector_dataset_*.json`.
+
+### IVF y HNSW según la dimensión
+
+Repite la comparación con codebooks de 64, 128, 256 y 512 palabras sobre los mismos
+objetos y consultas (#108). Resultados y recomendaciones:
+[`results/vector_dims_summary.md`](results/vector_dims_summary.md).
+
+| Archivo | Qué hace |
+|---|---|
+| `prepare_vector_data.py --dims` | Arma varios codebooks en una sola pasada; no pisa los archivos que ya existen |
+| `benchmark_vector_dims.py` | Mide la fuerza bruta, `HNSWIndex`, `IVFIndex` y el control en numpy en cada dimensión, y comprueba que el índice cargado de disco responda igual |
+| `compare_vector_dims.py` | Verifica el CSV, lo resume y genera `results/charts/vector_dims_*.png` (no dibuja si falla una verificación) |
+
+```bash
+# 1. Vectores de 128, 256 y 512 para N = 10,000 (unos 7 minutos; el de 64 se reutiliza)
+python benchmarks/prepare_vector_data.py --dims 64,128,256,512 --n 10000
+
+# 2. Mediciones fijadas a un núcleo rápido (unos 6 minutos)
+python benchmarks/benchmark_vector_dims.py --sizes 10000 --cpu 2
+
+# 3. Verificar, resumir y graficar
+python benchmarks/compare_vector_dims.py
+```
+
+- **Mismos datos:** la muestra del codebook, los objetos y las consultas son los
+  mismos en todas las dimensiones; solo cambia el codebook.
+- **Una métrica:** coseno sobre vectores normalizados, como el motor.
+- **IVF del motor:** se mide solo con `n_probe=4`; el barrido completo de `n_probe` se
+  hace con el control en numpy, que devuelve los mismos vecinos.
+- **Guardado y carga:** cada índice se construye, se guarda, se carga y se compara con
+  el original: mismos vecinos en el mismo orden y mismas distancias.
+- **`--cpu`:** en CPUs híbridas (núcleos P y E), cada proceso nuevo puede caer en un
+  núcleo de distinta velocidad. Fijar el núcleo hace comparables los tiempos entre
+  fases. Elige un núcleo rápido; en la máquina de las mediciones, del 0 al 3.
+
+Salidas: `results/vector_dims_results.csv` (columnas en `FIELDNAMES`, en
+`benchmark_vector_dims.py`), `results/vector_dims_environment.json` y
+`results/vector_dataset_<modalidad>_k<dim>.json`.
 
 ---
 

@@ -27,6 +27,7 @@ from benchmark_vector_dims import (  # noqa: E402
     same_neighbors,
     write_rows,
 )
+from compare_vector_dims import check  # noqa: E402
 from index.multimedia.quantizer import Quantizer  # noqa: E402
 
 
@@ -163,3 +164,59 @@ def test_write_rows_replaces_the_same_key_and_keeps_the_others(tmp_path):
     rows = read_rows(path)
     assert sorted((row["dim"], row["recall_at_k"]) for row in rows) == [("128", "0.9"), ("64", "0.95")]
     assert measured_groups(path) == {("image", "64", "1000", "hnsw"), ("image", "128", "1000", "hnsw")}
+
+
+# Verificación del CSV
+
+def csv_row(index_kind, dim=64, **values):
+    """Una fila como las lee read_rows: todo texto."""
+    row = {field: "" for field in FIELDNAMES}
+    row.update(modality="image", dim=dim, n=1000, k=10, num_queries=200, index_kind=index_kind,
+               recall_at_k=1.0, precision_at_k=0.1, save_load_identical=index_kind != "exact",
+               index_space_bytes=dim * 1000)
+    row.update(values)
+    return {key: str(value) for key, value in row.items()}
+
+
+def valid_rows():
+    rows = []
+    for dim in (64, 128):
+        rows += [csv_row("exact", dim), csv_row("hnsw", dim, ef_search=50, recall_at_k=0.9)]
+        for probe, recall in ((1, 0.5), (4, 0.8)):
+            rows.append(csv_row("ivf_numpy", dim, n_probe=probe, recall_at_k=recall, avg_candidates=probe * 10))
+        rows.append(csv_row("ivf", dim, n_probe=4, recall_at_k=0.8, avg_candidates=40))
+    return rows
+
+
+def test_valid_results_pass_every_check():
+    assert check(valid_rows()) == []
+
+
+@pytest.mark.parametrize("change, expected", [
+    ({"index_kind": "hnsw", "save_load_identical": "False"}, "no devolvió lo mismo"),
+    ({"index_kind": "ivf", "recall_at_k": "0.7"}, "distinto entre ivf e ivf_numpy"),
+    ({"index_kind": "exact", "recall_at_k": "0.9"}, "la fuerza bruta tiene recall"),
+    ({"index_kind": "hnsw", "num_queries": "100"}, "consultas"),
+])
+def test_each_check_reports_its_problem(change, expected):
+    rows = valid_rows()
+    target = next(row for row in rows if row["index_kind"] == change["index_kind"])
+    target.update(change)
+
+    assert any(expected in error for error in check(rows))
+
+
+def test_recall_that_drops_with_more_probes_is_reported():
+    rows = valid_rows()
+    next(row for row in rows if row["index_kind"] == "ivf_numpy" and row["n_probe"] == "4")["recall_at_k"] = "0.4"
+
+    assert any("el recall baja" in error for error in check(rows))
+
+
+def test_an_index_that_does_not_grow_with_the_dimension_is_reported():
+    rows = valid_rows()
+    for row in rows:
+        if row["dim"] == "128" and row["index_kind"] == "hnsw":
+            row["index_space_bytes"] = "64000"
+
+    assert any("no crece con la dimensión" in error for error in check(rows))
