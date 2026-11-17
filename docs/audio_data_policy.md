@@ -61,9 +61,10 @@ Cada canción del corpus guarda:
 | `title`, `artist_id`, `artist_name`, `album_title`, `genre` | `tracks.csv` | Lo que muestra la aplicación |
 | `duration_s` | Duración del clip descargado | Límite de los intervalos (30 s) |
 | `license_title`, `license_url` | `raw_tracks.csv` | Atribución y verificación de la licencia |
+| `license_family` | Calculada a partir de `license_url` (CC BY, CC BY-NC-SA, ...) | Agrupar y filtrar por licencia |
 | `track_url`, `artist_url` | `raw_tracks.csv` | Origen. Son URLs de 2017 y algunas pueden ya no resolver |
 | `source` | Fijo: `fma_small` | Dataset de origen |
-| `relative_path`, `sha256` | Archivo descargado | Ubicación en el volumen y verificación de integridad |
+| `relative_path`, `sha256`, `size_bytes` | Archivo descargado | Ubicación en el volumen y verificación de integridad |
 
 ## Atribución
 
@@ -94,9 +95,12 @@ Cada canción del corpus guarda:
 2. El corpus vive en el volumen de Docker `db-data`, en `/app/data/audio/fma/`, junto
    con la base de datos. Así las rutas que guarda la tabla de canciones existen dentro
    del contenedor, y ni el audio ni los índices se vuelven a calcular al reiniciar la
-   aplicación. `./media` no sirve para esto: se monta en solo lectura.
-3. La preparación es idempotente: si una pista ya está en el volumen con el SHA-256
-   esperado, no se vuelve a descargar.
+   aplicación. `./media` no sirve para esto: se monta en solo lectura. Todos los clips
+   van en esa misma carpeta, sin las subcarpetas de FMA, porque `GET /files` solo
+   sirve archivos que estén directamente dentro de una carpeta importada.
+3. La preparación (`apps/audio-copyright/dataset/prepare_corpus.py`) es idempotente:
+   si una pista ya está en el volumen con el SHA-256 esperado, no se vuelve a
+   descargar, y si el corpus está completo termina sin tocar la red.
 4. No se versionan audio, zips, metadatos de FMA, vectores ni índices. Sí se versiona
    el resumen del corpus (cantidad de pistas por género y por licencia), que no
    contiene audio.
