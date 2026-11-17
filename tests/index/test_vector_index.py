@@ -753,6 +753,87 @@ def test_hnsw_with_other_metric_ranks_exactly(clustered_dataset, metric):
     assert _recall_at_k(index, vectors, queries, 10, metric) == 1.0
 
 
+HIGH_DIMENSIONS = [128, 256, 512]
+
+
+@pytest.fixture(scope="module")
+def high_dim_datasets():
+    """Mismo esquema de grupos que clustered_dataset, una vez por dimensión."""
+    return {dim: _clustered_dataset(dim=dim) for dim in HIGH_DIMENSIONS}
+
+
+@pytest.mark.parametrize("dim", HIGH_DIMENSIONS)
+class TestHighDimensions:
+    """El motor usa 64 dimensiones; los índices deben funcionar igual con más."""
+
+    @pytest.mark.parametrize("metric", [VectorMetric.COSINE, VectorMetric.EUCLIDEAN])
+    def test_hnsw_recall(self, high_dim_datasets, dim, metric):
+        vectors, queries = high_dim_datasets[dim]
+        index = HNSWIndex(dim=dim, metric=metric)
+        index.build(vectors, list(range(len(vectors))))
+
+        assert _recall_at_k(index, vectors, queries, 10, metric) >= 0.90
+
+    @pytest.mark.parametrize("metric", [VectorMetric.COSINE, VectorMetric.EUCLIDEAN])
+    def test_ivf_recall_and_exact_search_when_probing_every_list(self, high_dim_datasets, dim, metric):
+        vectors, queries = high_dim_datasets[dim]
+        index = IVFIndex(dim=dim, metric=metric, n_lists=20, n_probe=4)
+        index.build(vectors, list(range(len(vectors))))
+        assert _recall_at_k(index, vectors, queries, 10, metric) >= 0.95
+
+        index.n_probe = 20
+        assert _recall_at_k(index, vectors, queries, 10, metric) == 1.0
+
+    @pytest.mark.parametrize("index_class", VECTOR_INDEXES)
+    def test_saved_index_returns_same_results(self, high_dim_datasets, dim, index_class, tmp_path):
+        vectors, queries = high_dim_datasets[dim]
+        index = index_class(dim=dim)
+        index.build(vectors, list(range(len(vectors))))
+        path = str(tmp_path / f"vectores_{dim}.idx")
+        index.save(path)
+
+        loaded = index_class.load(path)
+
+        assert loaded.dim == dim
+        assert len(loaded) == len(vectors)
+        for query in queries:
+            expected = index.search(query, k=10)
+            found = loaded.search(query, k=10)
+            assert [r.rid for r in found] == [r.rid for r in expected]
+            assert np.allclose([r.distance for r in found], [r.distance for r in expected])
+
+    @pytest.mark.parametrize("index_class", VECTOR_INDEXES)
+    def test_add_and_remove_survive_save_and_load(self, high_dim_datasets, dim, index_class, tmp_path):
+        vectors, queries = high_dim_datasets[dim]
+        index = index_class(dim=dim, metric=VectorMetric.EUCLIDEAN)
+        index.build(vectors, list(range(len(vectors))))
+        removed = [r.rid for r in index.search(queries[0], k=5)]
+        for rid in removed:
+            index.remove(rid)
+        index.add(queries[0], "consulta")
+        path = str(tmp_path / f"cambios_{dim}.idx")
+        index.save(path)
+
+        loaded = index_class.load(path)
+
+        results = [r.rid for r in loaded.search(queries[0], k=10)]
+        assert len(loaded) == len(vectors) - len(removed) + 1
+        assert results[0] == "consulta"
+        assert not set(removed) & set(results)
+
+    @pytest.mark.parametrize("index_class", VECTOR_INDEXES)
+    def test_rejects_vectors_of_another_dimension(self, high_dim_datasets, dim, index_class):
+        vectors, queries = high_dim_datasets[dim]
+        index = index_class(dim=dim)
+        index.build(vectors, list(range(len(vectors))))
+
+        with pytest.raises(ValueError, match="Dimensión del vector"):
+            index.add(np.zeros(64), "corto")
+        with pytest.raises(ValueError, match="Dimensión del query"):
+            index.search(np.zeros(dim + 1), k=1)
+        assert len(index) == len(vectors)
+
+
 class TestKnownVectorIndexFailures:
     """Comportamiento esperado que los índices aún no cumplen."""
 

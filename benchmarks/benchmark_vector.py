@@ -218,14 +218,14 @@ def in_fresh_process(function, *args):
         return pool.apply(function, args)
 
 
-def _new_index(kind: str, metric: str, n: int, n_lists: int, num_threads: int = 1):
+def _new_index(kind: str, metric: str, n: int, n_lists: int, num_threads: int = 1, dim: int = FEATURE_DIM):
     from index.vector import HNSWIndex, IVFIndex
 
     if kind == "ivf":
-        return IVFIndex(dim=FEATURE_DIM, metric=metric, n_lists=n_lists)
+        return IVFIndex(dim=dim, metric=metric, n_lists=n_lists)
     if kind == "hnsw":
         return HNSWIndex(
-            dim=FEATURE_DIM, metric=metric, max_elements=n,
+            dim=dim, metric=metric, max_elements=n,
             ef_construction=HNSW_EF_CONSTRUCTION, M=HNSW_M, num_threads=num_threads,
         )
     raise ValueError(f"Índice desconocido: {kind}")
@@ -243,7 +243,7 @@ def build_phase(kind: str, metric: str, n_lists: int, vectors_path: str, index_p
     vectors = np.load(vectors_path)
     rids = list(range(len(vectors)))
     before = rss_bytes()  # antes de crear el índice: HNSW ya reserva su grafo al crearse
-    index = _new_index(kind, metric, len(vectors), n_lists)
+    index = _new_index(kind, metric, len(vectors), n_lists, dim=vectors.shape[1])
     start = time.perf_counter()
     index.build(vectors, rids)
     build_time = time.perf_counter() - start
@@ -257,7 +257,7 @@ def build_phase(kind: str, metric: str, n_lists: int, vectors_path: str, index_p
     }
     if kind == "hnsw":
         del index
-        parallel = _new_index(kind, metric, len(vectors), n_lists, num_threads=-1)
+        parallel = _new_index(kind, metric, len(vectors), n_lists, num_threads=-1, dim=vectors.shape[1])
         start = time.perf_counter()
         parallel.build(vectors, rids)
         result["build_time_all_cores_s"] = round(time.perf_counter() - start, 6)
