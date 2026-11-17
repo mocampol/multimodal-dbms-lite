@@ -1,0 +1,4 @@
+# song_id (track_id de FMA) retirados del corpus, uno por línea.
+# Ver "Retiro de una canción" en docs/audio_data_policy.md.
+# Ejemplo:
+# 2  # motivo y fecha
