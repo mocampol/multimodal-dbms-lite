@@ -4,8 +4,9 @@ Aplicación que busca, dentro de una canción subida, fragmentos parecidos a can
 una base de referencia (issues #110 a #115). Reporta **posibles coincidencias**, no una
 determinación legal.
 
-Por ahora contiene la preparación de esa base de referencia (#110) y la extracción de
-un vector MFCC por segmento de cada canción (#111). Qué audio se usa y por qué:
+Por ahora contiene la preparación de esa base de referencia (#110), la extracción de un
+vector MFCC por segmento de cada canción (#111) y su indexación con HNSW e IVF para
+buscar candidatos similares (#112). Qué audio se usa y por qué:
 [`docs/audio_data_policy.md`](../../docs/audio_data_policy.md).
 
 ## Corpus de referencia
@@ -48,6 +49,8 @@ Para probar el flujo con 16 clips: `prepare_corpus.py --per-genre 2`.
 | Resumen por género y licencia | `/app/data/audio/fma/corpus_summary.json` |
 | Tabla de canciones | `audio_songs` en el DBMS |
 | Tabla de artistas | `audio_artists` en el DBMS |
+| Codebook de los segmentos | `/app/data/audio/fma/segment_codebook.pkl` |
+| Tabla de segmentos, con índices HNSW e IVF | `audio_segments` en el DBMS |
 
 Fuera de Docker, las mismas rutas cuelgan de `data/` en la raíz del repositorio, que
 Git ignora.
@@ -86,6 +89,51 @@ La extracción solo procesa las canciones que faltan y borra los segmentos de la
 canciones retiradas. Si cambia el codebook (`--k`, `--window-s` o `--hop-s`), recalcula
 todos los vectores.
 
+### Índices y búsqueda de candidatos
+
+Al terminar, `extract_segments.py` crea dos índices sobre `audio_segments.embedding`, si
+faltan. Los dos usan coseno, porque los vectores tienen norma 1, y sus parámetros salen del
+benchmark del #85 ([`vector_summary.md`](../../benchmarks/results/vector_summary.md)):
+
+| Índice | Nombre | Parámetros |
+|---|---|---|
+| HNSW | `idx_audio_segments_hnsw` | `M` = 16, `ef_construction` = 200, `ef_search` = 100 |
+| IVF | `idx_audio_segments_ivf` | `n_lists` = √N (unas 105 listas con 11,000 segmentos), `n_probe` = 8 |
+
+Se crean después de insertar los segmentos, para construirlos una sola vez: si existieran
+durante la carga, el motor los guardaría en disco con cada fila. Después, el motor los
+mantiene solo en cada `INSERT` y `DELETE`.
+
+`backend/segment_search.py` divide un audio en segmentos con el mismo codebook y, para cada
+uno, busca los `k` segmentos más parecidos con `POST /tables/audio_segments/vector-search`.
+Cada candidato trae la canción (título, artista, licencia y URL), su intervalo en la canción
+original y su score, que con coseno es la similitud. Con la API corriendo:
+
+```bash
+python apps/audio-copyright/backend/segment_search.py remix.mp3 --k 5 --index hnsw
+```
+
+```json
+{
+  "duration_s": 40.0, "index_type": "hnsw", "metric": "cosine", "k": 5, "used_index": true,
+  "segments": [
+    {"segment_index": 0, "start_s": 0.0, "end_s": 5.0, "candidates": [
+      {"song_id": 2, "title": "...", "artist": "...", "start_s": 10.0, "end_s": 15.0, "score": 0.93, ...}
+    ]}
+  ],
+  "timings_ms": {"extraction_ms": ..., "dbms_search_ms": ..., "total_ms": ...}
+}
+```
+
+Cada candidato tiene dos referencias temporales: el intervalo del audio buscado y el de la
+canción original. Una copia real avanza igual en ambas, así que esos pares sirven para unir
+segmentos seguidos en un rango y reportar el porcentaje de similitud, que corresponde a la
+detección (#113).
+
+Los valores por defecto se cambian con variables de entorno: `AUDIO_INDEX_TYPE` (`hnsw` o
+`ivf`), `AUDIO_METRIC`, `AUDIO_DEFAULT_K`, `AUDIO_HNSW_EF_SEARCH`, `AUDIO_IVF_N_PROBE`,
+`AUDIO_CODEBOOK` y `DBMS_API_URL`.
+
 ### Archivos
 
 | Archivo | Qué hace |
@@ -97,3 +145,5 @@ todos los vectores.
 | `dataset/corpus_summary.json` | Resumen del corpus completo, versionado |
 | `features/segment_extractor.py` | Segmentos, MFCC, codebook y un vector por segmento con su intervalo |
 | `features/extract_segments.py` | Extrae los segmentos del corpus y los guarda en `audio_segments` por la API |
+| `features/segment_index.py` | Crea los índices HNSW e IVF de `audio_segments`, si faltan |
+| `backend/segment_search.py` | Busca los candidatos de cada segmento de un audio, con sus scores e intervalos |
