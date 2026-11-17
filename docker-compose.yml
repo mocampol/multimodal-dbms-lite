@@ -20,6 +20,30 @@ services:
       start_period: 30s
       retries: 5
 
+  # Corpus de audio para la detección de copyright (#110). Se corre a mano, una vez:
+  #   docker compose --profile audio run --rm audio-data
+  # Descarga los clips de FMA en el volumen db-data y carga canciones y artistas por la
+  # API. Es idempotente: si ya está todo, termina en segundos sin descargar nada.
+  audio-data:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["audio"]
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      DBMS_API_URL: http://api:8000
+      AUDIO_CORPUS_DIR: /app/data/audio/fma
+    volumes:
+      - db-data:/app/data
+      - ./apps/audio-copyright/dataset:/app/apps/audio-copyright/dataset:ro
+    command:
+      - sh
+      - -c
+      - python apps/audio-copyright/dataset/prepare_corpus.py && python apps/audio-copyright/dataset/load_songs.py
+    restart: "no"
+
   frontend:
     build:
       context: ./frontend

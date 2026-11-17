@@ -1,0 +1,28 @@
+{
+  "source": "fma_small",
+  "songs": 1000,
+  "artists": 557,
+  "by_genre": {
+    "Electronic": 125,
+    "Experimental": 125,
+    "Folk": 125,
+    "Hip-Hop": 125,
+    "Instrumental": 125,
+    "International": 125,
+    "Pop": 125,
+    "Rock": 125
+  },
+  "by_license": {
+    "CC BY": 179,
+    "CC BY-NC": 156,
+    "CC BY-NC-SA": 576,
+    "CC BY-SA": 68,
+    "CC0": 9,
+    "Public Domain": 12
+  },
+  "total_duration_s": 29988.4,
+  "total_bytes": 1004454793,
+  "metadata_url": "https://os.unil.cloud.switch.ch/fma/fma_metadata.zip",
+  "audio_url": "https://os.unil.cloud.switch.ch/fma/fma_small.zip",
+  "policy": "docs/audio_data_policy.md"
+}
