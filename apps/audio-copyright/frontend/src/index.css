@@ -1,0 +1,62 @@
+:root {
+  --bg: #f6f5fb;
+  --surface: #ffffff;
+  --border: #e3e0ef;
+  --text: #1f1b2e;
+  --muted: #6b6680;
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --notice-bg: #eef2ff;
+  --notice-border: #c7d2fe;
+  --error: #b3261e;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 15px/1.5 var(--sans);
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+h1, h2, h3 {
+  margin: 0;
+  font-weight: 650;
+}
+
+.app {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.app-header h1 {
+  font-size: 22px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.error-text {
+  color: var(--error);
+  font-weight: 600;
+}
