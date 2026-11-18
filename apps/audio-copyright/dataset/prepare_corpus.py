@@ -11,6 +11,7 @@ Uso:
     python apps/audio-copyright/dataset/prepare_corpus.py                      # 1,000 clips
     python apps/audio-copyright/dataset/prepare_corpus.py --per-genre 2        # prueba: 16 clips
     python apps/audio-copyright/dataset/prepare_corpus.py --corpus-dir /app/data/audio/fma
+    python apps/audio-copyright/dataset/prepare_corpus.py --refresh            # si cambió la regla de selección
 """
 
 from __future__ import annotations
@@ -104,13 +105,15 @@ class Downloader:
 def prepare(corpus_dir: Path = DEFAULT_CORPUS_DIR, per_genre: int = PER_GENRE, workers: int = DEFAULT_WORKERS,
             metadata_source: str = METADATA_URL, audio_source: str = SMALL_URL,
             excluded_path: Path = EXCLUDED_FILE,
-            duration_of: Callable[[Path], float] = audio_duration) -> dict:
+            duration_of: Callable[[Path], float] = audio_duration, refresh: bool = False) -> dict:
     corpus_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = corpus_dir / MANIFEST_NAME
     existing = read_manifest(manifest_path)
     excluded = read_excluded(excluded_path)
 
-    if existing and is_complete(existing, corpus_dir, per_genre, excluded):
+    # El atajo no comprueba que la selección sea la que calcula el código: si cambia la
+    # regla de selección, refresh la recalcula (reutilizando los archivos que sirvan).
+    if not refresh and existing and is_complete(existing, corpus_dir, per_genre, excluded):
         print(f"El corpus ya está completo: {len(existing)} canciones en {corpus_dir}", flush=True)
         return _finish(existing.values(), corpus_dir, downloaded=0, rejected={})
 
@@ -188,9 +191,11 @@ def main():
     parser.add_argument("--per-genre", type=int, default=PER_GENRE, help="clips por cada uno de los 8 géneros")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help="descargas en paralelo")
     parser.add_argument("--summary-out", type=Path, default=None, help="copia el resumen aquí (p. ej., para versionarlo)")
+    parser.add_argument("--refresh", action="store_true",
+                        help="recalcula la selección aunque el corpus parezca completo (si cambió la regla)")
     args = parser.parse_args()
 
-    result = prepare(args.corpus_dir, args.per_genre, args.workers)
+    result = prepare(args.corpus_dir, args.per_genre, args.workers, refresh=args.refresh)
     if args.summary_out:
         args.summary_out.parent.mkdir(parents=True, exist_ok=True)
         args.summary_out.write_text((args.corpus_dir / SUMMARY_NAME).read_text(encoding="utf-8"), encoding="utf-8")

@@ -71,7 +71,18 @@ manifiesto, junto con los artistas que se quedan sin canciones.
 
 Agregar su `song_id` a [`dataset/excluded_tracks.txt`](dataset/excluded_tracks.txt) y
 volver a correr `audio-data`: se borra del corpus y de las tablas, y su lugar lo ocupa
-la siguiente pista de su género.
+la siguiente pista de su género. Las demás canciones no cambian.
+
+La descarga también descarta los clips dañados, los de menos de 25 s y los que están en
+silencio, y los reemplaza de la misma forma.
+
+Si cambia la regla de selección, el atajo de idempotencia no lo nota: solo comprueba que
+el corpus esté completo e intacto. Para recalcular la selección, reutilizando los archivos
+que sigan sirviendo:
+
+```bash
+docker compose --profile audio run --rm audio-data sh -c "python apps/audio-copyright/dataset/prepare_corpus.py --refresh && python apps/audio-copyright/dataset/load_songs.py && python apps/audio-copyright/features/extract_segments.py"
+```
 
 ### Segmentos MFCC
 

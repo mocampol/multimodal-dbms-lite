@@ -2,3 +2,4 @@
 # Ver "Retiro de una canción" en docs/audio_data_policy.md.
 # Ejemplo:
 # 2  # motivo y fecha
+107535  # clip en silencio total: no tiene MFCC (detectado al extraer segmentos, 2026-11-17)
