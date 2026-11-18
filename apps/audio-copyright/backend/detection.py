@@ -40,10 +40,13 @@ DISCLAIMER = ("Son posibles coincidencias de audio según su similitud; no son u
 
 @dataclass(frozen=True)
 class DetectionSettings:
-    """Reglas de la agrupación; cada una se puede cambiar por variable de entorno."""
+    """Reglas de la agrupación; cada una se puede cambiar por variable de entorno.
 
-    threshold: float = float(os.getenv("AUDIO_MATCH_THRESHOLD", "0.9"))
-    min_segments: int = int(os.getenv("AUDIO_MIN_SEGMENTS", "2"))
+    El umbral y el mínimo de segmentos salen de evaluation/calibrate_threshold.py: son
+    los que dan más recall sin pasar del 5% de falsos positivos con el corpus real."""
+
+    threshold: float = float(os.getenv("AUDIO_MATCH_THRESHOLD", "0.98"))
+    min_segments: int = int(os.getenv("AUDIO_MIN_SEGMENTS", "4"))
     max_gap: int = int(os.getenv("AUDIO_MAX_GAP", "1"))
     offset_tolerance_s: float = float(os.getenv("AUDIO_OFFSET_TOLERANCE_S", str(HOP_S)))
 
@@ -211,7 +214,8 @@ def detect(search: dict, settings: DetectionSettings | None = None) -> dict:
     verdict = POSSIBLE_MATCH if matches else NO_MATCH
     return {
         "verdict": verdict,
-        "message": (f"Se encontraron {len(matches)} posibles coincidencias." if matches else
+        "message": ("Se encontró 1 posible coincidencia." if len(matches) == 1 else
+                    f"Se encontraron {len(matches)} posibles coincidencias." if matches else
                     f"Sin coincidencias: ningún tramo de al menos {settings.min_segments} segmentos seguidos "
                     f"supera el {settings.threshold:.0%} de similitud con una misma canción."),
         "disclaimer": DISCLAIMER,

@@ -5,8 +5,9 @@ una base de referencia (issues #110 a #115). Reporta **posibles coincidencias**,
 determinación legal.
 
 Por ahora contiene la preparación de esa base de referencia (#110), la extracción de un
-vector MFCC por segmento de cada canción (#111) y su indexación con HNSW e IVF para
-buscar candidatos similares (#112). Qué audio se usa y por qué:
+vector MFCC por segmento de cada canción (#111), su indexación con HNSW e IVF para
+buscar candidatos similares (#112) y la API que agrupa esos candidatos en coincidencias
+(#113). Qué audio se usa y por qué:
 [`docs/audio_data_policy.md`](../../docs/audio_data_policy.md).
 
 ## Corpus de referencia
@@ -145,6 +146,79 @@ Los valores por defecto se cambian con variables de entorno: `AUDIO_INDEX_TYPE` 
 `ivf`), `AUDIO_METRIC`, `AUDIO_DEFAULT_K`, `AUDIO_HNSW_EF_SEARCH`, `AUDIO_IVF_N_PROBE`,
 `AUDIO_CODEBOOK` y `DBMS_API_URL`.
 
+### API de detección
+
+`backend/detection_api.py` recibe una canción, busca los candidatos de cada segmento y los
+agrupa en coincidencias (`backend/detection.py`). Se levanta con Docker después de correr
+`audio-data`:
+
+```bash
+docker compose --profile audio up -d audio-api        # http://localhost:8001
+curl --data-binary @remix_2024.mp3 "http://localhost:8001/detections?filename=remix_2024.mp3"
+```
+
+El audio va como cuerpo crudo de la petición (MP3, WAV, FLAC, OGG o M4A; de 5 s a 10 min y
+hasta 25 MB). Parámetros opcionales: `k`, `index` (`hnsw` o `ivf`), `threshold` y
+`min_segments`. `GET /health` indica si el codebook está cargado.
+
+Cómo se agrupa:
+
+1. De cada segmento se toman los candidatos con similitud ≥ umbral.
+2. Dos segmentos seguidos se unen si apuntan a la misma canción y el desfase entre ambos
+   audios se mantiene (con un margen de un paso, 2.5 s): una copia avanza igual en los dos.
+   Se puede saltar un segmento débil.
+3. Una cadena de al menos `min_segments` segmentos es una coincidencia. Como los segmentos
+   se solapan, una copia también activa a los vecinos de la original; de las cadenas de una
+   misma canción que se solapan queda la más fuerte.
+
+```json
+{
+  "filename": "remix_2024.mp3",
+  "verdict": "posible_coincidencia",
+  "message": "Se encontró 1 posible coincidencia.",
+  "disclaimer": "Son posibles coincidencias de audio según su similitud; no son una determinación legal ...",
+  "duration_s": 29.977, "coverage_pct": 100.0,
+  "matches": [{"match_id": 1, "song_id": 2, "title": "Food", "artist": "AWOL", "license_family": "CC BY-NC-SA",
+               "query_start_s": 0.0, "query_end_s": 29.977, "reference_start_s": 0.0, "reference_end_s": 29.977,
+               "similarity_pct": 100.0, "max_similarity_pct": 100.0, "segments": 11}],
+  "timeline": [{"segment_index": 0, "start_s": 0.0, "end_s": 5.0, "best_song_id": 2, "best_similarity_pct": 100.0,
+                "above_threshold": true, "match_id": 1}, "..."],
+  "settings": {"threshold": 0.98, "min_segments": 4, "max_gap": 1, "offset_tolerance_s": 2.5},
+  "search": {"index_type": "hnsw", "metric": "cosine", "k": 5, "used_index": true},
+  "timings_ms": {"extraction_ms": 295.0, "dbms_search_ms": 10.5, "total_ms": 583.7}
+}
+```
+
+Sin coincidencias, `verdict` es `sin_coincidencias`, `matches` viene vacío y `message` dice
+qué umbral y cuántos segmentos seguidos hacían falta. `timeline` trae siempre el mejor
+candidato de cada segmento, para dibujar la línea de tiempo (#114).
+
+### Umbral
+
+El umbral por defecto, **0.98 con al menos 4 segmentos seguidos** (12.5 s), lo eligió
+[`evaluation/calibrate_threshold.py`](evaluation/calibrate_threshold.py) con el corpus real:
+es el de mayor recall que no detecta coincidencias en más del 5% de canciones ajenas.
+Resultados completos en
+[`evaluation/results/threshold_calibration.json`](evaluation/results/threshold_calibration.json).
+
+Se probaron 80 fragmentos de canciones del corpus y 80 de canciones de FMA que no están en
+él, de 15 s y desplazados fuera de la grilla de segmentos, limpios y con ruido a 20 dB:
+
+| Variante | Recall | Falsos positivos | Otra canción además de la correcta |
+|---|---:|---:|---:|
+| Limpio | 88.8% | 2.5% | 0.0% |
+| Con ruido a 20 dB | 2.5% | 7.5% | 6.3% |
+
+**Limitación:** los vectores de #111 (histograma de 64 palabras de MFCC por segmento)
+separan poco. La mediana de similitud por segmento es 0.977 con la canción correcta, pero
+0.934 con canciones que no tienen nada que ver. Por eso el umbral tiene que ser tan alto,
+y con él un ruido leve basta para perder la coincidencia. Detecta copias casi exactas, no
+remixes ni covers. Mejorar esto requiere otros vectores, no otro umbral; la validación
+completa es la del #115.
+
+Se cambia con `AUDIO_MATCH_THRESHOLD`, `AUDIO_MIN_SEGMENTS`, `AUDIO_MAX_GAP` y
+`AUDIO_OFFSET_TOLERANCE_S`, o por petición con `threshold` y `min_segments`.
+
 ### Archivos
 
 | Archivo | Qué hace |
@@ -158,3 +232,6 @@ Los valores por defecto se cambian con variables de entorno: `AUDIO_INDEX_TYPE` 
 | `features/extract_segments.py` | Extrae los segmentos del corpus y los guarda en `audio_segments` por la API |
 | `features/segment_index.py` | Crea los índices HNSW e IVF de `audio_segments`, si faltan |
 | `backend/segment_search.py` | Busca los candidatos de cada segmento de un audio, con sus scores e intervalos |
+| `backend/detection.py` | Agrupa los candidatos en coincidencias y da el veredicto |
+| `backend/detection_api.py` | API de detección: `POST /detections` y `GET /health` |
+| `evaluation/calibrate_threshold.py` | Elige el umbral por defecto con el corpus real |
