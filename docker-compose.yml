@@ -46,6 +46,46 @@ services:
       - python apps/audio-copyright/dataset/prepare_corpus.py && python apps/audio-copyright/dataset/load_songs.py && python apps/audio-copyright/features/extract_segments.py
     restart: "no"
 
+  # API de detección de copyright (#113), en http://localhost:8001. Usa el codebook y los
+  # segmentos que deja audio-data, así que se levanta después de correrlo:
+  #   docker compose --profile audio up -d audio-api
+  audio-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["audio"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      DBMS_API_URL: http://api:8000
+      AUDIO_CORPUS_DIR: /app/data/audio/fma
+    ports:
+      - "${AUDIO_API_PORT:-8001}:8001"
+    volumes:
+      - db-data:/app/data:ro
+      - ./apps/audio-copyright:/app/apps/audio-copyright:ro
+    command:
+      - uvicorn
+      - detection_api:app
+      - --app-dir
+      - apps/audio-copyright/backend
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8001/health', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+
   frontend:
     build:
       context: ./frontend

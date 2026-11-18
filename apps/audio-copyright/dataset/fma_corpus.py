@@ -217,16 +217,19 @@ def read_excluded(path: Path = EXCLUDED_FILE) -> set[int]:
 def candidates_by_genre(tracks: list[Track], excluded: set[int] = frozenset(),
                         seed: int = SEED) -> dict[str, list[Track]]:
     """Por género, las pistas aceptables en un orden aleatorio fijo. Se toman en ese
-    orden hasta completar la cuota, saltando las que no se puedan usar."""
+    orden hasta completar la cuota, saltando las que no se puedan usar.
+
+    Las excluidas se quitan después de barajar: si se quitaran antes, retirar una sola
+    pista cambiaría el orden de todo su género y, con él, la mitad de sus canciones."""
     by_genre = defaultdict(list)
     for track in tracks:
-        if track.license_family and track.song_id not in excluded and track.genre:
+        if track.license_family and track.genre:
             by_genre[track.genre].append(track)
     shuffled = {}
     for genre in sorted(by_genre):
         candidates = sorted(by_genre[genre], key=lambda track: track.song_id)
         random.Random(f"{seed}-{genre}").shuffle(candidates)
-        shuffled[genre] = candidates
+        shuffled[genre] = [track for track in candidates if track.song_id not in excluded]
     return shuffled
 
 
@@ -329,10 +332,23 @@ def summarize(songs: Iterable[Song]) -> dict:
 # Descarga
 # =============================================================================
 
+SILENCE_PEAK = 1e-6  # el mismo umbral con que MFCCExtractor rechaza una señal en silencio
+
+
+class SilentAudioError(ValueError):
+    """El clip se decodifica, pero no tiene sonido: no se le puede extraer MFCC."""
+
+
 def audio_duration(path: Path) -> float:
+    """Duración del clip. Lo decodifica entero, no solo el encabezado, para rechazar los
+    que están en silencio: FMA tiene alguno con duración normal y sin sonido."""
+    import numpy as np
     import soundfile
 
-    return float(soundfile.info(str(path)).duration)
+    samples, sample_rate = soundfile.read(str(path), dtype="float32", always_2d=True)
+    if samples.size == 0 or float(np.max(np.abs(samples))) < SILENCE_PEAK:
+        raise SilentAudioError(path.name)
+    return len(samples) / sample_rate
 
 
 def fetch_song(archive: zipfile.ZipFile, track: Track, corpus_dir: Path,
@@ -351,6 +367,9 @@ def fetch_song(archive: zipfile.ZipFile, track: Track, corpus_dir: Path,
     except zipfile.BadZipFile:
         temporary.unlink(missing_ok=True)
         return None, "CRC inválido"
+    except SilentAudioError:
+        temporary.unlink(missing_ok=True)
+        return None, "en silencio"
     except Exception as error:  # audio que soundfile no puede leer
         temporary.unlink(missing_ok=True)
         return None, f"audio ilegible ({type(error).__name__})"

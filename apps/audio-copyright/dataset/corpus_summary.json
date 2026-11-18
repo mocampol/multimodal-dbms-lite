@@ -1,7 +1,7 @@
 {
   "source": "fma_small",
   "songs": 1000,
-  "artists": 557,
+  "artists": 556,
   "by_genre": {
     "Electronic": 125,
     "Experimental": 125,
@@ -21,7 +21,7 @@
     "Public Domain": 12
   },
   "total_duration_s": 29988.4,
-  "total_bytes": 1004454793,
+  "total_bytes": 1004334184,
   "metadata_url": "https://os.unil.cloud.switch.ch/fma/fma_metadata.zip",
   "audio_url": "https://os.unil.cloud.switch.ch/fma/fma_small.zip",
   "policy": "docs/audio_data_policy.md"

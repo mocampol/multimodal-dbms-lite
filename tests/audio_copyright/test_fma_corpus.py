@@ -9,14 +9,18 @@ import sys
 import zipfile
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "apps" / "audio-copyright" / "dataset"
 sys.path.insert(0, str(DATA_DIR))
 
 import prepare_corpus  # noqa: E402
 from fma_corpus import (  # noqa: E402
+    SilentAudioError,
     Track,
+    audio_duration,
     candidates_by_genre,
     file_name,
     license_family,
@@ -94,6 +98,16 @@ def test_candidates_skip_rejected_licenses_and_excluded_tracks_in_a_fixed_order(
     assert ids != sorted(ids)
 
 
+def test_excluding_a_track_keeps_the_order_of_the_others():
+    tracks = [track(i) for i in range(1, 41)]
+    before = [t.song_id for t in candidates_by_genre(tracks)["Rock"]]
+    removed = before[3]
+
+    after = [t.song_id for t in candidates_by_genre(tracks, excluded={removed})["Rock"]]
+
+    assert after == [song_id for song_id in before if song_id != removed]
+
+
 # Metadatos y descarga con zips falsos
 
 def write_metadata_zip(path, tracks):
@@ -145,13 +159,18 @@ def test_small_tracks_join_titles_with_licenses_and_urls(fake_fma):
     assert next(t for t in tracks if t.song_id == 500).license_family is None
 
 
-def run(fake_fma, corpus, per_genre=2, durations=None, excluded=None):
+def run(fake_fma, corpus, per_genre=2, durations=None, excluded=None, silent=()):
     metadata, audio = fake_fma
     durations = durations or {}
+
+    def duration_of(path):
+        if int(path.stem) in silent:
+            raise SilentAudioError(path.name)
+        return durations.get(int(path.stem), 30.0)
+
     return prepare(
         corpus, per_genre=per_genre, workers=2, metadata_source=str(metadata), audio_source=str(audio),
-        excluded_path=excluded or corpus.parent / "sin_exclusiones.txt",
-        duration_of=lambda path: durations.get(int(path.stem), 30.0),
+        excluded_path=excluded or corpus.parent / "sin_exclusiones.txt", duration_of=duration_of,
     )
 
 
@@ -193,6 +212,27 @@ def test_a_damaged_file_is_downloaded_again(fake_fma, tmp_path):
     assert damaged.stat().st_size == song.size_bytes
 
 
+def test_a_silent_clip_is_replaced_by_the_next_candidate(fake_fma, tmp_path):
+    silent = next(iter(read_manifest_after(run, fake_fma, tmp_path / "corpus")))
+
+    summary = run(fake_fma, tmp_path / "otro", silent={silent})
+
+    assert summary["rejected"][silent] == "en silencio"
+    assert silent not in read_manifest(tmp_path / "otro" / "songs.csv")
+    assert summary["songs"] == 2 * len(FMA_SMALL_GENRES)
+
+
+def test_audio_duration_decodes_the_clip_and_rejects_silence(tmp_path):
+    rate = 22050
+    tone, silence = tmp_path / "tono.wav", tmp_path / "silencio.wav"
+    sf.write(tone, 0.5 * np.sin(np.linspace(0, 2 * np.pi * 440 * 2, 2 * rate)).astype(np.float32), rate)
+    sf.write(silence, np.zeros(2 * rate, dtype=np.float32), rate)
+
+    assert audio_duration(tone) == pytest.approx(2.0)
+    with pytest.raises(SilentAudioError):
+        audio_duration(silence)
+
+
 def test_a_short_clip_is_replaced_by_the_next_candidate(fake_fma, tmp_path):
     corpus = tmp_path / "corpus"
     first_run = read_manifest_after(run, fake_fma, corpus)
@@ -215,6 +255,24 @@ def test_an_excluded_track_is_removed_from_the_corpus(fake_fma, tmp_path):
 
     assert removed not in read_manifest(corpus / "songs.csv")
     assert not (corpus / file_name(removed)).exists()
+
+
+def test_refresh_restores_the_selection_when_the_rule_changes(fake_fma, tmp_path):
+    corpus = tmp_path / "corpus"
+    expected = set(read_manifest_after(run, fake_fma, corpus))
+    # Una selección vieja: completa e intacta, pero distinta de la que calcula el código.
+    removed = next(iter(expected))
+    excluded = tmp_path / "excluded.txt"
+    excluded.write_text(f"{removed}\n", encoding="utf-8")
+    run(fake_fma, corpus, excluded=excluded)
+
+    run(fake_fma, corpus)
+    assert removed not in read_manifest(corpus / "songs.csv")      # el atajo no la revisa
+
+    metadata, audio = fake_fma
+    prepare(corpus, per_genre=2, workers=2, metadata_source=str(metadata), audio_source=str(audio),
+            excluded_path=tmp_path / "sin_exclusiones.txt", duration_of=lambda path: 30.0, refresh=True)
+    assert set(read_manifest(corpus / "songs.csv")) == expected
 
 
 def test_not_enough_licensed_tracks_is_an_error(fake_fma, tmp_path):
