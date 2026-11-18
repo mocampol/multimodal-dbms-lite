@@ -26,7 +26,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(APP_DIR / "features"))
+for path in (APP_DIR.parents[1] / "src", APP_DIR / "features"):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from segment_extractor import HOP_S  # noqa: E402
 
