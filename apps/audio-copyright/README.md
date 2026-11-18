@@ -6,8 +6,9 @@ determinación legal.
 
 Por ahora contiene la preparación de esa base de referencia (#110), la extracción de un
 vector MFCC por segmento de cada canción (#111), su indexación con HNSW e IVF para
-buscar candidatos similares (#112) y la API que agrupa esos candidatos en coincidencias
-(#113). Qué audio se usa y por qué:
+buscar candidatos similares (#112), la API que agrupa esos candidatos en coincidencias
+(#113) y la interfaz web que las muestra en una línea de tiempo (#114). Qué audio se usa
+y por qué:
 [`docs/audio_data_policy.md`](../../docs/audio_data_policy.md).
 
 ## Corpus de referencia
@@ -219,6 +220,35 @@ completa es la del #115.
 Se cambia con `AUDIO_MATCH_THRESHOLD`, `AUDIO_MIN_SEGMENTS`, `AUDIO_MAX_GAP` y
 `AUDIO_OFFSET_TOLERANCE_S`, o por petición con `threshold` y `min_segments`.
 
+### Interfaz web
+
+`frontend/` es una app de React que sube una canción a la API de detección y muestra el
+resultado. Con la API corriendo en `http://localhost:8001`:
+
+```bash
+cd apps/audio-copyright/frontend
+npm install
+npm run dev        # http://localhost:5175
+```
+
+Si la API está en otra dirección, se indica con `VITE_AUDIO_API_URL` (ver `.env.example`).
+
+Qué muestra:
+
+- **Veredicto:** "Posible coincidencia" o "Sin coincidencias", con el mensaje y el aviso
+  legal que devuelve la API. Un aviso fijo arriba recuerda que son posibles coincidencias y
+  no una determinación legal: el veredicto se marca en ámbar, nunca como infracción.
+- **Línea de tiempo:** una fila con los tramos de cada coincidencia, cada uno con su color,
+  y otra con la similitud del mejor candidato de cada segmento y la línea del umbral. La
+  escala va de 80 % a 100 %, porque casi todas las similitudes caen entre 93 % y 100 %.
+- **Detección:** cada coincidencia como "0:00–0:15 → 92 % similar a "Canción" de Artista",
+  con su intervalo en la canción original, la licencia y el enlace de origen.
+- **Reproductor:** al hacer clic en la línea de tiempo o en un intervalo, el audio salta a
+  ese instante, para escuchar el tramo antes de sacar conclusiones.
+
+En "Opciones avanzadas" se elige el índice (HNSW o IVF) y se puede cambiar el umbral y el
+mínimo de segmentos seguidos de esa búsqueda.
+
 ### Archivos
 
 | Archivo | Qué hace |
@@ -235,3 +265,4 @@ Se cambia con `AUDIO_MATCH_THRESHOLD`, `AUDIO_MIN_SEGMENTS`, `AUDIO_MAX_GAP` y
 | `backend/detection.py` | Agrupa los candidatos en coincidencias y da el veredicto |
 | `backend/detection_api.py` | API de detección: `POST /detections` y `GET /health` |
 | `evaluation/calibrate_threshold.py` | Elige el umbral por defecto con el corpus real |
+| `frontend/` | Interfaz web: subida, veredicto con aviso legal, línea de tiempo y coincidencias |
