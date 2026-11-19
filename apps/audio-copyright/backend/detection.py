@@ -224,6 +224,6 @@ def detect(search: dict, settings: DetectionSettings | None = None) -> dict:
         "matches": matches,
         "timeline": timeline,
         "settings": asdict(settings),
-        "search": {key: search[key] for key in ("index_type", "metric", "k", "used_index", "model_name") if key in search},
+        "search": {key: search[key] for key in ("index_type", "metric", "k", "query_shifts_s", "used_index", "model_name") if key in search},
         "timings_ms": search.get("timings_ms", {}),
     }
