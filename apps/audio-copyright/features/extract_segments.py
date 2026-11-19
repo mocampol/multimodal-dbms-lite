@@ -228,7 +228,7 @@ def extract(
     inserted = _insert(client, extractor, {song_id: frames[song_id] for song_id in missing if song_id in frames})
 
     n_segments = len(client.query(f"SELECT segment_id FROM {SEGMENTS_TABLE};")["rows"])
-    created_indexes = ensure_segment_indexes(client, extractor.k, n_segments)
+    created_indexes = ensure_segment_indexes(client, extractor.dim, n_segments)
 
     result = {
         "codebook": codebook,

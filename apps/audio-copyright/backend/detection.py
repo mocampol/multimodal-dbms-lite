@@ -4,7 +4,10 @@ segment_search.py en coincidencias: rangos del audio subido que se parecen a un 
 una canción de referencia (issue #113).
 
 Cómo se agrupa:
-    1. De cada segmento del audio subido se toman los candidatos con score >= umbral.
+    1. De cada segmento del audio subido se toman los candidatos con score >= umbral que,
+       además, superan al mejor candidato de otra canción por al menos `margin`. Como
+       cualquier canción se parece bastante a cualquier otra con estos vectores, lo que
+       distingue a una copia es que su candidato les gana claramente a los demás.
     2. Dos segmentos seguidos se unen si apuntan a la misma canción y el desfase entre
        ambos audios (inicio en la original - inicio en el subido) se mantiene, con un
        margen de un paso. Una copia avanza igual en los dos; dos segmentos parecidos por
@@ -42,19 +45,20 @@ DISCLAIMER = ("Son posibles coincidencias de audio según su similitud; no son u
 class DetectionSettings:
     """Reglas de la agrupación; cada una se puede cambiar por variable de entorno.
 
-    El umbral y el mínimo de segmentos salen de evaluation/calibrate_threshold.py: son
-    los que dan más recall sin pasar del 5% de falsos positivos con el corpus real."""
+    El umbral, el mínimo de segmentos y el margen salen de evaluation/calibrate_threshold.py:
+    son los que dan más recall sin pasar del 5% de falsos positivos con el corpus real."""
 
-    threshold: float = float(os.getenv("AUDIO_MATCH_THRESHOLD", "0.98"))
-    min_segments: int = int(os.getenv("AUDIO_MIN_SEGMENTS", "4"))
+    threshold: float = float(os.getenv("AUDIO_MATCH_THRESHOLD", "0.70"))
+    min_segments: int = int(os.getenv("AUDIO_MIN_SEGMENTS", "2"))
+    margin: float = float(os.getenv("AUDIO_MATCH_MARGIN", "0.03"))
     max_gap: int = int(os.getenv("AUDIO_MAX_GAP", "1"))
     offset_tolerance_s: float = float(os.getenv("AUDIO_OFFSET_TOLERANCE_S", str(HOP_S)))
 
     def __post_init__(self) -> None:
         if not 0.0 < self.threshold <= 1.0:
             raise ValueError(f"El umbral debe estar entre 0 y 1, recibido {self.threshold}")
-        if self.min_segments < 1 or self.max_gap < 0 or self.offset_tolerance_s < 0:
-            raise ValueError("min_segments debe ser >= 1, y max_gap y offset_tolerance_s, >= 0")
+        if self.min_segments < 1 or self.max_gap < 0 or self.offset_tolerance_s < 0 or self.margin < 0:
+            raise ValueError("min_segments debe ser >= 1, y max_gap, offset_tolerance_s y margin, >= 0")
 
 
 @dataclass(frozen=True)
@@ -96,14 +100,24 @@ class Chain:
 # Agrupación
 # =============================================================================
 
-def hits_above(segments: list[dict], threshold: float) -> list[list[Hit]]:
-    """Por segmento del audio subido, en orden, sus candidatos con score >= umbral."""
+def _beats_other_songs(candidate: dict, candidates: list[dict], margin: float) -> bool:
+    """Si el candidato supera por margin al mejor de otra canción. Si entre los candidatos
+    no hay ninguna otra canción, no hay con qué compararlo y cuenta como que sí."""
+    others = [other["score"] for other in candidates if other["song_id"] != candidate["song_id"]]
+    return not others or candidate["score"] - max(others) >= margin - 1e-9
+
+
+def hits_above(segments: list[dict], threshold: float, margin: float = 0.0) -> list[list[Hit]]:
+    """Por segmento del audio subido, en orden, sus candidatos con score >= umbral que
+    superan por margin al mejor candidato de otra canción."""
     by_segment = []
     for segment in sorted(segments, key=lambda s: s["segment_index"]):
+        candidates = segment["candidates"]
         by_segment.append([
             Hit(segment["segment_index"], segment["start_s"], segment["end_s"], candidate["song_id"],
                 candidate["start_s"], candidate["end_s"], candidate["score"])
-            for candidate in segment["candidates"] if candidate["score"] >= threshold
+            for candidate in candidates
+            if candidate["score"] >= threshold and _beats_other_songs(candidate, candidates, margin)
         ])
     return by_segment
 
@@ -176,7 +190,7 @@ def detect(search: dict, settings: DetectionSettings | None = None) -> dict:
     settings = settings or DetectionSettings()
     segments = search["segments"]
     songs = _song_info(segments)
-    chains = select_chains(build_chains(hits_above(segments, settings.threshold), settings), settings)
+    chains = select_chains(build_chains(hits_above(segments, settings.threshold, settings.margin), settings), settings)
 
     matches, match_of_segment = [], {}
     for number, chain in enumerate(chains, start=1):

@@ -134,6 +134,36 @@ def test_an_audio_without_candidates_has_no_matches():
     assert result["timeline"][0]["best_song_id"] is None
 
 
+# Margen frente a otras canciones
+
+MARGIN = DetectionSettings(threshold=0.9, min_segments=2, max_gap=1, offset_tolerance_s=HOP, margin=0.02)
+
+
+def test_a_copy_that_beats_other_songs_by_the_margin_is_kept():
+    result = detect(search([candidate(2, 4, 0.99), candidate(9, 0, 0.93)],
+                           [candidate(2, 5, 0.98), candidate(9, 1, 0.94)]), MARGIN)
+
+    assert [m["song_id"] for m in result["matches"]] == [2]
+
+
+def test_a_candidate_too_close_to_another_song_does_not_count():
+    # Supera el umbral, pero otra canción está a solo 0.01: no se distingue de ella.
+    result = detect(search([candidate(2, 4, 0.97), candidate(9, 0, 0.96)],
+                           [candidate(2, 5, 0.97), candidate(9, 1, 0.96)]), MARGIN)
+
+    assert result["verdict"] == NO_MATCH
+    assert detect(search([candidate(2, 4, 0.97), candidate(9, 0, 0.96)],
+                         [candidate(2, 5, 0.97), candidate(9, 1, 0.96)]), SETTINGS)["verdict"] == POSSIBLE_MATCH
+
+
+def test_without_other_songs_among_the_candidates_the_margin_does_not_apply():
+    # Solo vecinos de la misma canción: no hay con qué compararla.
+    result = detect(search([candidate(2, 4, 0.97), candidate(2, 5, 0.95)],
+                           [candidate(2, 5, 0.97), candidate(2, 6, 0.95)]), MARGIN)
+
+    assert [m["song_id"] for m in result["matches"]] == [2]
+
+
 # Configuración
 
 def test_settings_are_reported_with_the_result():
@@ -143,7 +173,8 @@ def test_settings_are_reported_with_the_result():
     assert result["search"] == {"index_type": "hnsw", "metric": "cosine", "k": 5, "used_index": True}
 
 
-@pytest.mark.parametrize("values", [{"threshold": 0.0}, {"threshold": 1.5}, {"min_segments": 0}, {"max_gap": -1}])
+@pytest.mark.parametrize("values", [{"threshold": 0.0}, {"threshold": 1.5}, {"min_segments": 0}, {"max_gap": -1},
+                                    {"margin": -0.01}])
 def test_invalid_settings_are_rejected(values):
     with pytest.raises(ValueError):
         DetectionSettings(**values)

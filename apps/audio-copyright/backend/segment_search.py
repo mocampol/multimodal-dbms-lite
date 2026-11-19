@@ -51,7 +51,7 @@ class SearchSettings:
         "AUDIO_CODEBOOK", str(Path(os.getenv("AUDIO_CORPUS_DIR", "data/audio/fma")) / CODEBOOK_NAME)))
     index_type: str = os.getenv("AUDIO_INDEX_TYPE", "hnsw")
     metric: str = os.getenv("AUDIO_METRIC", METRIC)
-    k: int = int(os.getenv("AUDIO_DEFAULT_K", "5"))
+    k: int = int(os.getenv("AUDIO_DEFAULT_K", "10"))  # con 5, a menudo todos son vecinos de la misma canción
     ef_search: int = int(os.getenv("AUDIO_HNSW_EF_SEARCH", str(HNSW_PARAMS["ef_search"])))
     n_probe: int = int(os.getenv("AUDIO_IVF_N_PROBE", str(IVF_N_PROBE)))
     # Corrimientos de la grilla de la consulta, en segundos, dentro de un paso (2.5 s).

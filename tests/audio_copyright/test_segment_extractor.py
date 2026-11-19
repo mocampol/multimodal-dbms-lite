@@ -103,7 +103,7 @@ class TestSegmentMFCCExtractor:
         assert [(s.start_s, s.end_s) for s in segments] == segment_intervals(12.0)
         assert [s.segment_index for s in segments] == list(range(len(segments)))
         for segment in segments:
-            assert segment.vector.shape == (16,)
+            assert segment.vector.shape == (32,)  # un histograma de 16 palabras por mitad
             assert np.linalg.norm(segment.vector) == pytest.approx(1.0, abs=1e-5)
 
     def test_a_noisy_copy_matches_the_original_song_segment_by_segment(self, trained):
@@ -116,6 +116,26 @@ class TestSegmentMFCCExtractor:
             best_song, best = max(references, key=lambda item: float(item[1].vector @ query.vector))
             assert best_song == 1
             assert best.start_s == query.start_s
+
+    def test_the_volume_barely_changes_the_vectors(self, trained):
+        # CMVN quita el coeficiente 0 (el volumen) y normaliza los demás en cada segmento.
+        extractor, _ = trained
+        song = melody(MELODIES[0])
+
+        loud = extractor.transform(extractor.song_frames(song))
+        quiet = extractor.transform(extractor.song_frames(0.3 * song))
+
+        for a, b in zip(loud, quiet):
+            assert float(a.vector @ b.vector) > 0.95
+
+    def test_a_codebook_saved_before_cmvn_keeps_its_old_name(self, trained):
+        extractor, _ = trained
+        old = SegmentMFCCExtractor.__new__(SegmentMFCCExtractor)
+        old.__dict__.update({key: value for key, value in extractor.__dict__.items()
+                             if key not in ("features", "blocks")})
+
+        assert old.model_name == "mfcc20_boaw16_w5_h2.5" != extractor.model_name
+        assert (old.dim, extractor.dim) == (16, 32)
 
     def test_transform_before_fit_is_an_error(self, trained):
         _, songs = trained
@@ -134,6 +154,6 @@ class TestSegmentMFCCExtractor:
         extractor.save(path)
         loaded = SegmentMFCCExtractor.load(path)
 
-        assert loaded.model_name == extractor.model_name == "mfcc20_boaw16_w5_h2.5"
+        assert loaded.model_name == extractor.model_name == "mfcc20_cmvn_boaw16x2_w5_h2.5"
         for original, restored in zip(extractor.transform(songs[2]), loaded.transform(songs[2])):
             np.testing.assert_allclose(original.vector, restored.vector)

@@ -138,6 +138,7 @@ def create_app(searcher: SegmentSearcher | None = None, settings: DetectionSetti
             min_segments=default_settings.min_segments if min_segments is None else min_segments,
             max_gap=default_settings.max_gap,
             offset_tolerance_s=default_settings.offset_tolerance_s,
+            margin=default_settings.margin,
         )
         try:
             search = get_searcher().search_audio(signal, k=k, index_type=index)
