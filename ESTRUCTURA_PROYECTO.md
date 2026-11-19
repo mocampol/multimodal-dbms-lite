@@ -10,11 +10,16 @@ Este documento resume la organización actual del repositorio. Se describen los 
 ```text
 multimodal-dbms-lite/
 ├── api/                 # API HTTP con FastAPI y streaming multimedia
+├── apps/                # aplicaciones independientes de rostros y copyright de audio
 ├── benchmarks/          # mediciones, comparaciones y sus resultados
+├── docs/                # políticas de datos y documentación técnica
 ├── frontend/            # cliente web interactivo con React, TypeScript y Vite
+├── media/               # demo multimodal sintética e importaciones locales
 ├── sql/                 # ejemplos y generación de scripts SQL
 ├── src/                 # implementación del motor DBMS multimodal
 ├── tests/               # pruebas automatizadas por componente
+├── Dockerfile
+├── docker-compose.yml
 ├── .gitignore
 ├── LICENSE
 ├── README.md
@@ -41,7 +46,28 @@ multimodal-dbms-lite/
 │       ├── imports.py            # rutas de importación de CSV
 │       ├── media.py              # importación de carpetas multimedia y streaming (GET /files)
 │       ├── query.py              # ejecución de consultas SQL
-│       └── tables.py             # acceso a tablas y metadatos del catálogo
+│       ├── tables.py             # acceso a tablas y metadatos del catálogo
+│       └── vectors.py            # inserción y búsqueda vectorial por API
+│
+├── apps/
+│   ├── face-recognition/         # aplicación facial independiente (FastAPI + React)
+│   │   ├── backend/              # identidad, consentimiento, enrolamiento y búsqueda
+│   │   ├── frontend/             # UI de reconocimiento facial
+│   │   │   ├── Dockerfile
+│   │   │   └── nginx.conf        # proxy /face-api hacia el backend
+│   │   └── requirements.txt      # FaceNet opcional y dependencias locales
+│   └── audio-copyright/          # detección de posibles coincidencias de audio
+│       ├── backend/              # API y agrupación de candidatos
+│       ├── dataset/              # selección, descarga y carga del corpus FMA Small
+│       ├── evaluation/           # calibración y evaluación
+│       ├── features/             # segmentos MFCC y vectores
+│       └── frontend/             # UI de audio y línea de tiempo
+│
+├── docs/                         # políticas de datos, embeddings y búsqueda textual
+│   ├── audio_data_policy.md
+│   ├── face_data_policy.md
+│   ├── face_embeddings.md
+│   └── text_search_policy.md
 │
 ├── benchmarks/
 │   ├── README.md                 # guía para ejecutar los benchmarks
@@ -104,6 +130,14 @@ multimodal-dbms-lite/
 │       ├── api.ts                # cliente de comunicación con la API FastAPI
 │       ├── index.css             # estilos del sistema
 │       └── main.tsx              # punto de entrada de React
+│
+├── media/
+│   ├── generate_data.py          # generador reproducible de medios sintéticos
+│   ├── queries.sql               # consultas de la demo
+│   ├── imagenes/                 # imágenes de patrones; no son rostros
+│   ├── audios/                   # audios sintéticos
+│   ├── documentos/               # documentos sintéticos
+│   └── consultas/                # archivos usados como consulta
 │
 ├── sql/
 │   ├── examples/                 # scripts SQL de ejemplo y carga
@@ -241,6 +275,8 @@ multimodal-dbms-lite/
 │   └── transaction/              # locks, WAL, recovery y concurrencia
 │
 ├── .gitignore
+├── Dockerfile                    # imagen de la API DBMS
+├── docker-compose.yml            # tres demos con motores y volúmenes aislados
 ├── LICENSE
 ├── README.md
 ├── pyproject.toml                # metadatos Python y configuración de pytest

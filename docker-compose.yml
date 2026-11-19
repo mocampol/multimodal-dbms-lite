@@ -20,24 +20,62 @@ services:
       start_period: 30s
       retries: 5
 
-  # Corpus de audio para la detección de copyright (#110). Se corre a mano, una vez:
-  #   docker compose --profile audio run --rm audio-data
-  # Descarga los clips de FMA en el volumen db-data y carga canciones y artistas por la
-  # API, y extrae un vector MFCC por segmento de cada canción (#111). Es idempotente:
-  # si ya está todo, termina en segundos sin descargar ni extraer nada.
+  # DBMS independiente para la app de reconocimiento facial.
+  face-db:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${FACE_DB_PORT:-8003}:8000"
+    volumes:
+      - face-db-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+
+  # DBMS independiente para la app de detección de audio.
+  audio-db:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${AUDIO_DB_PORT:-8004}:8000"
+    volumes:
+      - audio-db-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+
+  # Corpus FMA: corre una vez antes de audio-api. Descarga los clips en
+  # audio-db-data y carga las tablas/vectores usando solo audio-db.
   audio-data:
     build:
       context: .
       dockerfile: Dockerfile
-    profiles: ["audio"]
     depends_on:
-      api:
+      audio-db:
         condition: service_healthy
     environment:
-      DBMS_API_URL: http://api:8000
+      DBMS_API_URL: http://audio-db:8000
       AUDIO_CORPUS_DIR: /app/data/audio/fma
     volumes:
-      - db-data:/app/data
+      - audio-db-data:/app/data
       - ./apps/audio-copyright/dataset:/app/apps/audio-copyright/dataset:ro
       - ./apps/audio-copyright/features:/app/apps/audio-copyright/features:ro
     command:
@@ -46,27 +84,26 @@ services:
       - python apps/audio-copyright/dataset/prepare_corpus.py && python apps/audio-copyright/dataset/load_songs.py && python apps/audio-copyright/features/extract_segments.py
     restart: "no"
 
-  # API de detección de copyright (#113), en http://localhost:8001. Usa el codebook y los
-  # segmentos que deja audio-data, así que se levanta después de correrlo. También agrega
-  # canciones a la base (POST /songs), con el mismo codebook y sin reentrenarlo:
-  #   docker compose --profile audio up -d audio-api
+  # API de detección de copyright (#113), en http://localhost:8001. Se inicia
+  # después de la preparación del corpus y escribe solo en audio-db.
   audio-api:
     build:
       context: .
       dockerfile: Dockerfile
-    profiles: ["audio"]
     restart: unless-stopped
     depends_on:
-      api:
+      audio-db:
         condition: service_healthy
+      audio-data:
+        condition: service_completed_successfully
     environment:
-      DBMS_API_URL: http://api:8000
+      DBMS_API_URL: http://audio-db:8000
       AUDIO_CORPUS_DIR: /app/data/audio/fma
     ports:
       - "${AUDIO_API_PORT:-8001}:8001"
     volumes:
       # con escritura: POST /songs guarda los audios agregados en data/audio/uploads/
-      - db-data:/app/data
+      - audio-db-data:/app/data
       - ./apps/audio-copyright:/app/apps/audio-copyright:ro
     command:
       - uvicorn
@@ -88,16 +125,71 @@ services:
       start_period: 30s
       retries: 5
 
+  # API de reconocimiento facial; sus tablas e índices se guardan solo en face-db.
+  face-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      face-db:
+        condition: service_healthy
+    environment:
+      DBMS_API_URL: http://face-db:8000
+      FACE_YUNET_MODEL: /app/benchmarks/corpus/face/models/face_detection_yunet_2026may.onnx
+      FACE_SFACE_MODEL: /app/benchmarks/corpus/face/models/face_recognition_sface_2021dec.onnx
+    volumes:
+      - ./benchmarks/corpus/face/models:/app/benchmarks/corpus/face/models:ro
+    command:
+      - uvicorn
+      - backend.main:app
+      - --app-dir
+      - apps/face-recognition
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8002"
+    ports:
+      - "${FACE_API_PORT:-8002}:8002"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from pathlib import Path; from urllib.request import urlopen; urlopen('http://127.0.0.1:8002/health', timeout=2); assert Path('/app/benchmarks/corpus/face/models/face_detection_yunet_2026may.onnx').is_file(); assert Path('/app/benchmarks/corpus/face/models/face_recognition_sface_2021dec.onnx').is_file()"
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+
+  face-frontend:
+    build:
+      context: ./apps/face-recognition/frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_FACE_API_URL: /face-api
+    restart: unless-stopped
+    depends_on:
+      face-api:
+        condition: service_healthy
+    ports:
+      - "${FACE_FRONTEND_PORT:-8081}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
   # Interfaz de la detección de copyright (#114), en http://localhost:8082. nginx sirve la
   # app y reenvía /api a audio-api:
-  #   docker compose --profile audio up -d audio-frontend
+  #   docker compose up -d audio-frontend
   audio-frontend:
     build:
       context: ./apps/audio-copyright/frontend
       dockerfile: Dockerfile
       args:
         VITE_AUDIO_API_URL: /api
-    profiles: ["audio"]
     restart: unless-stopped
     depends_on:
       audio-api:
@@ -132,3 +224,5 @@ services:
 
 volumes:
   db-data:
+  face-db-data:
+  audio-db-data:

@@ -33,6 +33,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
 COPY --chown=app:app api ./api
+COPY --chown=app:app apps/face-recognition/backend ./apps/face-recognition/backend
 COPY --chown=app:app src ./src
 RUN mkdir -p /app/data /media "${NUMBA_CACHE_DIR}" \
     && chown app:app /app/data /media "${NUMBA_CACHE_DIR}"

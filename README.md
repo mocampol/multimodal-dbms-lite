@@ -1,12 +1,14 @@
 # Multimodal DBMS Lite
 
-Multimodal DBMS Lite es un prototipo de gestor de bases de datos desarrollado como proyecto académico para comprender el funcionamiento interno de un motor relacional a pequeña escala. La arquitectura está dividida en tres capas principales:
+Multimodal DBMS Lite es un prototipo académico de un gestor de bases de datos
+relacional y multimodal. Implementa un motor SQL en Python, una API REST, una
+interfaz web y dos aplicaciones independientes que consumen el motor: búsqueda
+facial y detección de posibles coincidencias de audio.
 
-- capa de almacenamiento y catálogo
-- capa de consulta y planificación
-- capa de acceso HTTP y frontend
-
-El sistema soporta parte del flujo de un motor SQL clásico: análisis léxico/sintáctico, validación semántica, reescritura, planificación, ejecución y presentación de resultados a través de una interfaz web.
+El proyecto sirve como laboratorio para estudiar almacenamiento, catálogos,
+índices, procesamiento de consultas, búsqueda multimodal, persistencia y
+despliegue en contenedores. No es un sustituto de PostgreSQL, MySQL ni de un
+sistema de reconocimiento biométrico de producción.
 
 ## Objetivo del proyecto
 
@@ -21,41 +23,128 @@ El proyecto busca implementar, de forma progresiva y modular, conceptos clave de
 - ejecución de planes lógicos y físicos
 - API REST para acceso desde una interfaz frontend
 
-## Arquitectura general
+## Arquitectura y arquetipo del sistema
 
-La solución sigue una organización por capas:
+El arquetipo es un **motor de base de datos modular (monolito modular) detrás
+de una API REST**, acompañado de clientes web independientes. No se conecta a
+un servidor SQL externo en su ruta principal: el catálogo, los archivos de
+tablas y los índices los administra el propio motor. PostgreSQL/PostGIS aparece
+solo en benchmarks comparativos.
+
+La ruta de una consulta del explorador principal es:
+
+1. El usuario escribe SQL en la interfaz React.
+2. Nginx entrega la aplicación web y reenvía `/api/` a FastAPI.
+3. La API llama al motor Python, que valida, reescribe y planifica la consulta.
+4. El ejecutor físico lee o modifica tablas e índices en el almacenamiento local.
+5. La API serializa filas y planes; la interfaz muestra los resultados.
+
+Las aplicaciones facial y de audio son servicios separados: no importan ni
+modifican el catálogo directamente. Consumen cada instancia de DBMS por HTTP.
+El stack Docker arranca tres instancias del motor, con datos aislados:
+`api` para el explorador principal, `face-db` para reconocimiento facial y
+`audio-db` para detección de audio.
+
+```text
+Navegador
+  ├── UI principal :8080 ── /api/* ─────────────> api :8000 ──────> db-data
+  ├── UI facial :8081 ── /face-api/* ──> face-api :8002 ─> face-db :8000 ─> face-db-data
+  └── UI audio :8082 ── /api/* ────────> audio-api :8001 ─> audio-db :8000 ─> audio-db-data
+```
+
+Cada instancia (`api`, `face-db` y `audio-db`) ejecuta su propio catálogo,
+motor SQL, archivos e índices. No se comparten tablas ni volúmenes entre las
+tres demos.
+
+En Docker, `db-data`, `face-db-data` y `audio-db-data` persisten por separado
+`/app/data` de cada instancia. El corpus FMA y sus artefactos viven únicamente
+en `audio-db-data`. La carpeta local `media/` se monta como solo lectura en
+`/media` para importar archivos en la demo principal. Las imágenes faciales de
+YuNet/SFace se descargan por separado y se montan desde
+`benchmarks/corpus/face/models/`; no se guardan en Git.
+
+## Organización del código fuente
+
+El repositorio agrupa el código por responsabilidad y por aplicación:
 
 ```text
 multimodal-dbms-lite/
-├── api/                     # API REST con FastAPI
-│   └── routers/             # endpoints de tablas, consultas e importación
-├── benchmarks/              # mediciones de rendimiento
-│   ├── postgres/            # comparación con PostgreSQL (PostGIS y GIN)
-│   └── results/             # resultados y gráficas versionados
-├── frontend/                # aplicación React + Vite
-│   └── src/                 # componentes y lógica de presentación
+├── api/                         # API DBMS: FastAPI, routers y serialización
+├── apps/
+│   ├── face-recognition/        # servicio y frontend de reconocimiento facial
+│   └── audio-copyright/         # corpus, extracción, búsqueda y UI de audio
+├── benchmarks/                  # mediciones, comparación PostgreSQL y resultados
+│   ├── corpus/                  # datasets/modelos locales; ignorado por Git
+│   ├── postgres/                # PostGIS y GIN para benchmarks
+│   ├── results/                 # resultados y gráficas
+│   └── workload/                # consultas/relevancia congeladas de texto
+├── docs/                        # políticas de datos y documentación técnica
+├── frontend/                    # UI principal (React + TypeScript + Vite)
+├── media/                       # demo sintética e importaciones locales
 ├── sql/
-│   ├── examples/            # scripts SQL de ejemplo
-│   ├── generated/           # SQL producido por generadores
-│   └── scripts/             # generadores y utilidades SQL
-├── src/                     # motor de base de datos
-│   ├── catalog/             # tablas, columnas y metadatos
-│   ├── common/              # tipos, esquemas y registros
-│   ├── index/               # B+, hash extensible y R-Tree
-│   ├── loader/              # lectura e importación de CSV
-│   ├── query/               # parser, planner, rewriter y executor
-│   ├── spatial/             # geometría y operaciones espaciales
-│   ├── storage/             # páginas, buffer manager, heap y secuencial
-│   ├── transaction/         # transacciones, locks y recuperación
-│   └── main.py              # configuración del motor
-├── tests/                   # pruebas organizadas por módulo
-├── pyproject.toml           # configuración del proyecto y pytest
-├── requirements.txt         # dependencias de benchmarks
-├── pytest.ini               # configuración de pytest
-├── uv.lock                  # versiones bloqueadas de dependencias
-├── LICENSE
+│   ├── examples/                # SQL de ejemplo
+│   ├── generated/               # salidas SQL generadas
+│   └── scripts/                 # generadores y utilidades SQL
+├── src/                         # motor DBMS modular
+│   ├── catalog/                 # catálogo y metadatos
+│   ├── common/                  # registros, esquemas y tipos
+│   ├── index/                   # índices y extracción de características
+│   ├── loader/                  # cargadores CSV y multimedia
+│   ├── query/                   # parser, rewriter, planner y executor
+│   ├── spatial/                 # geometría y distancias
+│   ├── storage/                 # páginas, heap, secuencial y buffer
+│   ├── transaction/             # WAL, locks y recuperación
+│   └── main.py                  # inicialización del catálogo/motor
+├── tests/                       # pruebas unitarias e integración
+├── Dockerfile                   # imagen de la API DBMS
+├── docker-compose.yml           # tres demos, cada una con su DBMS/volumen aislado
+├── pyproject.toml / uv.lock     # metadatos y dependencias Python bloqueadas
+├── requirements.txt             # dependencias de pruebas/benchmarks
 └── README.md
 ```
+
+### Componentes del motor
+
+| Ruta | Responsabilidad |
+|---|---|
+| `src/catalog/` | Catálogo de tablas, columnas, metadatos e índices. |
+| `src/common/` | Representación común de registros, esquemas y valores SQL/espaciales. |
+| `src/storage/` | Páginas, administración de archivos y buffer; heap y almacenamiento secuencial. |
+| `src/index/btree/`, `extendible_hash/`, `rtree/` | Índices B+, hash extensible y R-Tree persistente. |
+| `src/index/text/` | Procesador de texto, índice invertido y SPIMI. |
+| `src/index/vector/` | Índices k-NN IVF y HNSW y métricas de distancia. |
+| `src/index/multimedia/` | Extracción de características SIFT/MFCC, BoW/TF-IDF, cuantización y embeddings faciales. |
+| `src/loader/` | Importación de CSV y carpetas multimedia, con inferencia de tipos. |
+| `src/query/parser/` | Scanner, parser SQL, AST y gramática. |
+| `src/query/rewriter/`, `planner/`, `executor/` | Reescritura, creación de planes y operadores físicos (scans, joins, filtros, agregación y búsquedas). |
+| `src/spatial/` | Tipos geométricos y cálculo de distancias. |
+| `src/transaction/` | WAL, transacciones, locks, undo y recuperación. |
+| `api/` | API HTTP para consultas, catálogo, importación de archivos y vectores. |
+| `frontend/` | Explorador DBMS, editor SQL, resultados, plan y mapa espacial. |
+| `apps/` | Aplicaciones desacopladas que usan la API DBMS. |
+| `tests/` | Pruebas agrupadas por catálogo, índices, loaders, consultas, almacenamiento y transacciones. |
+| `benchmarks/` | Workloads reproducibles y comparación de rendimiento; no forman parte del arranque normal. |
+
+### Aplicaciones independientes
+
+- **Reconocimiento facial (`apps/face-recognition/`)**: frontend y API propios
+  para registrar identidades, gestionar consentimiento, enrolar muestras y
+  buscar embeddings con IVF/HNSW en el DBMS. Usa YuNet + SFace por defecto
+  (128 dimensiones); FaceNet es una alternativa opcional. No descarga ni carga
+  automáticamente un dataset de rostros: las muestras se agregan en la app.
+  La política del proyecto propone LFW, pero el corpus no forma parte del
+  repositorio ni se importa durante el arranque.
+- **Detección de copyright en audio (`apps/audio-copyright/`)**: preparación
+  opcional de un corpus FMA Small, extracción MFCC por segmentos, índices
+  vectoriales, API de detección y frontend con línea de tiempo. En Docker, su
+  base y corpus están aislados en `audio-db-data`; el primer arranque prepara
+  el corpus. El servicio no determina legalmente una infracción.
+- **Demo multimodal (`media/`)**: generador de imágenes de patrones, sonidos y
+  documentos sintéticos. No contiene rostros; sus datos pueden importarse en
+  el explorador principal.
+
+La estructura detallada de archivos está en
+[`ESTRUCTURA_PROYECTO.md`](ESTRUCTURA_PROYECTO.md).
 
 ## Módulos principales
 
@@ -89,13 +178,14 @@ La carpeta `src/index` encapsula las estructuras de indexación, como:
 
 - B+ tree
 - extendible hashing
+- R-Tree espacial
+- SPIMI e índice invertido para texto
 - índices vectoriales IVF y HNSW para búsquedas k-NN
-- acceso por columnas e índices secundarios
+- extracción de características para imágenes, audio y embeddings faciales
 
 Estas estructuras permiten acelerar búsquedas y mejorar la ejecución de consultas.
-El R-Tree se encuentra en `src/index/rtree/` y se utiliza para consultas espaciales.
 IVF y HNSW indexan vectores de características generados a partir de rutas de
-imagen/audio o vectores numéricos almacenados en la columna.
+imagen/audio, embeddings faciales o vectores numéricos almacenados en la columna.
 
 ### 4. Query engine
 
@@ -119,34 +209,48 @@ La carpeta `src/transaction` maneja:
 
 ### 6. API REST
 
-La API se encuentra en `api/` y expone dos endpoints principales:
+La API se encuentra en `api/`; entre sus rutas principales están:
 
 - `GET /tables`: lista las tablas del catálogo
 - `GET /tables/{table_name}`: detalles de una tabla y sus índices
 - `POST /query`: ejecuta una sentencia SQL
+- `POST /import/csv` y `POST /import/media`: importa datos
+- `POST /tables/{table_name}/vector-search`: búsqueda k-NN por API
+- `GET /files`: sirve archivos de carpetas previamente importadas
 - `GET /health`: comprueba el estado del servicio
 
-La API usa FastAPI y serializa los resultados para que el frontend pueda presentarlos en la UI.
+La API usa FastAPI y serializa resultados y planes para el frontend. La lista
+de rutas y esquemas vigentes se consulta en <http://localhost:8000/docs> cuando
+el servicio está levantado.
 
 ### 7. Frontend
 
-La aplicación frontend está en `frontend/` y usa React + Vite. Presenta 4 paneles principales:
+La aplicación principal está en `frontend/` y usa React, TypeScript y Vite.
+Permite:
 
-- archivos/tablas
-- editor de consultas SQL
-- resultados
-- plan de ejecución
+- explorar archivos, tablas, columnas e índices;
+- importar CSV o carpetas de medios;
+- ejecutar SQL y revisar resultados y planes;
+- realizar búsquedas espaciales y visualizar resultados en un mapa.
 
-La interfaz se comunica con la API mediante `fetch` utilizando la variable `VITE_API_BASE_URL`.
+En desarrollo se comunica con la API mediante `VITE_API_BASE_URL`; detrás de
+Nginx, `/api/` se reenvía al servicio `api`.
 
 ## Requisitos previos
 
-Para ejecutar el backend y el frontend necesitas:
+Para ejecutar el DBMS principal localmente necesitas:
 
 - Python 3.13+
-- Node.js 18+
+- Node.js 22+
 - npm
 - entorno virtual de Python recomendado
+
+Para ejecutar todas las aplicaciones también necesitas Docker Engine/Desktop
+con Docker Compose v2, ffmpeg (solo para ciertos formatos de audio fuera de
+Docker) y los modelos YuNet/SFace locales descritos en
+[`docs/face_embeddings.md`](docs/face_embeddings.md). La aplicación de
+reconocimiento facial no requiere un dataset precargado; las muestras se
+registran desde la aplicación.
 
 ## Instalación
 
@@ -164,97 +268,218 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Instalar dependencias del backend
+### 3. Instalar dependencias Python
+
+Desde la raíz del proyecto:
 
 ```bash
-pip install -r api/requirements.txt
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r api/requirements.txt -r requirements.txt
 ```
 
-### 4. Instalar dependencias del frontend
+`api/requirements.txt` contiene las dependencias de la API DBMS; `requirements.txt`
+añade herramientas de pruebas y benchmarks. Para usar la alternativa FaceNet
+(opcional, más pesada que YuNet/SFace), instala además:
 
 ```bash
-cd frontend
-npm install
+python -m pip install -r apps/face-recognition/requirements.txt
+```
+
+### 4. Instalar dependencias de cada frontend
+
+Instala cada frontend en su propia carpeta:
+
+```bash
+cd frontend && npm ci
+cd ../apps/face-recognition/frontend && npm ci
+cd ../../audio-copyright/frontend && npm ci
 ```
 
 ## Ejecución
 
-### Backend
+### DBMS principal: API y frontend
 
-Desde la raíz del proyecto:
+Terminal 1, desde la raíz:
 
 ```bash
 source .venv/bin/activate
 uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
-La API quedará disponible en:
-
-```text
-http://127.0.0.1:8000
-```
-
-### Frontend
-
-En otra terminal:
+Terminal 2:
 
 ```bash
 cd frontend
 npm run dev -- --host 0.0.0.0
 ```
 
-La UI quedará disponible en:
+La UI queda en <http://localhost:5173>, la API en
+<http://localhost:8000> y su documentación interactiva en
+<http://localhost:8000/docs>. El frontend principal usa por defecto la API
+local en el puerto 8000; `VITE_API_BASE_URL` permite cambiar esa dirección.
 
-```text
-http://localhost:5173
+### Aplicación facial local (opcional)
+
+Descarga primero los dos modelos locales siguiendo
+[`docs/face_embeddings.md`](docs/face_embeddings.md). Luego inicia el backend
+en el puerto 8002:
+
+```bash
+PYTHONPATH=src:apps/face-recognition uvicorn backend.main:app \
+  --app-dir apps/face-recognition --host 127.0.0.1 --port 8002
 ```
 
-Si quieres apuntar a otra API, crea un archivo `.env` dentro de `frontend/` usando como referencia `.env.example`:
+En otra terminal, inicia su interfaz:
 
-```env
-VITE_API_BASE_URL=http://localhost:8000
+```bash
+cd apps/face-recognition/frontend
+FACE_API_TARGET=http://127.0.0.1:8002 npm run dev -- --host 0.0.0.0
 ```
 
-## Ejecutar con Docker Compose
+La UI queda en <http://localhost:5174> y la API en
+<http://localhost:8002>. Se pueden registrar participantes después de obtener
+su consentimiento explícito; LFW no se descarga ni se carga automáticamente.
+Consulta [`docs/face_data_policy.md`](docs/face_data_policy.md) antes de usar
+imágenes de personas.
 
-Requiere Docker Desktop (o Docker Engine con el plugin de Docker Compose).
-Desde la raíz del repositorio:
+### Aplicación de audio local (opcional)
+
+Con la API principal ejecutándose en el puerto 8000, prepara el corpus una vez:
+
+```bash
+python apps/audio-copyright/dataset/prepare_corpus.py
+python apps/audio-copyright/dataset/load_songs.py
+python apps/audio-copyright/features/extract_segments.py
+```
+
+Después inicia la API de audio y su frontend:
+
+```bash
+uvicorn detection_api:app --app-dir apps/audio-copyright/backend \
+  --host 127.0.0.1 --port 8001
+```
+
+```bash
+cd apps/audio-copyright/frontend
+npm run dev -- --host 0.0.0.0
+```
+
+La UI queda en <http://localhost:5175>; la API de audio, en
+<http://localhost:8001>. El corpus contiene audio de FMA Small; revisa
+[`docs/audio_data_policy.md`](docs/audio_data_policy.md) y el manual de
+[`apps/audio-copyright/`](apps/audio-copyright/) para las condiciones, tamaño
+del corpus y opciones de prueba. En modo local, la preparación y extracción
+pueden tardar y requieren conexión a Internet.
+
+## Dockerización: levantar el stack
+
+El stack levanta las **tres demos** en una sola red: explorador DBMS, aplicación
+facial y aplicación de audio. Cada una tiene una instancia independiente del
+motor DBMS y un volumen propio; ninguna usa la base de otra. No hay un
+contenedor PostgreSQL en el stack principal.
+
+### Requisitos y modelos faciales
+
+Requiere Docker Desktop (o Docker Engine con el plugin de Docker Compose v2).
+La app facial usa YuNet y SFace por defecto. Sus modelos no están en Git: antes
+de `docker compose up`, descárgalos al directorio local esperado y verifica sus
+hashes:
+
+```bash
+mkdir -p benchmarks/corpus/face/models
+curl --fail --location --output benchmarks/corpus/face/models/face_detection_yunet_2026may.onnx \
+  https://github.com/opencv/opencv_zoo/raw/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_detection_yunet/face_detection_yunet_2026may.onnx
+curl --fail --location --output benchmarks/corpus/face/models/face_recognition_sface_2021dec.onnx \
+  https://github.com/opencv/opencv_zoo/raw/48b10fa505aeb51fbd127fc60a5c660040e823b7/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+shasum -a 256 benchmarks/corpus/face/models/*.onnx
+```
+
+Los valores SHA-256 esperados y las licencias están en
+[`docs/face_embeddings.md`](docs/face_embeddings.md). No subas esos modelos,
+imágenes faciales, embeddings ni índices al repositorio.
+
+### Arranque del stack completo
+
+Desde la raíz, después de descargar los modelos faciales:
 
 ```bash
 docker compose up --build
 ```
 
-La primera ejecución construye las imágenes y puede tardar varios minutos. Luego
-abre <http://localhost:8080>; la API se sirve a través del proxy del frontend y
-también está disponible en <http://localhost:8000> (documentación en
-<http://localhost:8000/docs>). Para detener los servicios, pulsa `Ctrl+C` y
-ejecuta:
+Compose construye y levanta los tres frontends, las tres instancias DBMS y las
+dos APIs de aplicación. El cargador `audio-data` espera a que `audio-db` esté
+saludable, prepara el corpus en su volumen y solo entonces permite iniciar la
+API de audio. La primera corrida descarga alrededor de 1 GB de audio, además de
+construir las imágenes, por lo que puede tardar varios minutos. La preparación
+del corpus es idempotente.
+
+Direcciones predeterminadas:
+
+| Demo | Frontend | API de aplicación | API DBMS exclusiva |
+|---|---|---|---|
+| Explorador DBMS | <http://localhost:8080> | — | <http://localhost:8000> (`api`) |
+| Reconocimiento facial | <http://localhost:8081> | <http://localhost:8002> (`face-api`) | <http://localhost:8003> (`face-db`) |
+| Detección de audio | <http://localhost:8082> | <http://localhost:8001> (`audio-api`) | <http://localhost:8004> (`audio-db`) |
+
+Las APIs DBMS faciales y de audio están publicadas para inspección, pero cada
+aplicación se conecta por la red interna a `face-db:8000` o `audio-db:8000`.
+La aplicación principal usa solo `api:8000`.
+
+Para levantar únicamente el DBMS principal, sin la aplicación facial:
+
+```bash
+docker compose up --build api frontend
+```
+
+Para apagar los servicios:
 
 ```bash
 docker compose down
 ```
 
-Las tablas e índices se guardan en el volumen Docker `db-data` y se conservan
-entre reinicios. **No** uses `docker compose down -v` salvo que quieras borrar
-permanentemente la base de datos.
+Los datos se conservan en tres volúmenes independientes: `db-data`,
+`face-db-data` y `audio-db-data`. **No** uses `docker compose down -v` salvo
+que quieras borrar permanentemente las tres bases y el corpus de audio. Los
+modelos faciales se montan desde el host; la carpeta `media/` también se monta
+como solo lectura para importar imágenes, audio o texto en la demo principal.
 
-Para importar imágenes, audio o texto, coloca los archivos en una subcarpeta de
-`media/` en el host, por ejemplo `media/fotos`, y en el panel **Importar
-carpeta** indica `/media/fotos`. La carpeta `media/` se monta como solo lectura
-en la API. Los archivos originales permanecen en el host.
+Si ya habías ejecutado una versión anterior del Compose, su volumen `db-data`
+puede contener datos de audio antiguos. La nueva configuración no los comparte:
+el corpus se vuelve a preparar dentro de `audio-db-data`; los datos existentes
+se conservan en el volumen viejo/main y no se copian automáticamente.
 
-Se pueden cambiar los puertos con variables de entorno:
+Para importar archivos multimedia en el explorador, colócalos en una
+subcarpeta de `media/` en el host, por ejemplo `media/fotos`, y en el panel
+**Importar carpeta** indica `/media/fotos`. Los archivos originales no se
+copian a la base y permanecen en el host. La app facial gestiona sus propias
+muestras por sus endpoints; no usa esta carpeta de importación.
+
+### Puertos configurables
+
+Los puertos del host se pueden cambiar con variables de entorno:
 
 ```bash
-FRONTEND_PORT=8081 API_PORT=8001 docker compose up --build
+FRONTEND_PORT=8083 API_PORT=8010 \
+FACE_FRONTEND_PORT=8084 FACE_API_PORT=8012 \
+AUDIO_FRONTEND_PORT=8085 AUDIO_API_PORT=8011 \
+FACE_DB_PORT=8013 AUDIO_DB_PORT=8014 \
+docker compose up --build
 ```
 
 En Windows PowerShell:
 
 ```powershell
-$env:FRONTEND_PORT="8081"; $env:API_PORT="8001"; docker compose up --build
+$env:FRONTEND_PORT="8083"; $env:API_PORT="8010"
+$env:FACE_FRONTEND_PORT="8084"; $env:FACE_API_PORT="8012"
+$env:AUDIO_FRONTEND_PORT="8085"; $env:AUDIO_API_PORT="8011"
+$env:FACE_DB_PORT="8013"; $env:AUDIO_DB_PORT="8014"
+docker compose up --build
 ```
+
+Dentro de la red Docker, los servicios siempre se comunican por sus nombres y
+puertos internos (`api:8000`, `face-db:8000`, `audio-db:8000`,
+`face-api:8002`, `audio-api:8001`); cambiar los puertos publicados del host no
+cambia esos destinos.
 
 ## Verificación
 

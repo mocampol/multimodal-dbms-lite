@@ -14,7 +14,7 @@ export default defineConfig({
     port: 5174,
     proxy: {
       "/face-api": {
-        target: "http://127.0.0.1:8001",
+        target: process.env.FACE_API_TARGET || "http://127.0.0.1:8001",
         changeOrigin: true,
         rewrite: (reqPath) => reqPath.replace(/^\/face-api/, ""),
       },

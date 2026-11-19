@@ -21,6 +21,23 @@ Consume el motor `multimodal-dbms-lite` exclusivamente a través de su API REST
   si ninguna muestra supera el umbral `threshold` (o la base está vacía),
   responde explícitamente `registered: false`, `status: "unknown"`, `label: "desconocido"`.
 
+## Con Docker
+
+La aplicación tiene una instancia DBMS aislada (`face-db`) y persiste sus tablas e
+índices en el volumen `face-db-data`; no comparte datos con el explorador principal
+ni con la aplicación de audio. Descarga primero los modelos YuNet/SFace siguiendo
+[`docs/face_embeddings.md`](../../docs/face_embeddings.md). Desde la raíz del repositorio, para levantar solo la aplicación facial:
+
+```bash
+docker compose up --build face-frontend
+```
+
+La interfaz queda en <http://localhost:8081>, la API facial en
+<http://localhost:8002> y la API DBMS exclusiva de esta aplicación en
+<http://localhost:8003>. Para levantar las tres demos, incluyendo la interfaz y la
+base del DBMS principal y la aplicación de audio, usa `docker compose up --build`
+como se explica en [`README.md`](../../README.md#arranque-del-stack-completo).
+
 ## Ejecución local
 
 1. Levantar primero el DBMS principal (puerto `8000`) desde la raíz del repositorio:

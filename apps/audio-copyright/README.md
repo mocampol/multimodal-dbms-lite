@@ -19,16 +19,17 @@ sus 8 géneros, todos con licencias Creative Commons que permiten obras derivada
 ### Con Docker
 
 ```bash
-docker compose up -d api
-docker compose --profile audio run --rm audio-data
+docker compose up --build audio-frontend
 ```
 
-El servicio `audio-data` descarga los clips en el volumen `db-data`, el mismo de la
-base de datos, y carga las canciones y los artistas por la API. La primera vez
-descarga ~1 GB en unos 6 minutos, más lo que tarde construir la imagen (12 minutos en
-total en la primera prueba). Después es idempotente: si el corpus y las tablas ya
-están, termina en unos 15 segundos sin descargar nada, y reiniciar los contenedores no
-borra nada.
+El comando inicia la interfaz, `audio-api`, `audio-db` y el servicio de preparación
+`audio-data` en el orden necesario. El corpus y las tablas quedan en el volumen
+exclusivo `audio-db-data`; no se comparten con el explorador principal ni con la
+aplicación facial. La primera vez descarga ~1 GB en unos 6 minutos, además de
+construir las imágenes. Después es idempotente: si el corpus y las tablas ya están,
+termina en unos 15 segundos sin descargar nada, y reiniciar los contenedores no borra
+nada. Para levantar las tres demos juntas, usa `docker compose up --build` desde la
+raíz del repositorio.
 
 ### Sin Docker
 
@@ -114,7 +115,7 @@ el corpus esté completo e intacto. Para recalcular la selección, reutilizando 
 que sigan sirviendo:
 
 ```bash
-docker compose --profile audio run --rm audio-data sh -c "python apps/audio-copyright/dataset/prepare_corpus.py --refresh && python apps/audio-copyright/dataset/load_songs.py && python apps/audio-copyright/features/extract_segments.py"
+docker compose run --rm audio-data sh -c "python apps/audio-copyright/dataset/prepare_corpus.py --refresh && python apps/audio-copyright/dataset/load_songs.py && python apps/audio-copyright/features/extract_segments.py"
 ```
 
 ### Segmentos MFCC
@@ -181,11 +182,11 @@ Los valores por defecto se cambian con variables de entorno: `AUDIO_INDEX_TYPE` 
 ### API de detección
 
 `backend/detection_api.py` recibe una canción, busca los candidatos de cada segmento y los
-agrupa en coincidencias (`backend/detection.py`). Se levanta con Docker después de correr
-`audio-data`:
+agrupa en coincidencias (`backend/detection.py`). En Docker, `audio-api` espera a que
+`audio-data` termine correctamente:
 
 ```bash
-docker compose --profile audio up -d audio-api        # http://localhost:8001
+docker compose up -d audio-api        # http://localhost:8001
 curl --data-binary @remix_2024.mp3 "http://localhost:8001/detections?filename=remix_2024.mp3"
 ```
 
@@ -256,10 +257,10 @@ Se cambia con `AUDIO_MATCH_THRESHOLD`, `AUDIO_MIN_SEGMENTS`, `AUDIO_MAX_GAP` y
 `frontend/` es una app de React que sube una canción a la API de detección y muestra el
 resultado.
 
-Con Docker, después de correr `audio-data`, se levanta todo junto:
+Con Docker, la UI y sus dependencias se levantan juntas:
 
 ```bash
-docker compose --profile audio up -d api audio-api audio-frontend   # http://localhost:8082
+docker compose up -d audio-frontend   # http://localhost:8082
 ```
 
 El contenedor `audio-frontend` sirve la app con nginx y reenvía `/api/` a `audio-api`, así
