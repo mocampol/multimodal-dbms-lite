@@ -194,3 +194,59 @@ def test_ensure_face_dataset_caches_and_auto_extracts(tmp_path):
     assert resolved_celeba == celeba_dir
     assert len(collect_celeba_subjects(celeba_dir)["celeba:7"]) == 2
     assert ensure_face_dataset("celeba", celeba_dir, downloader=_fail_if_called) == celeba_dir
+
+
+def test_latency_benchmark_pipeline_and_sla_check(dbms_and_face_env, tmp_path):
+    from benchmark_face_latency import (
+        capture_hardware_environment,
+        format_latency_markdown,
+        run_latency_evaluation,
+    )
+
+    service = dbms_and_face_env["service"]
+
+    # Manifest sintético
+    subjects = {
+        "s1": [tmp_path / "img1.jpg", tmp_path / "img2.jpg", tmp_path / "img3.jpg"],
+        "s2": [tmp_path / "img4.jpg", tmp_path / "img5.jpg", tmp_path / "img6.jpg"],
+    }
+    for sid, paths in subjects.items():
+        for i, p in enumerate(paths):
+            p.write_bytes(make_face_payload(sid, noise=0.02, seed_offset=i).getvalue())
+
+    manifest = build_benchmark_manifest(
+        subjects,
+        dataset_name="latency_synth",
+        source="public_lfw",
+        min_images=3,
+        max_known_identities=1,
+        max_unknown_identities=1,
+        enroll_per_identity=2,
+        max_probes_per_identity=1,
+        max_unknown_probes=1,
+        repo_root=tmp_path,
+    )
+
+    load_manifest_into_dbms(manifest, service)
+
+    env = capture_hardware_environment()
+    assert "host_platform" in env
+    assert "host_cpu_logical_cores" in env
+    assert env["sla_target_ms"] == 100.0
+
+    rows = run_latency_evaluation(
+        service,
+        manifest,
+        index_types=("hnsw", "ivf"),
+        k_values=(1, 3),
+    )
+    assert len(rows) > 0
+    for r in rows:
+        assert "dbms_search_p95_ms" in r
+        assert r["sla_met"] is True
+        assert r["dbms_search_p95_ms"] < 100.0
+
+    md = format_latency_markdown(rows, env)
+    assert "OBJETIVO CUMPLIDO EXITOSAMENTE" in md
+    assert "Hardware y Entorno Documentado" in md
+

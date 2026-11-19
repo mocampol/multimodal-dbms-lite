@@ -72,6 +72,8 @@ def test_settings_resolved_dim_defaults_and_override():
 
 
 def test_real_facenet_extractor_produces_normalized_512d_and_dynamic_dim(monkeypatch):
+    pytest.importorskip("torch")
+    pytest.importorskip("facenet_pytorch")
     from backend.extractor import FaceNetExtractorAdapter, build_extractor
 
     adapter = build_extractor(FaceAppSettings(extractor_backend="facenet", embedding_dim=0))
