@@ -7,12 +7,16 @@ segmentos, busca los candidatos de cada uno en el DBMS (segment_search.py) y los
 en coincidencias (detection.py). Responde siempre con un veredicto explícito:
 "posible_coincidencia" o "sin_coincidencias".
 
+POST /songs agrega una canción a la base de referencia (song_ingest.py): se vectoriza con
+el codebook ya entrenado y sus segmentos entran a los índices; GET /songs las lista.
+
 No se llama main.py porque los módulos de la app agregan src/ al sys.path, donde ya hay
 un main.py: los dos chocarían al importar.
 
 Uso:
     uvicorn detection_api:app --app-dir apps/audio-copyright/backend --port 8001
     curl --data-binary @remix.mp3 "http://127.0.0.1:8001/detections?filename=remix.mp3"
+    curl --data-binary @tema.mp3 "http://127.0.0.1:8001/songs?filename=tema.mp3&title=Tema&artist=Yo"
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parents[1]
-for path in (APP_DIR.parents[1] / "src", APP_DIR / "features", APP_DIR / "backend"):
+for path in (APP_DIR.parents[1] / "src", APP_DIR / "dataset", APP_DIR / "features", APP_DIR / "backend"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -34,8 +38,10 @@ from fastapi.concurrency import run_in_threadpool  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from detection import DetectionSettings, detect  # noqa: E402
+from reference_songs import UPLOAD_LICENSES, UploadStore  # noqa: E402
 from segment_extractor import SAMPLE_RATE, WINDOW_S  # noqa: E402
-from segment_search import INDEX_TYPES, SegmentSearcher  # noqa: E402
+from segment_search import INDEX_TYPES, SearchSettings, SegmentSearcher  # noqa: E402
+from song_ingest import add_song, upload_summary  # noqa: E402
 
 AUDIO_EXTENSIONS = (".mp3", ".wav", ".flac", ".ogg", ".m4a")
 MAX_UPLOAD_MB = float(os.getenv("AUDIO_MAX_UPLOAD_MB", "25"))
@@ -65,10 +71,33 @@ def decode_audio(data: bytes, filename: str) -> np.ndarray:
         os.remove(path)
 
 
-def create_app(searcher: SegmentSearcher | None = None, settings: DetectionSettings | None = None) -> FastAPI:
-    """searcher y settings se pueden inyectar para probar sin la API del DBMS."""
+def decode_checked(data: bytes, filename: str) -> np.ndarray:
+    """La señal del audio, si se puede leer y dura entre WINDOW_S y MAX_DURATION_S."""
+    try:
+        signal = decode_audio(data, filename)
+    except Exception as error:
+        raise HTTPException(status_code=422, detail=f"No se pudo leer el audio: {type(error).__name__}") from error
+    duration = len(signal) / SAMPLE_RATE
+    if duration < WINDOW_S:
+        raise HTTPException(status_code=422, detail=f"El audio dura {duration:.1f} s; se necesitan al menos {WINDOW_S:g} s")
+    if duration > MAX_DURATION_S:
+        raise HTTPException(status_code=413, detail=f"El audio dura {duration:.0f} s; el máximo es {MAX_DURATION_S:g} s")
+    return signal
+
+
+def check_extension(filename: str) -> str:
+    extension = Path(filename).suffix.lower()
+    if extension not in AUDIO_EXTENSIONS:
+        raise HTTPException(status_code=415, detail=f"Formato no admitido; usa {', '.join(AUDIO_EXTENSIONS)}")
+    return extension
+
+
+def create_app(searcher: SegmentSearcher | None = None, settings: DetectionSettings | None = None,
+               store: UploadStore | None = None) -> FastAPI:
+    """searcher, settings y store se pueden inyectar para probar sin la API del DBMS."""
     state = {"searcher": searcher, "error": None}
     default_settings = settings or DetectionSettings()
+    uploads = store or UploadStore(SearchSettings().codebook_path.parent)
 
     def get_searcher() -> SegmentSearcher:
         if state["searcher"] is None:
@@ -112,8 +141,7 @@ def create_app(searcher: SegmentSearcher | None = None, settings: DetectionSetti
         threshold: float | None = Query(None, gt=0.0, le=1.0),
         min_segments: int | None = Query(None, ge=1),
     ):
-        if Path(filename).suffix.lower() not in AUDIO_EXTENSIONS:
-            raise HTTPException(status_code=415, detail=f"Formato no admitido; usa {', '.join(AUDIO_EXTENSIONS)}")
+        check_extension(filename)
         if index is not None and index.lower() not in INDEX_TYPES:
             raise HTTPException(status_code=422, detail=f"Índice desconocido: {index!r} (usa {' o '.join(INDEX_TYPES)})")
         data = await _read_body(request)
@@ -121,18 +149,7 @@ def create_app(searcher: SegmentSearcher | None = None, settings: DetectionSetti
         return await run_in_threadpool(process, data, filename, k, index, threshold, min_segments)
 
     def process(data: bytes, filename: str, k, index, threshold, min_segments) -> dict:
-        try:
-            signal = decode_audio(data, filename)
-        except Exception as error:
-            raise HTTPException(status_code=422, detail=f"No se pudo leer el audio: {type(error).__name__}") from error
-        duration = len(signal) / SAMPLE_RATE
-        if duration < WINDOW_S:
-            raise HTTPException(status_code=422,
-                                detail=f"El audio dura {duration:.1f} s; se necesitan al menos {WINDOW_S:g} s")
-        if duration > MAX_DURATION_S:
-            raise HTTPException(status_code=413,
-                                detail=f"El audio dura {duration:.0f} s; el máximo es {MAX_DURATION_S:g} s")
-
+        signal = decode_checked(data, filename)
         settings = DetectionSettings(
             threshold=default_settings.threshold if threshold is None else threshold,
             min_segments=default_settings.min_segments if min_segments is None else min_segments,
@@ -147,6 +164,44 @@ def create_app(searcher: SegmentSearcher | None = None, settings: DetectionSetti
         except RuntimeError as error:  # el DBMS respondió con error
             raise HTTPException(status_code=502, detail=str(error)) from error
         return {"filename": filename, **detect(search, settings)}
+
+    # ------------------------------------------------------- canciones agregadas
+
+    @app.get("/songs")
+    def list_songs():
+        """Las canciones agregadas desde la aplicación, de la más antigua a la más nueva."""
+        songs = uploads.list()
+        return {"count": len(songs), "licenses": list(UPLOAD_LICENSES), "songs": [upload_summary(s) for s in songs]}
+
+    @app.post("/songs", status_code=201)
+    async def create_song(
+        request: Request,
+        filename: str = Query(..., min_length=1, max_length=255),
+        title: str = Query(..., min_length=1, max_length=256),
+        artist: str = Query(..., min_length=1, max_length=128),
+        license: str = Query("Propia", description=" | ".join(UPLOAD_LICENSES)),
+        album: str = Query("", max_length=256),
+        genre: str = Query("", max_length=32),
+        source_url: str = Query("", max_length=512),
+    ):
+        """Agrega una canción a la base de referencia: se procesa igual que las de FMA,
+        con el codebook ya entrenado, y sus segmentos entran a los índices HNSW e IVF."""
+        extension = check_extension(filename)
+        if license not in UPLOAD_LICENSES:
+            raise HTTPException(status_code=422, detail=f"Licencia no admitida; usa {', '.join(UPLOAD_LICENSES)}")
+        data = await _read_body(request)
+        return await run_in_threadpool(ingest, data, filename, extension, title, artist, license, album, genre,
+                                       source_url)
+
+    def ingest(data, filename, extension, title, artist, license, album, genre, source_url) -> dict:
+        signal = decode_checked(data, filename)
+        try:
+            return add_song(get_searcher(), uploads, signal, data, extension, title, artist, license,
+                            album=album, genre=genre, source_url=source_url)
+        except ValueError as error:   # audio en silencio, título vacío, texto demasiado largo
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except RuntimeError as error:  # el DBMS respondió con error
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     return app
 

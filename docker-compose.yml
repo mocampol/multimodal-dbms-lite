@@ -47,7 +47,8 @@ services:
     restart: "no"
 
   # API de detección de copyright (#113), en http://localhost:8001. Usa el codebook y los
-  # segmentos que deja audio-data, así que se levanta después de correrlo:
+  # segmentos que deja audio-data, así que se levanta después de correrlo. También agrega
+  # canciones a la base (POST /songs), con el mismo codebook y sin reentrenarlo:
   #   docker compose --profile audio up -d audio-api
   audio-api:
     build:
@@ -64,7 +65,8 @@ services:
     ports:
       - "${AUDIO_API_PORT:-8001}:8001"
     volumes:
-      - db-data:/app/data:ro
+      # con escritura: POST /songs guarda los audios agregados en data/audio/uploads/
+      - db-data:/app/data
       - ./apps/audio-copyright:/app/apps/audio-copyright:ro
     command:
       - uvicorn

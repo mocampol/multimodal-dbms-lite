@@ -53,6 +53,8 @@ Para probar el flujo con 16 clips: `prepare_corpus.py --per-genre 2`.
 | Tabla de artistas | `audio_artists` en el DBMS |
 | Codebook de los segmentos | `/app/data/audio/fma/segment_codebook.pkl` |
 | Tabla de segmentos, con índices HNSW e IVF | `audio_segments` en el DBMS |
+| Canciones agregadas desde la aplicación | `/app/data/audio/uploads/<song_id>.<ext>` |
+| Manifiesto de las canciones agregadas | `/app/data/audio/uploads/uploads.csv` |
 
 Fuera de Docker, las mismas rutas cuelgan de `data/` en la raíz del repositorio, que
 Git ignora.
@@ -67,7 +69,36 @@ archivo.
 `audio_artists`: `artist_id`, `name` y `artist_url`.
 
 La carga inserta solo las filas que faltan y borra las canciones que ya no están en el
-manifiesto, junto con los artistas que se quedan sin canciones.
+manifiesto, junto con los artistas que se quedan sin canciones. Lee los dos manifiestos,
+`songs.csv` y `uploads.csv`, así que nunca borra las canciones agregadas.
+
+### Agregar canciones a la base
+
+Desde la interfaz (sección "Agregar una canción a la base") o con la API:
+
+```bash
+curl --data-binary @tema.mp3 "http://localhost:8001/songs?filename=tema.mp3&title=Tema&artist=Yo&license=Propia"
+curl http://localhost:8001/songs          # las canciones agregadas
+```
+
+Cada canción se procesa igual que las de FMA, con una diferencia: **el BoVW no cambia**.
+
+1. Se divide en segmentos y se vectoriza con el codebook y el IDF ya entrenados
+   (`transform`, nunca `fit`): usa las palabras de audio ya encontradas.
+2. Se guarda en `data/audio/uploads/` y se insertan su artista (si es nuevo; se reutiliza
+   si ya hay uno con el mismo nombre), la canción y sus segmentos por la API del DBMS.
+   Al recibir los segmentos, el motor los agrega a los índices HNSW e IVF sin
+   reconstruirlos: IVF los pone en la lista del centroide más cercano.
+3. Se anota en `uploads.csv`. Si algo falla antes, se deshace todo.
+
+Desde ese momento, las detecciones también la buscan. `POST /songs` acepta los mismos
+formatos y límites que `/detections`; pide `title` y `artist`, y opcionalmente `license`
+(`Propia` o una licencia Creative Commons aceptada), `album`, `genre` y `source_url`.
+
+Las canciones agregadas tienen `song_id` y `artist_id` desde 1,000,001, y `source` vale
+`upload`. Viven fuera de la carpeta de FMA, así que `audio-data` no las borra; y si alguna
+vez se reentrena el codebook (porque cambió su configuración), se entrena solo con el
+corpus de FMA y las agregadas se vuelven a vectorizar con él.
 
 ### Retirar una canción
 
@@ -269,13 +300,15 @@ mínimo de segmentos seguidos de esa búsqueda.
 | `dataset/prepare_corpus.py` | Descarga los clips que faltan y escribe el manifiesto y el resumen |
 | `dataset/load_songs.py` | Crea y sincroniza `audio_songs` y `audio_artists` por la API |
 | `dataset/excluded_tracks.txt` | Canciones retiradas del corpus |
+| `dataset/reference_songs.py` | Une las canciones de FMA y las agregadas, y guarda las agregadas |
 | `dataset/corpus_summary.json` | Resumen del corpus completo, versionado |
 | `features/segment_extractor.py` | Segmentos, MFCC, codebook y un vector por segmento con su intervalo |
 | `features/extract_segments.py` | Extrae los segmentos del corpus y los guarda en `audio_segments` por la API |
 | `features/segment_index.py` | Crea los índices HNSW e IVF de `audio_segments`, si faltan |
 | `backend/segment_search.py` | Busca los candidatos de cada segmento de un audio, con sus scores e intervalos |
 | `backend/detection.py` | Agrupa los candidatos en coincidencias y da el veredicto |
-| `backend/detection_api.py` | API de detección: `POST /detections` y `GET /health` |
+| `backend/detection_api.py` | API de detección: `POST /detections`, `POST /songs`, `GET /songs` y `GET /health` |
+| `backend/song_ingest.py` | Agrega una canción: segmentos con el codebook ya entrenado, filas y vectores en los índices |
 | `evaluation/calibrate_threshold.py` | Elige el umbral por defecto con el corpus real |
 | `frontend/` | Interfaz web: subida, veredicto con aviso legal, línea de tiempo y coincidencias |
 | `frontend/Dockerfile`, `frontend/nginx.conf` | Imagen de la interfaz para `audio-frontend`: compila la app y reenvía `/api/` a `audio-api` |
