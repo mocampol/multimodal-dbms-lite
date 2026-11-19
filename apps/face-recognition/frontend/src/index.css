@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-background: #f5f7fa;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-muted: #e8edf4;
+  --color-muted-foreground: #475569;
+  --color-border: #d5dde8;
+  --color-primary: #0f4c5c;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #e2e8f0;
+  --color-secondary-foreground: #0f172a;
+  --color-verified: #047857;
+  --color-verified-soft: #ecfdf5;
+  --color-unknown: #b45309;
+  --color-unknown-soft: #fffbeb;
+  --color-destructive: #be123c;
+  --color-destructive-soft: #fff1f2;
+  --color-destructive-foreground: #ffffff;
+  --color-ring: #0f4c5c;
+
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+}
+
+.tabular-metrics {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.safe-bottom-bar {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
