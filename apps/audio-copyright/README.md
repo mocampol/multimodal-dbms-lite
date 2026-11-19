@@ -223,7 +223,19 @@ Se cambia con `AUDIO_MATCH_THRESHOLD`, `AUDIO_MIN_SEGMENTS`, `AUDIO_MAX_GAP` y
 ### Interfaz web
 
 `frontend/` es una app de React que sube una canción a la API de detección y muestra el
-resultado. Con la API corriendo en `http://localhost:8001`:
+resultado.
+
+Con Docker, después de correr `audio-data`, se levanta todo junto:
+
+```bash
+docker compose --profile audio up -d api audio-api audio-frontend   # http://localhost:8082
+```
+
+El contenedor `audio-frontend` sirve la app con nginx y reenvía `/api/` a `audio-api`, así
+que la interfaz y la API comparten el origen y no hace falta configurar nada más. El puerto
+se cambia con `AUDIO_FRONTEND_PORT`.
+
+Para desarrollar, con la API corriendo en `http://localhost:8001`:
 
 ```bash
 cd apps/audio-copyright/frontend
@@ -266,3 +278,4 @@ mínimo de segmentos seguidos de esa búsqueda.
 | `backend/detection_api.py` | API de detección: `POST /detections` y `GET /health` |
 | `evaluation/calibrate_threshold.py` | Elige el umbral por defecto con el corpus real |
 | `frontend/` | Interfaz web: subida, veredicto con aviso legal, línea de tiempo y coincidencias |
+| `frontend/Dockerfile`, `frontend/nginx.conf` | Imagen de la interfaz para `audio-frontend`: compila la app y reenvía `/api/` a `audio-api` |
