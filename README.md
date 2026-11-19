@@ -1,5 +1,7 @@
 # Multimodal DBMS Lite
 
+[Video de demostración](https://drive.google.com/drive/folders/1Arcet-3zCw4uSyrZMZ3T_jjOT8KkV-Ls?usp=sharing)
+
 Multimodal DBMS Lite es un prototipo académico de un gestor de bases de datos
 relacional y multimodal. Implementa un motor SQL en Python, una API REST, una
 interfaz web y dos aplicaciones independientes que consumen el motor: búsqueda
