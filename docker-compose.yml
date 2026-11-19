@@ -47,7 +47,8 @@ services:
     restart: "no"
 
   # API de detección de copyright (#113), en http://localhost:8001. Usa el codebook y los
-  # segmentos que deja audio-data, así que se levanta después de correrlo:
+  # segmentos que deja audio-data, así que se levanta después de correrlo. También agrega
+  # canciones a la base (POST /songs), con el mismo codebook y sin reentrenarlo:
   #   docker compose --profile audio up -d audio-api
   audio-api:
     build:
@@ -64,7 +65,8 @@ services:
     ports:
       - "${AUDIO_API_PORT:-8001}:8001"
     volumes:
-      - db-data:/app/data:ro
+      # con escritura: POST /songs guarda los audios agregados en data/audio/uploads/
+      - db-data:/app/data
       - ./apps/audio-copyright:/app/apps/audio-copyright:ro
     command:
       - uvicorn
@@ -85,6 +87,29 @@ services:
       timeout: 3s
       start_period: 30s
       retries: 5
+
+  # Interfaz de la detección de copyright (#114), en http://localhost:8082. nginx sirve la
+  # app y reenvía /api a audio-api:
+  #   docker compose --profile audio up -d audio-frontend
+  audio-frontend:
+    build:
+      context: ./apps/audio-copyright/frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_AUDIO_API_URL: /api
+    profiles: ["audio"]
+    restart: unless-stopped
+    depends_on:
+      audio-api:
+        condition: service_healthy
+    ports:
+      - "${AUDIO_FRONTEND_PORT:-8082}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
   frontend:
     build:

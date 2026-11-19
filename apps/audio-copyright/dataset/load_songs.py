@@ -25,6 +25,7 @@ from typing import Protocol
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fma_corpus import MANIFEST_NAME, Song, read_manifest  # noqa: E402
+from reference_songs import reference_songs, song_path  # noqa: E402
 
 ARTISTS_TABLE = "audio_artists"
 SONGS_TABLE = "audio_songs"
@@ -126,10 +127,11 @@ def artist_rows(songs: list[Song]) -> dict[int, tuple]:
 
 
 def song_row(song: Song, corpus_dir: Path) -> tuple:
+    """La fila de audio_songs. La ruta depende de si es de FMA o una canción agregada."""
     return (
         song.song_id, song.title, song.artist_id, song.album_title, song.genre, song.duration_s,
         song.license_family, song.license_title, song.license_url, song.track_url, song.source,
-        (corpus_dir / song.relative_path).as_posix(), song.sha256,
+        song_path(corpus_dir, song).as_posix(), song.sha256,
     )
 
 
@@ -157,10 +159,12 @@ def _sync(client: DBMSClient, table: str, key: str, columns, rows: dict[int, tup
 
 
 def load(client: DBMSClient, corpus_dir: Path) -> dict:
-    songs = list(read_manifest(corpus_dir / MANIFEST_NAME).values())
-    if not songs:
+    """Sincroniza las tablas con las canciones de FMA y las agregadas desde la aplicación:
+    si se leyera solo songs.csv, esta carga borraría las agregadas."""
+    if not read_manifest(corpus_dir / MANIFEST_NAME):
         raise RuntimeError(f"No hay canciones en {corpus_dir / MANIFEST_NAME}; corre antes prepare_corpus.py")
     corpus_dir = corpus_dir.resolve()
+    songs = list(reference_songs(corpus_dir).values())
 
     existing = client.table_names()
     for table, columns in ((ARTISTS_TABLE, ARTIST_COLUMNS), (SONGS_TABLE, SONG_COLUMNS)):

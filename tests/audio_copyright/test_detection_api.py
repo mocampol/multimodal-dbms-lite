@@ -86,7 +86,7 @@ class FakeSearcher:
                 "metric": "cosine", "k": k or 5, "used_index": True, "timings_ms": {"total_ms": 3.0}}
 
 
-SETTINGS = DetectionSettings(threshold=0.9, min_segments=2, max_gap=1, offset_tolerance_s=HOP)
+SETTINGS = DetectionSettings(threshold=0.9, min_segments=2, max_gap=1, offset_tolerance_s=HOP, margin=0.0)
 
 
 @pytest.fixture

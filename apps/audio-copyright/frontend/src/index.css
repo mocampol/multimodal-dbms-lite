@@ -397,3 +397,52 @@ h1, h2, h3 {
     gap: 4px;
   }
 }
+
+/* Agregar canciones a la base */
+.add-song h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.add-song-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.add-song-form .primary-button {
+  align-self: flex-start;
+}
+
+.success-text {
+  background: var(--ok-bg);
+  border: 1px solid var(--ok-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.song-table {
+  width: 100%;
+  margin-top: 16px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.song-table caption {
+  text-align: left;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.song-table th,
+.song-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.song-table th {
+  color: var(--muted);
+  font-size: 13px;
+}

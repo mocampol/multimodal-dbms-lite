@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np  # noqa: E402
 
 from fma_corpus import MANIFEST_NAME, read_manifest  # noqa: E402
+from reference_songs import UPLOAD_SOURCE, reference_songs, song_path  # noqa: E402
 from load_songs import HttpDBMSClient, create_table_sql  # noqa: E402
 from segment_extractor import (  # noqa: E402
     CODEBOOK_SIZE,
@@ -187,11 +188,13 @@ def extract(
     hop_s: float = HOP_S,
     workers: int = 1,
 ) -> dict:
-    songs = read_manifest(corpus_dir / MANIFEST_NAME)
-    if not songs:
+    if not read_manifest(corpus_dir / MANIFEST_NAME):
         raise RuntimeError(f"No hay canciones en {corpus_dir / MANIFEST_NAME}; corre antes prepare_corpus.py")
     corpus_dir = corpus_dir.resolve()
-    paths = {song_id: corpus_dir / song.relative_path for song_id, song in songs.items()}
+    # Las de FMA y las agregadas desde la aplicación: si solo se leyera songs.csv, los
+    # segmentos de las agregadas se borrarían como si fueran de canciones retiradas.
+    songs = reference_songs(corpus_dir)
+    paths = {song_id: song_path(corpus_dir, song) for song_id, song in songs.items()}
     codebook_path = corpus_dir / CODEBOOK_NAME
 
     frames: dict[int, SongFrames] = {}
@@ -199,7 +202,10 @@ def extract(
     extractor = _load_codebook(codebook_path, SegmentMFCCExtractor(k, window_s, hop_s).model_name)
     codebook = "loaded"
     if extractor is None:
-        frames, failed = compute_frames(paths, workers)
+        # El codebook y el IDF se entrenan solo con el corpus de FMA: las canciones
+        # agregadas usan las palabras ya encontradas y nunca cambian el BoVW.
+        fma = {song_id: path for song_id, path in paths.items() if songs[song_id].source != UPLOAD_SOURCE}
+        frames, failed = compute_frames(fma, workers)
         if not frames:
             raise RuntimeError(f"No se pudo extraer ninguna canción: {failed}")
         extractor = SegmentMFCCExtractor(k, window_s, hop_s).fit(list(frames.values()))
@@ -228,7 +234,7 @@ def extract(
     inserted = _insert(client, extractor, {song_id: frames[song_id] for song_id in missing if song_id in frames})
 
     n_segments = len(client.query(f"SELECT segment_id FROM {SEGMENTS_TABLE};")["rows"])
-    created_indexes = ensure_segment_indexes(client, extractor.k, n_segments)
+    created_indexes = ensure_segment_indexes(client, extractor.dim, n_segments)
 
     result = {
         "codebook": codebook,

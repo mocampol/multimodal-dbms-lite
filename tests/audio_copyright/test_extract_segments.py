@@ -131,7 +131,7 @@ def test_the_first_run_fits_the_codebook_and_stores_every_segment(client, corpus
                           f"FROM {SEGMENTS_TABLE} WHERE song_id = 2;")
     assert sorted(row[0] for row in stored) == [2000, 2001, 2002, 2003]
     assert sorted((row[2], row[3]) for row in stored) == segment_intervals(12.0)
-    assert {(row[4], row[5]) for row in stored} == {(16, "mfcc20_boaw16_w5_h2.5")}
+    assert {(row[4], row[5]) for row in stored} == {(32, "mfcc20_cmvn_boaw16x2_w5_h2.5")}  # 2 bloques de 16
 
 
 def test_each_embedding_is_the_vector_of_its_interval(client, corpus):
@@ -176,7 +176,7 @@ def test_a_new_configuration_refits_and_recomputes_every_vector(client, corpus):
     assert result["codebook"] == "fitted"
     stored = rows(client, f"SELECT model_name FROM {SEGMENTS_TABLE};")
     assert len(stored) == 3 * len(segment_intervals(12.0, 4.0, 2.0))
-    assert {row[0] for row in stored} == {"mfcc20_boaw16_w4_h2"}
+    assert {row[0] for row in stored} == {"mfcc20_cmvn_boaw16x2_w4_h2"}
 
 
 def test_each_insert_carries_only_complete_songs(client, corpus, monkeypatch):

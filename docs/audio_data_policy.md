@@ -105,6 +105,21 @@ Cada canción del corpus guarda:
    el resumen del corpus (cantidad de pistas por género y por licencia), que no
    contiene audio.
 
+## Canciones agregadas desde la aplicación
+
+La aplicación permite agregar canciones a la base de referencia (`POST /songs`). Solo se
+puede agregar audio que se tenga derecho a usar:
+
+- **Propia:** quien la sube es su autor.
+- **Una licencia aceptada** (sección "Licencias aceptadas"): CC BY, CC BY-SA, CC BY-NC,
+  CC BY-NC-SA, CC0 o dominio público. Nunca una variante ND, por el mismo motivo que en FMA.
+
+Se guardan el título, el artista, la licencia elegida y, si se da, la URL de origen, para
+poder atribuirla igual que las de FMA. Los archivos quedan en el volumen, en
+`data/audio/uploads/`, y no se versionan. Para retirar una canción agregada se quita su fila
+de `uploads.csv`, se borra su archivo y se vuelve a correr `audio-data`, que borra su fila de
+`audio_songs` y sus segmentos.
+
 ## Retiro de una canción
 
 Si un artista cambia o retira la licencia de una pista, o si alguien del equipo

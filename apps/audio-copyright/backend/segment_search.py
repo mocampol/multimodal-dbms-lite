@@ -22,7 +22,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -35,7 +35,7 @@ import numpy as np  # noqa: E402
 
 from extract_segments import CODEBOOK_NAME, HttpSegmentsClient  # noqa: E402
 from load_songs import ARTISTS_TABLE, SONGS_TABLE  # noqa: E402
-from segment_extractor import SegmentMFCCExtractor  # noqa: E402
+from segment_extractor import SAMPLE_RATE, SegmentMFCCExtractor  # noqa: E402
 from segment_index import EMBEDDING_COLUMN, HNSW_PARAMS, IVF_N_PROBE, METRIC, SEGMENTS_TABLE  # noqa: E402
 
 INDEX_TYPES = ("hnsw", "ivf")
@@ -51,9 +51,16 @@ class SearchSettings:
         "AUDIO_CODEBOOK", str(Path(os.getenv("AUDIO_CORPUS_DIR", "data/audio/fma")) / CODEBOOK_NAME)))
     index_type: str = os.getenv("AUDIO_INDEX_TYPE", "hnsw")
     metric: str = os.getenv("AUDIO_METRIC", METRIC)
-    k: int = int(os.getenv("AUDIO_DEFAULT_K", "5"))
+    k: int = int(os.getenv("AUDIO_DEFAULT_K", "10"))  # con 5, a menudo todos son vecinos de la misma canción
     ef_search: int = int(os.getenv("AUDIO_HNSW_EF_SEARCH", str(HNSW_PARAMS["ef_search"])))
     n_probe: int = int(os.getenv("AUDIO_IVF_N_PROBE", str(IVF_N_PROBE)))
+    # Corrimientos de la grilla de la consulta, en segundos, dentro de un paso (2.5 s).
+    query_shifts_s: tuple[float, ...] = tuple(
+        float(value) for value in os.getenv("AUDIO_QUERY_SHIFTS_S", "0,0.625,1.25,1.875").split(","))
+
+    def __post_init__(self) -> None:
+        if not self.query_shifts_s or self.query_shifts_s[0] != 0 or any(s < 0 for s in self.query_shifts_s):
+            raise ValueError("query_shifts_s debe empezar en 0 y no tener valores negativos")
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,36 @@ class SegmentMatches:
     start_s: float      # intervalo dentro del audio buscado
     end_s: float
     candidates: list[Candidate]
+
+
+def merge_candidates(candidate_lists: list[tuple[float, list[Candidate]]], k: int) -> list[Candidate]:
+    """Junta los candidatos de un mismo segmento buscados con distintos corrimientos.
+
+    Un candidato hallado con la consulta corrida shift_s segundos corresponde, en la grilla
+    sin correr, al tramo que empieza shift_s antes en la original: se le resta, para que el
+    desfase entre ambos audios siga siendo exacto. Cada segmento de la base queda una vez,
+    con su mejor score, y se devuelven los k mejores."""
+    best: dict[int, Candidate] = {}
+    for shift_s, candidates in candidate_lists:
+        for candidate in candidates:
+            kept = best.get(candidate.segment_id)
+            if kept is None or candidate.score > kept.score:
+                best[candidate.segment_id] = replace(
+                    candidate, start_s=round(candidate.start_s - shift_s, 3), end_s=round(candidate.end_s - shift_s, 3))
+    return sorted(best.values(), key=lambda candidate: -candidate.score)[:k]
+
+
+def _mono_signal(source: str | Path | np.ndarray) -> np.ndarray:
+    """La señal mono a SAMPLE_RATE: se decodifica una vez para poder correrla."""
+    if isinstance(source, np.ndarray):
+        return np.asarray(source, dtype=np.float32).reshape(-1)
+    import librosa
+
+    try:
+        signal, _ = librosa.load(str(source), sr=SAMPLE_RATE, mono=True)
+    except Exception as error:
+        raise ValueError(f"No se pudo cargar el audio {source}: {error}") from error
+    return signal
 
 
 class SearchClient(Protocol):
@@ -191,27 +228,47 @@ class SegmentSearcher:
 
     def search_audio(self, source: str | Path | np.ndarray, k: int | None = None,
                      index_type: str | None = None, metric: str | None = None) -> dict:
-        """Divide el audio en segmentos y busca los k candidatos de cada uno."""
+        """Divide el audio en segmentos y busca los k candidatos de cada uno.
+
+        Los segmentos de la base empiezan cada 2.5 s desde el inicio de cada canción. Un
+        fragmento que no empieza en esa grilla tiene segmentos que caen entre dos de la base,
+        solapando la mitad de cada uno, y su similitud baja aunque sea una copia. Por eso la
+        consulta se repite con la señal corrida cada uno de settings.query_shifts_s y, por
+        segmento, se queda con el mejor score de cada segmento de la base."""
         k, index_type, metric = self._resolve(k, index_type, metric)
 
         started = time.perf_counter()
-        song = self.extractor.song_frames(source)
-        segments = self.extractor.transform(song)
+        signal = _mono_signal(source)
+        shifted = []   # por corrimiento: (corrimiento en s, segmentos)
+        for shift_s in self.settings.query_shifts_s:
+            start = int(round(shift_s * SAMPLE_RATE))
+            if shift_s > 0 and len(signal) - start < self.extractor.window_s * SAMPLE_RATE:
+                continue   # lo que queda no alcanza para un segmento completo
+            song = self.extractor.song_frames(signal[start:])
+            shifted.append((shift_s, self.extractor.transform(song)))
+        duration_s = len(signal) / SAMPLE_RATE
         extraction_ms = (time.perf_counter() - started) * 1000.0
 
         matches, used_index, dbms_ms = [], True, 0.0
-        for segment in segments:
-            candidates, used, search_ms = self.search_vector(segment.vector, k, index_type, metric)
-            used_index = used_index and used
-            dbms_ms += search_ms
-            matches.append(SegmentMatches(segment.segment_index, segment.start_s, segment.end_s, candidates))
+        grid = shifted[0][1]   # el desplazamiento 0 define los intervalos que se reportan
+        for position, segment in enumerate(grid):
+            candidate_lists = []
+            for shift_s, segments in shifted:
+                if position < len(segments):
+                    candidates, used, search_ms = self.search_vector(segments[position].vector, k, index_type, metric)
+                    used_index = used_index and used
+                    dbms_ms += search_ms
+                    candidate_lists.append((shift_s, candidates))
+            matches.append(SegmentMatches(segment.segment_index, segment.start_s, segment.end_s,
+                                          merge_candidates(candidate_lists, k)))
 
         return {
-            "duration_s": round(song.duration_s, 3),
+            "duration_s": round(duration_s, 3),
             "model_name": self.extractor.model_name,
             "index_type": index_type,
             "metric": metric,
             "k": k,
+            "query_shifts_s": list(self.settings.query_shifts_s),
             "used_index": used_index,
             "segments": [asdict(match) for match in matches],
             "timings_ms": {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import AddSongForm from './AddSongForm'
 import { detect, errorMessage, getHealth, type Detection, type DetectionOptions, type Health } from './api'
 import MatchList from './MatchList'
 import Timeline from './Timeline'
@@ -58,7 +59,7 @@ function App() {
         <h1>Detección de copyright en audio</h1>
         <p className="muted">
           Sube una canción y busca tramos parecidos a las canciones de la base de referencia
-          (1,000 clips de Free Music Archive).
+          (1,000 clips de Free Music Archive y las canciones que agregues).
         </p>
       </header>
 
@@ -97,6 +98,8 @@ function App() {
           <MatchList detection={detection} onSeek={seek} />
         </>
       )}
+
+      {health?.ready && <AddSongForm />}
     </main>
   )
 }

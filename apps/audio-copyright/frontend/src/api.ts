@@ -39,6 +39,7 @@ export interface DetectionSettings {
   min_segments: number
   max_gap: number
   offset_tolerance_s: number
+  margin?: number
 }
 
 export interface Detection {
@@ -121,4 +122,61 @@ export async function detect(file: File, options: DetectionOptions = {}): Promis
   })
   if (!response.ok) throw await failure(response)
   return response.json() as Promise<Detection>
+}
+
+/** Una canción agregada a la base de referencia desde la aplicación. */
+export interface UploadedSong {
+  song_id: number
+  title: string
+  artist: string
+  album_title: string
+  genre: string
+  license_family: string
+  track_url: string
+  duration_s: number
+}
+
+export interface SongList {
+  count: number
+  licenses: string[]
+  songs: UploadedSong[]
+}
+
+export interface AddedSong extends UploadedSong {
+  artist_id: number
+  segments: number
+  model_name: string
+  timings_ms: { extraction_ms?: number; dbms_ms?: number; total_ms?: number }
+}
+
+export interface NewSong {
+  title: string
+  artist: string
+  license: string
+  album?: string
+  genre?: string
+  sourceUrl?: string
+}
+
+export async function listSongs(): Promise<SongList> {
+  const response = await send('/songs')
+  if (!response.ok) throw await failure(response)
+  return response.json() as Promise<SongList>
+}
+
+/** Agrega una canción a la base: el audio va como cuerpo crudo y los datos en la URL. */
+export async function addSong(file: File, song: NewSong): Promise<AddedSong> {
+  const params = new URLSearchParams({ filename: file.name, title: song.title, artist: song.artist,
+                                       license: song.license })
+  if (song.album) params.set('album', song.album)
+  if (song.genre) params.set('genre', song.genre)
+  if (song.sourceUrl) params.set('source_url', song.sourceUrl)
+
+  const response = await send(`/songs?${params}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  })
+  if (!response.ok) throw await failure(response)
+  return response.json() as Promise<AddedSong>
 }

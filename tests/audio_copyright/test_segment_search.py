@@ -29,7 +29,7 @@ from main import make_heap_factory, make_index_buffer_factory, make_sequential_f
 from query.parser.ast_nodes import SelectStm  # noqa: E402
 from query.query_engine import execute_many  # noqa: E402
 from segment_extractor import SAMPLE_RATE, SegmentMFCCExtractor  # noqa: E402
-from segment_search import SearchSettings, SegmentSearcher  # noqa: E402
+from segment_search import Candidate, SearchSettings, SegmentSearcher, merge_candidates  # noqa: E402
 
 
 class LocalClient:
@@ -146,9 +146,12 @@ def test_a_noisy_copy_finds_its_original_segment_by_segment(base, index_type):
         best = segment["candidates"][0]
         assert (best["song_id"], best["title"], best["artist"]) == (3, "Canción 3", "Artista 3")
         # Con 50 % de solape, el segmento vecino comparte la mitad del audio: el mejor
-        # candidato está a lo sumo a un salto (2.5 s) y el intervalo exacto está en el top k.
+        # candidato está a lo sumo a un salto (2.5 s), y el tramo equivalente está en el top k.
+        # Si lo encontró una consulta corrida, su inicio se corrige en ese corrimiento, así que
+        # cae a lo sumo a un corrimiento (0.625 s) del inicio exacto.
         assert abs(best["start_s"] - segment["start_s"]) <= 2.5
-        assert any(c["song_id"] == 3 and c["start_s"] == segment["start_s"] for c in segment["candidates"])
+        assert any(c["song_id"] == 3 and abs(c["start_s"] - segment["start_s"]) <= 0.625 + 1e-6
+                   for c in segment["candidates"])
         scores = [candidate["score"] for candidate in segment["candidates"]]
         assert len(scores) == 3 and scores == sorted(scores, reverse=True) and scores[0] <= 1.0 + 1e-6
 
@@ -162,6 +165,46 @@ def test_a_fragment_shifted_in_time_reports_both_intervals(base):
     assert (first["start_s"], first["end_s"]) == (0.0, 5.0)
     assert first["candidates"][0]["song_id"] == 2
     assert (first["candidates"][0]["start_s"], first["candidates"][0]["end_s"]) == (2.5, 7.5)
+
+
+def test_a_fragment_off_the_segment_grid_finds_its_interval_with_the_shifts(base):
+    # Empieza en 0:01.25: sin corrimientos, cada segmento cae entre dos de la base.
+    shifted = reference(2)[int(1.25 * SAMPLE_RATE):]
+
+    result = searcher(base).search_audio(shifted)
+
+    assert result["query_shifts_s"] == [0.0, 0.625, 1.25, 1.875]
+    for segment in result["segments"][:3]:
+        best = segment["candidates"][0]
+        assert best["song_id"] == 2
+        # el desfase entre ambos audios es 1.25 s, salvo el redondeo de la grilla
+        assert abs((best["start_s"] - segment["start_s"]) - 1.25) <= 0.625 + 1e-6
+
+
+def test_without_shifts_only_one_search_is_made_per_segment(base):
+    single = searcher(base, query_shifts_s=(0.0,))
+    single_result = single.search_audio(reference(5))
+    assert len(single.client.searches) == len(single_result["segments"])
+
+    several = searcher(base)   # el mismo cliente: searcher() vacía sus búsquedas
+    several_result = several.search_audio(reference(5))
+    assert len(several.client.searches) > len(several_result["segments"])
+
+
+def test_merging_shifted_candidates_keeps_the_best_score_and_corrects_the_interval():
+    def candidate(segment_id, start, score):
+        return Candidate(2, "Canción 2", "Artista 2", "CC BY", None, segment_id, start, start + 5.0, score, 1 - score)
+
+    merged = merge_candidates([(0.0, [candidate(1, 2.5, 0.90), candidate(9, 0.0, 0.50)]),
+                               (1.25, [candidate(1, 2.5, 0.97), candidate(2, 5.0, 0.95)])], k=2)
+
+    assert [(c.segment_id, c.start_s, c.end_s, c.score) for c in merged] == [(1, 1.25, 6.25, 0.97), (2, 3.75, 8.75, 0.95)]
+
+
+@pytest.mark.parametrize("shifts", [(), (0.5, 1.0), (0.0, -1.0)])
+def test_query_shifts_must_start_at_zero(shifts):
+    with pytest.raises(ValueError, match="query_shifts_s"):
+        SearchSettings(query_shifts_s=shifts)
 
 
 def test_each_candidate_carries_its_song_metadata(base):

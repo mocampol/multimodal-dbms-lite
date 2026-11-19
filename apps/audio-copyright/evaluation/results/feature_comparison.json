@@ -1,0 +1,154 @@
+{
+  "base_songs": 1000,
+  "queries": 400,
+  "per_genre": 5,
+  "rule": "mayor recall con falsos positivos <= 5%",
+  "variants": {
+    "actual": {
+      "threshold": 0.965,
+      "min_segments": 4,
+      "recall": 0.6611,
+      "false_positive_rate": 0.0375,
+      "by_case": {
+        "exacto": 1.0,
+        "recortado_6s": 0.0,
+        "recortado_10s": 0.0,
+        "recortado_15s": 1.0,
+        "desplazado_trama": 1.0,
+        "desplazado_grilla": 1.0,
+        "remix": 0.963,
+        "ruido": 0.025,
+        "ajena_15s": 0.025,
+        "ajena_30s": 0.05
+      },
+      "dimension": 64,
+      "seconds": 119.5
+    },
+    "cmvn": {
+      "threshold": 0.915,
+      "min_segments": 2,
+      "recall": 0.8778,
+      "false_positive_rate": 0.0375,
+      "by_case": {
+        "exacto": 1.0,
+        "recortado_6s": 0.425,
+        "recortado_10s": 1.0,
+        "recortado_15s": 1.0,
+        "desplazado_trama": 1.0,
+        "desplazado_grilla": 1.0,
+        "remix": 1.0,
+        "ruido": 0.475,
+        "ajena_15s": 0.025,
+        "ajena_30s": 0.05
+      },
+      "dimension": 64,
+      "seconds": 115.7
+    },
+    "cmvn_deltas": {
+      "threshold": 0.925,
+      "min_segments": 2,
+      "recall": 0.8917,
+      "false_positive_rate": 0.05,
+      "by_case": {
+        "exacto": 1.0,
+        "recortado_6s": 0.525,
+        "recortado_10s": 1.0,
+        "recortado_15s": 1.0,
+        "desplazado_trama": 1.0,
+        "desplazado_grilla": 1.0,
+        "remix": 1.0,
+        "ruido": 0.5,
+        "ajena_15s": 0.0,
+        "ajena_30s": 0.1
+      },
+      "dimension": 64,
+      "seconds": 115.6
+    },
+    "sub_bloques": {
+      "threshold": 0.985,
+      "min_segments": 3,
+      "recall": 0.7306,
+      "false_positive_rate": 0.05,
+      "by_case": {
+        "exacto": 1.0,
+        "recortado_6s": 0.0,
+        "recortado_10s": 1.0,
+        "recortado_15s": 1.0,
+        "desplazado_trama": 0.875,
+        "desplazado_grilla": 0.9,
+        "remix": 0.9,
+        "ruido": 0.0,
+        "ajena_15s": 0.05,
+        "ajena_30s": 0.05
+      },
+      "dimension": 128,
+      "seconds": 122.3
+    },
+    "cmvn_sub_bloques": {
+      "threshold": 0.8,
+      "min_segments": 2,
+      "recall": 0.9,
+      "false_positive_rate": 0.025,
+      "by_case": {
+        "exacto": 1.0,
+        "recortado_6s": 0.275,
+        "recortado_10s": 1.0,
+        "recortado_15s": 1.0,
+        "desplazado_trama": 1.0,
+        "desplazado_grilla": 1.0,
+        "remix": 1.0,
+        "ruido": 0.825,
+        "ajena_15s": 0.025,
+        "ajena_30s": 0.025
+      },
+      "dimension": 128,
+      "seconds": 120.6
+    },
+    "actual_128": {
+      "threshold": 0.995,
+      "min_segments": 3,
+      "recall": 0.6389,
+      "false_positive_rate": 0.05,
+      "by_case": {
+        "exacto": 1.0,
+        "recortado_6s": 0.0,
+        "recortado_10s": 1.0,
+        "recortado_15s": 1.0,
+        "desplazado_trama": 0.575,
+        "desplazado_grilla": 0.65,
+        "remix": 0.75,
+        "ruido": 0.025,
+        "ajena_15s": 0.025,
+        "ajena_30s": 0.075
+      },
+      "dimension": 128,
+      "seconds": 125.1
+    },
+    "cmvn_deltas_128": {
+      "threshold": 0.87,
+      "min_segments": 2,
+      "recall": 0.9083,
+      "false_positive_rate": 0.0375,
+      "by_case": {
+        "exacto": 1.0,
+        "recortado_6s": 0.65,
+        "recortado_10s": 1.0,
+        "recortado_15s": 1.0,
+        "desplazado_trama": 1.0,
+        "desplazado_grilla": 1.0,
+        "remix": 1.0,
+        "ruido": 0.525,
+        "ajena_15s": 0.05,
+        "ajena_30s": 0.025
+      },
+      "dimension": 128,
+      "seconds": 123.6
+    }
+  },
+  "timings": {
+    "consultas_s": 238.0,
+    "mfcc_base_s": 211.7,
+    "mfcc_consultas_s": 84.9,
+    "total_s": 1377.3
+  }
+}
