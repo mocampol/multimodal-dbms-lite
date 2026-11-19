@@ -15,7 +15,7 @@ for folder in ("features", "backend"):
 from detection import NO_MATCH, POSSIBLE_MATCH, DetectionSettings, detect  # noqa: E402
 
 HOP, WINDOW = 2.5, 5.0
-SETTINGS = DetectionSettings(threshold=0.9, min_segments=2, max_gap=1, offset_tolerance_s=HOP)
+SETTINGS = DetectionSettings(threshold=0.9, min_segments=2, max_gap=1, offset_tolerance_s=HOP, margin=0.0)
 
 
 def candidate(song_id, reference_index, score):
